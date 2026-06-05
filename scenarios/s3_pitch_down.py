@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-С2: Кабрирование — выход на установившийся тангаж.
+С3: Пикирование — выход на установившийся тангаж вниз.
 
 Сценарий:
-  0 .. T_TRIM с   → горизонтальный полёт (трим)
-  T_TRIM .. конец → уставка тангажа THETA_CLIMB (5°)
+  0 .. T_TRIM с      → горизонтальный полёт (трим, h0=500 м)
+  T_TRIM .. T_RETURN → уставка тангажа −5° (пикирование)
+  T_RETURN .. конец  → возврат на тримовый тангаж
 
 Тяга фиксирована на тримовом значении. Контроллер тангажа —
 каскадный ПИД (theta → q → delta_e).
@@ -12,10 +13,10 @@
 На графике выделены:
   - Переходный процесс по theta (уставка vs факт)
   - Угол атаки alpha с зонами предупреждения / критического УА
-  - Высота (ЛА набирает высоту при положительном тангаже)
+  - Высота (ЛА снижается при отрицательном тангаже)
 
-Запуск:  python scenarios/s2_pitch_up.py
-         python scenarios/s2_pitch_up.py results/s2.gif   -- сохранить анимацию
+Запуск:  python scenarios/s3_pitch_down.py
+         python scenarios/s3_pitch_down.py results/s3.gif   -- сохранить анимацию
 """
 
 import sys
@@ -61,7 +62,7 @@ s0 = trim_state(aircraft, cfg)
 
 print(f"Трим:  alpha={np.degrees(alpha_trim):.2f}°  "
       f"delta_e={np.degrees(de_trim):.2f}°  throttle={thr_trim:.3f}")
-print(f"Уставка кабрирования: theta_ref = {np.degrees(THETA_CLIMB):.1f}°")
+print(f"Уставка пикирования:  theta_ref = {np.degrees(THETA_CLIMB):.1f}°")
 print(f"Возврат на трим:      t = {T_RETURN:.0f} с")
 
 # ------------------------------------------------------------------
@@ -76,7 +77,7 @@ rng            = np.random.default_rng(seed=42)
 theta_ref_buf  = []
 
 def controls_fn(t, state, Va, alpha):
-    # Три фазы: трим → кабрирование → возврат на трим
+    # Три фазы: трим → пикирование → возврат на трим
     if t < T_TRIM:
         theta_ref = alpha_trim
     elif t < T_RETURN:
@@ -98,7 +99,7 @@ def controls_fn(t, state, Va, alpha):
 # Прогон
 # ------------------------------------------------------------------
 log = run(controls_fn, aircraft, wind_params, cfg, state0=s0)
-print_summary(log, aircraft, label="С2  Кабрирование 5°")
+print_summary(log, aircraft, label="С3  Пикирование -5°")
 
 # ------------------------------------------------------------------
 # Массивы данных
@@ -156,8 +157,8 @@ n_frames = len(idx_list)
 # ------------------------------------------------------------------
 fig = plt.figure(figsize=(14, 12))
 fig.suptitle(
-    f"С2: Кабрирование — трим → θ_ref = {np.degrees(THETA_CLIMB):.0f}° → возврат на трим\n"
-    f"(трим 0–{T_TRIM:.0f} с,  кабрирование {T_TRIM:.0f}–{T_RETURN:.0f} с,"
+    f"С3: Пикирование — трим → θ_ref = {np.degrees(THETA_CLIMB):.0f}° → возврат на трим\n"
+    f"(трим 0–{T_TRIM:.0f} с,  пикирование {T_TRIM:.0f}–{T_RETURN:.0f} с,"
     f"  возврат {T_RETURN:.0f}–{cfg.t_end:.0f} с)",
     fontsize=12, fontweight="bold"
 )
@@ -211,7 +212,7 @@ info_box = ax_traj.text(
 # ------------------------------------------------------------------
 right_axes = (ax_h, ax_th, ax_al, ax_q, ax_de, ax_thr)
 _events = [
-    (T_TRIM,   "steelblue", f"кабрирование t={T_TRIM:.0f}с"),
+    (T_TRIM,   "steelblue", f"пикирование t={T_TRIM:.0f}с"),
     (T_RETURN, "darkorange", f"возврат t={T_RETURN:.0f}с"),
 ]
 for ax in right_axes:
@@ -362,7 +363,7 @@ def update(fn):
     if t_cur < T_TRIM:
         phase_str = "трим"
     elif t_cur < T_RETURN:
-        phase_str = "кабрирование"
+        phase_str = "пикирование"
     else:
         phase_str = "возврат"
 
