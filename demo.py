@@ -17,7 +17,7 @@ from plotting import (plot_dynamics, plot_trajectory,
 # ------------------------------------------------------------------
 aircraft    = AircraftParams()
 wind_params = WindParams()
-cfg         = SimConfig(Va0=30.0, h0=100.0, theta0=0.0, dt=0.01, t_end=20.0)
+cfg         = SimConfig(Va0=30.0, h0=100.0, theta0=0.0, dt=0.1, t_end=20.0)
 
 # ------------------------------------------------------------------
 # Точные балансировочные условия (решение системы 2x2)
