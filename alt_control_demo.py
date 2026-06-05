@@ -1,13 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-demo_control.py -- анимированная демонстрация каскадного ПИД-контура тангажа.
+alt_control_demo.py -- анимированная демонстрация контура удержания высоты.
 
-Сценарий: два скачка уставки тангажа:
-  0..20 с  → theta_ref = +5°
-  20..40 с → theta_ref = -5°
+Структура управления:
+  h_ref → [P_h] → theta_ref → [каскадный ПИД theta+q] → delta_e
+  throttle = trim (фиксированный)
 
-Запуск:  python demo_control.py
-         python demo_control.py out.gif    -- сохранить анимацию
+Сценарий:
+   0..10 с  → h_ref = 100 м  (тримовый полёт)
+  10..35 с  → h_ref = 150 м  (набор +50 м)
+  35..60 с  → h_ref = 100 м  (снижение обратно)
+
+Запуск:  python alt_control_demo.py
+         python alt_control_demo.py out.gif
 """
 
 import sys
@@ -30,15 +35,18 @@ plt.rcParams["font.family"] = "DejaVu Sans"
 aircraft    = AircraftParams()
 wind_params = WindParams()
 sp          = SensorParams()
-cfg         = SimConfig(Va0=30.0, h0=300.0, theta0=0.0, dt=0.01, t_end=55.0)
+cfg         = SimConfig(Va0=30.0, h0=100.0, theta0=0.0, dt=0.01, t_end=60.0)
 
-THETA_POS     = np.radians(1.9)    # тримовый полёт (фаза 1)
-THETA_NEG     = np.radians(20.0)   # тангаж + газ=0 → срыв (фаза 2)
-THETA_RECOVER = np.radians(-5.0)   # нос вниз + газ → вывод из срыва (фаза 3)
-T_SWITCH      = 8.0                # с, фаза 1 → 2
-T_RECOVER     = 25.0               # с, фаза 2 → 3
+H_TRIM    = 100.0   # начальная высота, м
+H_HIGH    = 200.0   # уставка набора, м
+T_CLIMB   = 10.0    # с, команда набора
+T_DESCEND = 40.0    # с, команда снижения
 
-ANIM_SPEED = 5.0   # множитель скорости воспроизведения
+# P-коэффициент внешнего контура: ошибка высоты → поправка тангажа
+# 50 м ошибки → theta_ref = alpha_trim + 50*KH (ограничено ±15°)
+KH = 0.006          # рад/м
+
+ANIM_SPEED = 2.0
 ANIM_FPS   = 25
 
 # ------------------------------------------------------------------
@@ -52,38 +60,42 @@ print(f"Trim:  alpha={np.degrees(alpha_trim):.2f} deg  "
       f"throttle={thr_trim:.3f}")
 
 # ------------------------------------------------------------------
-# Контроллер
+# Внутренний каскадный ПИД тангажа
 # ------------------------------------------------------------------
 ctrl_params = PitchControlParams(Va_ref=cfg.Va0)
 controller  = PitchController(aircraft, ctrl_params)
 controller.set_trim_throttle(thr_trim)
-controller.reset({'theta': s0[THETA], 'q': 0.0, 'h': cfg.h0})
+controller.reset({'theta': s0[THETA], 'q': 0.0, 'h': H_TRIM})
 
-rng = np.random.default_rng(seed=7)
+rng = np.random.default_rng(seed=42)
+h_ref_buf     = []
 theta_ref_buf = []
 
+# ------------------------------------------------------------------
+# Функция управления
+# ------------------------------------------------------------------
 def controls_fn(t, state, Va, alpha):
-    if t < T_SWITCH:
-        # Фаза 1: тримовый полёт
-        controller.set_trim_throttle(thr_trim)
-        theta_ref = THETA_POS
-    elif t < T_RECOVER:
-        # Фаза 2: газ в ноль + агрессивный тангаж → срыв
-        # Пропеллер тормозит → Va падает → alpha растёт до срыва
-        controller.set_trim_throttle(0.0)
-        theta_ref = THETA_NEG
+    # Уставка высоты по расписанию
+    if t < T_CLIMB:
+        h_ref = H_TRIM
+    elif t < T_DESCEND:
+        h_ref = H_HIGH
     else:
-        # Фаза 3: нос вниз + газ → вывод из срыва
-        # Va растёт при снижении → CL восстанавливается → выход из срыва
-        controller.set_trim_throttle(thr_trim)
-        theta_ref = THETA_RECOVER
+        h_ref = H_TRIM
+
+    # Внешний контур: P по высоте → theta_ref
+    h_meas    = measure_altitude(state[H], sp.baro_bias, sp.baro_noise, rng)
+    h_err     = h_ref - h_meas
+    theta_ref = np.clip(alpha_trim + KH * h_err,
+                        np.radians(-15.0), np.radians(15.0))
 
     controller.set_pitch_setpoint(theta_ref)
+    h_ref_buf.append(h_ref)
     theta_ref_buf.append(theta_ref)
 
+    # Внутренний контур: каскадный ПИД
     q_meas     = measure_gyro(state[Q], sp.gyro_bias, sp.gyro_noise, rng)
     theta_meas = state[THETA] + rng.normal(0.0, sp.gyro_noise)
-    h_meas     = measure_altitude(state[H], sp.baro_bias, sp.baro_noise, rng)
     Va_meas    = measure_airspeed(Va, sp.airspeed_bias, sp.airspeed_noise, rng)
 
     meas = {'q': q_meas, 'theta': theta_meas, 'h': h_meas, 'Va': Va_meas}
@@ -93,23 +105,24 @@ def controls_fn(t, state, Va, alpha):
 # Прогон
 # ------------------------------------------------------------------
 log = run(controls_fn, aircraft, wind_params, cfg, state0=s0)
-print_summary(log, aircraft, label="Pitch control demo  (+5° / -5°)")
+print_summary(log, aircraft, label="Altitude hold demo")
 
 # ------------------------------------------------------------------
 # Массивы данных
 # ------------------------------------------------------------------
-n         = len(log.t)
-t_all     = log.t
-t_end     = t_all[-1]
-theta_all = np.degrees(log.state[:, THETA])
-theta_ref = np.degrees(np.array(theta_ref_buf[:n]))
-q_all     = np.degrees(log.state[:, Q])
-alpha_all = np.degrees(log.alpha)
-de_all    = np.degrees(log.controls[:, 0])
-thr_all   = log.controls[:, 1]
-h_all     = log.state[:, H]
-x_all     = log.state[:, X]
-Va_all    = log.Va
+n          = len(log.t)
+t_all      = log.t
+t_end      = t_all[-1]
+h_all      = log.state[:, H]
+x_all      = log.state[:, X]
+h_ref_all  = np.array(h_ref_buf[:n])
+theta_all  = np.degrees(log.state[:, THETA])
+theta_ref  = np.degrees(np.array(theta_ref_buf[:n]))
+q_all      = np.degrees(log.state[:, Q])
+de_all     = np.degrees(log.controls[:, 0])
+thr_all    = log.controls[:, 1]
+Va_all     = log.Va
+alpha_all  = np.degrees(log.alpha)
 
 # ------------------------------------------------------------------
 # Прореживание кадров
@@ -122,26 +135,27 @@ n_frames = len(idx_list)
 # ------------------------------------------------------------------
 # Компоновка фигуры
 # ------------------------------------------------------------------
-fig = plt.figure(figsize=(14, 11))
-fig.suptitle("Срыв и вывод: трим → тангаж 20° / газ=0 → вывод −5°  (анимация)",
+fig = plt.figure(figsize=(14, 13))
+fig.suptitle("Контур удержания высоты: h_ref 100 → 150 → 100 м  (анимация)",
              fontsize=12, fontweight="bold")
 
-gs = gridspec.GridSpec(5, 2, figure=fig,
+gs = gridspec.GridSpec(6, 2, figure=fig,
                        width_ratios=[1.4, 1],
-                       hspace=0.65, wspace=0.42)
+                       hspace=0.68, wspace=0.42)
 
-ax_traj = fig.add_subplot(gs[:, 0])       # траектория — вся левая колонка
-ax_th   = fig.add_subplot(gs[0, 1])       # тангаж
-ax_q    = fig.add_subplot(gs[1, 1], sharex=ax_th)   # угловая скорость
-ax_al   = fig.add_subplot(gs[2, 1], sharex=ax_th)   # угол атаки
-ax_de   = fig.add_subplot(gs[3, 1], sharex=ax_th)   # руль высоты (управление)
-ax_thr  = fig.add_subplot(gs[4, 1], sharex=ax_th)   # тяга (управление)
+ax_traj = fig.add_subplot(gs[:, 0])
+ax_h    = fig.add_subplot(gs[0, 1])
+ax_th   = fig.add_subplot(gs[1, 1], sharex=ax_h)
+ax_q    = fig.add_subplot(gs[2, 1], sharex=ax_h)
+ax_de   = fig.add_subplot(gs[3, 1], sharex=ax_h)
+ax_Va   = fig.add_subplot(gs[4, 1], sharex=ax_h)
+ax_thr  = fig.add_subplot(gs[5, 1], sharex=ax_h)
 
 # ------------------------------------------------------------------
 # Левый subplot: траектория
 # ------------------------------------------------------------------
 _px = max((x_all.max() - x_all.min()) * 0.06, 10.0)
-_ph = max((h_all.max() - h_all.min()) * 0.18, 15.0)
+_ph = max((h_all.max() - h_all.min()) * 0.30, 20.0)
 
 ax_traj.set_xlim(x_all.min() - _px, x_all.max() + _px)
 ax_traj.set_ylim(h_all.min() - _ph, h_all.max() + _ph)
@@ -151,10 +165,15 @@ ax_traj.set_ylabel("Высота h, м", fontsize=9)
 ax_traj.set_title("Траектория в вертикальной плоскости", fontsize=9)
 ax_traj.grid(True, linestyle="--", alpha=0.5)
 
+# Уставки высоты — горизонтальные ориентиры
+ax_traj.axhline(H_TRIM, color="steelblue", lw=1.1, ls="--", alpha=0.6,
+                label=f"h={H_TRIM:.0f} м")
+ax_traj.axhline(H_HIGH, color="orange",    lw=1.1, ls="--", alpha=0.6,
+                label=f"h={H_HIGH:.0f} м")
+ax_traj.legend(fontsize=8, loc="upper left")
 ax_traj.plot(x_all, h_all, color="lightsteelblue", lw=1.2, alpha=0.4, zorder=1)
 ax_traj.plot(x_all[0],  h_all[0],  "go", ms=8, zorder=5, label="старт")
 ax_traj.plot(x_all[-1], h_all[-1], "rs", ms=8, zorder=5, label="финиш")
-ax_traj.legend(fontsize=8, loc="upper left")
 
 traj_line,   = ax_traj.plot([], [], "b-", lw=2.0, zorder=3)
 traj_marker, = ax_traj.plot([], [], "b^", ms=11,  zorder=6, markeredgecolor="navy")
@@ -171,19 +190,34 @@ info_box = ax_traj.text(
 # ------------------------------------------------------------------
 # Общие настройки правых субплотов
 # ------------------------------------------------------------------
-right_axes = (ax_th, ax_q, ax_al, ax_de, ax_thr)
+right_axes = (ax_h, ax_th, ax_q, ax_de, ax_Va, ax_thr)
+step_events = [
+    (T_CLIMB,   "orange",     "набор"),
+    (T_DESCEND, "dodgerblue", "снижение"),
+]
+
 for ax in right_axes:
     ax.set_xlim(0.0, t_end)
     ax.grid(True, linestyle="--", alpha=0.5)
     ax.tick_params(labelsize=8)
-    ax.axvline(T_SWITCH,   color="red",        lw=0.9, ls=":", alpha=0.7,
-               label=f"срыв t={T_SWITCH:.0f}с"   if ax is ax_th else None)
-    ax.axvline(T_RECOVER, color="dodgerblue",  lw=0.9, ls=":", alpha=0.7,
-               label=f"вывод t={T_RECOVER:.0f}с" if ax is ax_th else None)
+    for t_ev, col, lbl in step_events:
+        ax.axvline(t_ev, color=col, lw=0.9, ls=":", alpha=0.7,
+                   label=f"{lbl} t={t_ev:.0f}с" if ax is ax_h else None)
 
 for ax in right_axes[:-1]:
     plt.setp(ax.get_xticklabels(), visible=False)
 ax_thr.set_xlabel("Время, с", fontsize=9)
+
+# ---- Высота ----
+ax_h.set_ylabel("Высота h, м", fontsize=9)
+_h_pad = max((h_all.max() - h_all.min()) * 0.25, 8.0)
+ax_h.set_ylim(h_all.min() - _h_pad, h_all.max() + _h_pad)
+ax_h.plot(t_all, h_ref_all, color="black", lw=1.1, ls="--", alpha=0.55, label="h_ref")
+ax_h.plot(t_all, h_all, color="lightsteelblue", lw=1.0, alpha=0.4)
+ax_h.legend(fontsize=7, loc="upper right")
+
+ln_h, = ax_h.plot([], [], color="royalblue", lw=1.8)
+pt_h, = ax_h.plot([], [], "o", color="royalblue", ms=5, zorder=5)
 
 # ---- Тангаж ----
 ax_th.set_ylabel("Угол тангажа θ, °", fontsize=9)
@@ -192,37 +226,12 @@ _th_hi = max(theta_all.max(), theta_ref.max()) + 2.0
 ax_th.set_ylim(_th_lo, _th_hi)
 ax_th.axhline(0, color="gray", lw=0.8, ls=":")
 ax_th.plot(t_all, theta_all, color="lightseagreen", lw=1.0, alpha=0.4)
-ax_th.plot(t_all, theta_ref, color="black", lw=1.1, ls="--", alpha=0.55,
+ax_th.plot(t_all, theta_ref, color="black",         lw=1.1, ls="--", alpha=0.55,
            label="θ_ref")
 ax_th.legend(fontsize=7, loc="upper right")
 
-ln_th, = ax_th.plot([], [], color="seagreen",    lw=1.8, label="θ")
+ln_th, = ax_th.plot([], [], color="seagreen", lw=1.8)
 pt_th, = ax_th.plot([], [], "o", color="seagreen", ms=5, zorder=5)
-
-# ---- Угол атаки ----
-ax_al.set_ylabel("Угол атаки α, °", fontsize=9)
-_warn_deg  = np.degrees(aircraft.alpha_warning)
-_crit_deg  = np.degrees(aircraft.alpha_crit)
-_stall_deg = np.degrees(aircraft.alpha_stall)
-_al_lo = min(alpha_all.min() - 2.0, -3.0)
-_al_hi = max(alpha_all.max() + 3.0, _stall_deg + 5.0)
-ax_al.set_ylim(_al_lo, _al_hi)
-ax_al.axhline(0, color="gray", lw=0.8, ls=":")
-# Цветные зоны опасности (статичные фоны)
-ax_al.axhspan(_warn_deg, _crit_deg,  color="orange", alpha=0.12, zorder=0)
-ax_al.axhspan(_crit_deg, _al_hi + 5, color="red",    alpha=0.10, zorder=0)
-# Пороговые линии
-ax_al.axhline(_warn_deg,  color="orange",    lw=1.1, ls="--", alpha=0.9,
-              label=f"пред. {_warn_deg:.0f}°")
-ax_al.axhline(_crit_deg,  color="red",       lw=1.1, ls="--", alpha=0.9,
-              label=f"крит. {_crit_deg:.0f}°")
-ax_al.axhline(_stall_deg, color="darkred",   lw=1.3, ls="-",  alpha=0.7,
-              label=f"срыв {_stall_deg:.0f}°")
-ax_al.legend(fontsize=7, loc="upper left")
-ax_al.plot(t_all, alpha_all, color="lightsalmon", lw=1.0, alpha=0.45)
-
-ln_al, = ax_al.plot([], [], color="crimson", lw=1.8)
-pt_al, = ax_al.plot([], [], "o", color="crimson", ms=5, zorder=5)
 
 # ---- Угловая скорость ----
 ax_q.set_ylabel("Угловая скорость q, °/с", fontsize=9)
@@ -234,7 +243,7 @@ ax_q.plot(t_all, q_all, color="thistle", lw=1.0, alpha=0.45)
 ln_q, = ax_q.plot([], [], color="mediumpurple", lw=1.8)
 pt_q, = ax_q.plot([], [], "o", color="mediumpurple", ms=5, zorder=5)
 
-# ---- Руль высоты (управление) ----
+# ---- Руль высоты ----
 ax_de.set_ylabel("Руль высоты δe, °", fontsize=9)
 _de_pad = max(abs(de_all).max() * 0.18, 1.5)
 ax_de.set_ylim(de_all.min() - _de_pad, de_all.max() + _de_pad)
@@ -244,7 +253,16 @@ ax_de.plot(t_all, de_all, color="burlywood", lw=1.0, alpha=0.5)
 ln_de, = ax_de.plot([], [], color="saddlebrown", lw=1.8)
 pt_de, = ax_de.plot([], [], "o", color="saddlebrown", ms=5, zorder=5)
 
-# ---- Тяга (управление) ----
+# ---- Воздушная скорость ----
+ax_Va.set_ylabel("Воздушная скорость Va, м/с", fontsize=9)
+_Va_pad = max((Va_all.max() - Va_all.min()) * 0.25, 0.5)
+ax_Va.set_ylim(Va_all.min() - _Va_pad, Va_all.max() + _Va_pad)
+ax_Va.plot(t_all, Va_all, color="lightsteelblue", lw=1.0, alpha=0.45)
+
+ln_Va, = ax_Va.plot([], [], color="steelblue", lw=1.8)
+pt_Va, = ax_Va.plot([], [], "o", color="steelblue", ms=5, zorder=5)
+
+# ---- Газ (тяга) ----
 ax_thr.set_ylabel("Газ (тяга), о.е.", fontsize=9)
 ax_thr.set_ylim(-0.05, 1.05)
 ax_thr.plot(t_all, thr_all, color="lightgreen", lw=1.0, alpha=0.5)
@@ -261,10 +279,11 @@ vlines = [ax.axvline(0, color="gray", lw=0.8, ls=":", alpha=0.65)
 # ------------------------------------------------------------------
 _all_artists = (
     traj_line, traj_marker, info_box,
-    ln_th, pt_th,
-    ln_q,  pt_q,
-    ln_al, pt_al,
-    ln_de, pt_de,
+    ln_h,   pt_h,
+    ln_th,  pt_th,
+    ln_q,   pt_q,
+    ln_de,  pt_de,
+    ln_Va,  pt_Va,
     ln_thr, pt_thr,
     *vlines,
 )
@@ -273,9 +292,9 @@ def init():
     traj_line.set_data([], [])
     traj_marker.set_data([], [])
     info_box.set_text("")
-    for ln in (ln_th, ln_q, ln_al, ln_de, ln_thr):
+    for ln in (ln_h, ln_th, ln_q, ln_de, ln_Va, ln_thr):
         ln.set_data([], [])
-    for pt in (pt_th, pt_q, pt_al, pt_de, pt_thr):
+    for pt in (pt_h, pt_th, pt_q, pt_de, pt_Va, pt_thr):
         pt.set_data([], [])
     for vl in vlines:
         vl.set_xdata([0])
@@ -289,34 +308,25 @@ def update(fn):
     traj_line.set_data(x_all[:i+1], h_all[:i+1])
     traj_marker.set_data([x_all[i]], [h_all[i]])
 
-    a_cur = alpha_all[i]
-    if a_cur >= _stall_deg:
-        warn_str = "  !! СРЫВ !!"
-    elif a_cur >= _crit_deg:
-        warn_str = "  ! критич. !"
-    elif a_cur >= _warn_deg:
-        warn_str = "  предупрежд."
-    else:
-        warn_str = ""
-
     info_box.set_text(
         f"t   = {t_cur:5.1f} с\n"
+        f"h   = {h_all[i]:6.1f} м  ref={h_ref_all[i]:.0f} м\n"
         f"Va  = {Va_all[i]:5.1f} м/с\n"
         f"θ   = {theta_all[i]:+5.2f}°  ref={theta_ref[i]:+.1f}°\n"
-        f"α   = {a_cur:+5.2f}°{warn_str}\n"
-        f"q   = {q_all[i]:+5.2f} °/с\n"
-        f"δe  = {de_all[i]:+5.1f}°\n"
-        f"газ = {thr_all[i]:.3f}"
+        f"α   = {alpha_all[i]:+5.2f}°\n"
+        f"δe  = {de_all[i]:+5.1f}°"
     )
 
+    ln_h.set_data(ts, h_all[:i+1])
+    pt_h.set_data([t_cur], [h_all[i]])
     ln_th.set_data(ts, theta_all[:i+1])
     pt_th.set_data([t_cur], [theta_all[i]])
     ln_q.set_data(ts, q_all[:i+1])
     pt_q.set_data([t_cur], [q_all[i]])
-    ln_al.set_data(ts, alpha_all[:i+1])
-    pt_al.set_data([t_cur], [alpha_all[i]])
     ln_de.set_data(ts, de_all[:i+1])
     pt_de.set_data([t_cur], [de_all[i]])
+    ln_Va.set_data(ts, Va_all[:i+1])
+    pt_Va.set_data([t_cur], [Va_all[i]])
     ln_thr.set_data(ts, thr_all[:i+1])
     pt_thr.set_data([t_cur], [thr_all[i]])
 
