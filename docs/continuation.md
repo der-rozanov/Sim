@@ -5,225 +5,226 @@
 
 ---
 
-## 1. Текущий статус (все тесты зелёные)
+## 1. Текущий статус
 
 ```
-python check.py   →  ALL CHECKS PASSED  (24/24)
-python demo.py    →  4 графика, тримовый полёт 20 с
-python animate.py →  анимация полёта
+python check.py         →  ALL CHECKS PASSED  (24/24)
+python demo.py          →  тримовый полёт 20 с, 4 статических графика
+python animate.py       →  анимация тримового полёта
+python demo_control.py  →  анимация: срыв + вывод из срыва (3 фазы)
+python alt_control_demo.py  →  анимация: удержание высоты (2 скачка h_ref)
 ```
 
-### Что реализовано
+### Реализованные модули
 
 | Файл | Статус | Описание |
 |------|--------|----------|
-| `config.py` | ✅ Готов | Параметры Aerosonde, dataclasses |
-| `state.py` | ✅ Готов | Вектор [u,w,q,θ,x,h], `air_velocity`, `total_energy` |
-| `aero.py` | ✅ Готов | CL (sigmoid+срыв), CD (квадратичный), Cm, силы |
-| `wind.py` | ✅ Готов | Постоянный + сдвиг по высоте + порыв |
-| `dynamics.py` | ✅ Готов | `derivatives()` — чистая функция ОДУ |
+| `config.py` | ✅ Готов | Параметры ЛА (Aerosonde-аналог), датчики, ветер, прогон |
+| `state.py` | ✅ Готов | Вектор [u,w,q,θ,x,h], `air_velocity`, `kinematic_gamma`, `total_energy` |
+| `aero.py` | ✅ Готов | CL sigmoid+срыв, CD квадратичный, Cm, аэросилы в связанной СК |
+| `wind.py` | ✅ Готов | Постоянный + сдвиг по высоте + одиночный порыв |
+| `dynamics.py` | ✅ Готов | `derivatives()` — чистая функция ОДУ продольного канала |
 | `integrators.py` | ✅ Готов | `step_euler`, `step_rk4` |
-| `runner.py` | ✅ Готов | `run()`, `Log`, `compute_trim()`, `trim_state()` |
-| `plotting.py` | ✅ Готов | 4 функции графиков (русские подписи) |
-| `animate.py` | ✅ Готов | Анимация по логу (изолирована) |
+| `runner.py` | ✅ Готов | `run()`, `Log`, `compute_trim()`, `trim_state()`, `print_summary()` |
+| `sensors.py` | ✅ Готов | Псевдодатчики с шумом: гироскоп, барометр, СВС, зонд УА, GPS |
+| `control.py` | ✅ Готов | `PID`, `PitchController` (каскад theta+q), `PitchControlParams` |
+| `plotting.py` | ✅ Готов | 4 статических функции графиков (русские подписи) |
+| `animate.py` | ✅ Готов | `animate_log()` — анимация тримового полёта по Log |
 | `check.py` | ✅ Готов | 24 теста здравого смысла |
-| `demo.py` | ✅ Готов | Точка входа, тримовый прогон |
-
-### Чего ещё нет (нужно для Этапа 1 и 2)
-
-| Файл | Приоритет | Описание |
-|------|-----------|----------|
-| `control.py` | 🔴 Критично | ПИД-каскад, без него нет стабильного полёта |
-| `sensors.py` | 🔴 Критично | Псевдодатчики с шумом и смещением |
-| `estimators.py` | 🟡 Важно | Косвенная оценка УА: `alpha_est = theta - gamma_GPS` |
-| `scenarios.py` | 🟡 Важно | Уставки для сценариев С1–С6 |
+| `demo.py` | ✅ Готов | Тримовый прогон + 4 графика + проверка интегратора |
+| `demo_control.py` | ✅ Готов | Анимация: 3-фазный сценарий срыва и вывода (см. ниже) |
+| `alt_control_demo.py` | ✅ Готов | Анимация: удержание высоты, внешний P-контур по h |
 
 ---
 
-## 2. Следующий шаг: `control.py`
+## 2. Архитектура реализованного контура управления
 
-### Архитектура каскада (3 контура)
+### control.py — что там
 
 ```
-Уставка h_cmd, Va_cmd
+PIDParams       ← dataclass: Kp, Ki, Kd, tau (фильтр производной), integral_limit
+PID             ← класс: step(error, dt) → float. Фильтр d/dt первого порядка.
+saturation()    ← np.clip, вынесен отдельно
+PitchControlParams ← dataclass: коэффициенты theta- и q-контуров, h_Kp, q_max
+PitchController ← каскадный регулятор: theta_ref → q_ref → delta_e
+                  + P-контур по высоте → throttle (h_Kp, по умолчанию = 0 в демо)
+```
+
+### Каскад тангажа
+
+```
+theta_ref
     │
-    ▼
-[Контур высоты]  ─── theta_cmd ───▶ [Контур тангажа] ─── q_cmd ───▶ [Контур q]
-   PID(h)                              PID(theta, alpha)                PID(q)
-                                                                          │
-                                                                     delta_e
-[Контур скорости]
-   PID(Va) ─── throttle
+    ▼  error_theta = theta_ref - theta_meas
+[PID_theta]  →  q_ref  (ограничено q_max = ±60°/с)
+    │
+    ▼  error_q = q_ref - q_meas
+[PID_q]  →  delta_e_cmd  (знак инвертирован! см. control.py:229)
+    │
+[saturation ±25°]  →  delta_e
 ```
 
-### Класс PID
+### Контур высоты → газ (в alt_control_demo.py)
 
-```python
-class PID:
-    def __init__(self, kp, ki, kd, i_limit=None):
-        self._integrator = 0.0
-        self._prev_error = 0.0
-
-    def update(self, error: float, dt: float) -> float:
-        self._integrator += error * dt
-        if self._i_limit:
-            self._integrator = np.clip(self._integrator, -self._i_limit, self._i_limit)
-        derivative = (error - self._prev_error) / dt
-        self._prev_error = error
-        return self.kp*error + self.ki*self._integrator + self.kd*derivative
+```
+h_ref
+    │
+    ▼  h_err = h_ref - h_meas
+alpha_trim + KH * h_err  →  theta_ref  (ограничено ±15°)
+    │
+    └──→  в PitchController.set_pitch_setpoint()
 ```
 
-### Сигнатура каскада
-
-```python
-def cascade(sensors, alpha_src: float, setpoints, pids: dict, dt: float) -> np.ndarray:
-    """
-    sensors   : SensorData (из sensors.py)
-    alpha_src : alpha_probe ИЛИ alpha_est — единственное различие в парном прогоне
-    setpoints : (h_cmd, Va_cmd, theta_cmd или None)
-    pids      : словарь {'rate': PID, 'pitch': PID, 'alt': PID, 'speed': PID}
-    Возвращает: np.array([delta_e, throttle])
-    """
-```
-
-### Знаковое соглашение (критично!)
-
-В модели Aerosonde `Cmde = -0.5`:
-- **Положительный δe → момент вниз (пикирование)**
-- **Отрицательный δe → момент вверх (кабрирование)**
-
-При тримовом полёте Va=30 м/с: `δe_trim ≈ -0.078 рад ≈ -4.5°` при `α_trim ≈ 0.041 рад`.  
-Это уже проверено в `runner.compute_trim()`.
-
-Следствие для ПИД: ошибка по тангажу `e_theta = theta_cmd - theta_meas`:
-- При `e_theta > 0` (нужно увеличить тангаж) → ПИД должен давать **отрицательный** δe.
-- `kp_pitch < 0` или инвертировать ошибку.
+Газ в обоих демо фиксирован = `thr_trim` (h_Kp установлен в 0).
 
 ---
 
-## 3. Следующий шаг: `sensors.py`
+## 3. Демо-файлы: сценарии
 
-### Структура SensorData
+### demo_control.py — срыв и вывод
 
-```python
-@dataclass
-class SensorData:
-    theta:       float   # угол тангажа от ИНС (шум gyro), рад
-    q:           float   # угловая скорость тангажа (шум gyro), рад/с
-    gamma_gps:   float   # угол наклона траектории от GPS (из земных скоростей), рад
-    Va_meas:     float   # воздушная скорость от СВС, м/с
-    h_meas:      float   # высота от барометра, м
-    alpha_probe: float   # УА от зонда (путь "с зондом"), рад
-```
+| Фаза | t, с | theta_ref | throttle |
+|------|------|-----------|----------|
+| 1 — трим | 0–8 | 1.9° (alpha_trim) | thr_trim = 0.398 |
+| 2 — срыв | 8–25 | 20° | 0.0 (пропеллер тормозит) |
+| 3 — вывод | 25–55 | −5° | thr_trim = 0.398 |
 
-### Шаблон функции
+Результат: Va падает до ~14 м/с (скорость сваливания), alpha_max ≈ 44°, вывод восстанавливает Va ≈ 32 м/с, h_final ≈ 225 м (запас от h0 = 300 м).
 
-```python
-def measure_all(state: np.ndarray, Va_true: float, alpha_true: float,
-                params: SensorParams, rng: np.random.Generator) -> SensorData:
-    noise = lambda sigma: rng.normal(0.0, sigma)
-    return SensorData(
-        theta       = state[THETA] + noise(params.gyro_noise) + params.gyro_bias,
-        q           = state[Q]     + noise(params.gyro_noise),
-        gamma_gps   = kinematic_gamma(state) + noise(params.gps_vel_noise),
-        Va_meas     = Va_true      + noise(params.airspeed_noise) + params.airspeed_bias,
-        h_meas      = state[H]     + noise(params.baro_noise)  + params.baro_bias,
-        alpha_probe = alpha_true   + noise(params.probe_noise) + params.probe_bias,
-    )
-```
+На subplot УА — три зоны: оранжевая (>15°), красная (>20°), линия срыва (27°).  
+Info-box показывает `предупрежд.` / `! критич. !` / `!! СРЫВ !!` в реальном времени.
+
+Сохранена анимация: `stall_recovery.gif`.
+
+### alt_control_demo.py — удержание высоты
+
+| Фаза | t, с | h_ref |
+|------|------|-------|
+| 1 — трим | 0–10 | 100 м |
+| 2 — набор | 10–40 | 200 м (редактируется пользователем) |
+| 3 — снижение | 40–60 | 100 м |
+
+Результат: h_final ≈ 100 м (точность < 1 м), Va почти не меняется, alpha < 5°.
 
 ---
 
-## 4. Следующий шаг: `estimators.py`
+## 4. Что ещё нужно реализовать (приоритеты по ТЗ)
+
+| Модуль | Приоритет | Описание |
+|--------|-----------|----------|
+| `estimators.py` | 🔴 Критично | Косвенная оценка УА: `alpha_est = theta_meas - gamma_gps`. Это "мир без зонда". |
+| `scenarios.py` | 🔴 Критично | Структурированные уставки для С1–С6, слой сдвига ветра |
+| Парный прогон | 🔴 Критично | "С зондом vs без" — центральный результат главы 8 |
+| Скоростной контур | 🟡 Важно | PID(Va) → throttle (сейчас газ фиксирован) |
+| `check.py` для control/sensors | 🟡 Важно | Добавить тесты для новых модулей |
+| Боковой канал | 🟢 Позже | Расширение вектора состояния |
+
+---
+
+## 5. Следующий обязательный шаг: estimators.py
 
 ```python
+# estimators.py
+
+from state import kinematic_gamma   # уже реализовано в state.py
+
 def estimate_kinematic(theta_meas: float, gamma_gps: float) -> float:
     """
-    Косвенная оценка УА: alpha_est = theta - gamma_GPS.
-    
-    МОДЕЛЬ, не эксперимент. При ветре gamma_GPS считается по земной скорости,
-    истинный УА — по воздушной. Расхождение = ветровая составляющая.
-    Это и есть "слепота" косвенной оценки — центральный тезис работы.
+    Косвенная оценка УА (без зонда).
+    alpha_est = theta - gamma_GPS.
+
+    ВАЖНО: gamma_GPS вычисляется по земной скорости (GPS).
+    При боковом ветре gamma_GPS ≠ gamma_air → ошибка оценки.
+    Это и есть "слепота" косвенной оценки — ключевой тезис работы.
     """
     return theta_meas - gamma_gps
 ```
 
+`kinematic_gamma()` уже есть в `state.py:87` — использовать его для вычисления gamma_gps в sensors.py.
+
 ---
 
-## 5. Парный прогон (С6 — кульминация)
+## 6. Парный прогон (С6 — кульминация)
 
-### Критически важное требование (TZ п. 6.4)
-
-Оба прогона **идентичны** во всём, кроме источника α:
+Оба прогона **идентичны во всём, кроме источника α**:
 
 ```python
-def run_paired(scenario_fn, aircraft, wind_params, cfg):
-    # Два НЕЗАВИСИМЫХ генератора шума — физически корректно
-    # (броуновское движение молекул около разных датчиков независимо)
-    rng_probe    = np.random.default_rng(seed=42)
-    rng_noprobe  = np.random.default_rng(seed=137)
+def run_paired(controls_builder, aircraft, wind_params, cfg):
+    # Два независимых RNG — физически мотивировано (разные датчики)
+    rng_probe   = np.random.default_rng(seed=42)
+    rng_noprobe = np.random.default_rng(seed=137)
 
     def ctrl_probe(t, state, Va, alpha):
-        sensors = measure_all(state, Va, alpha, cfg.sensors, rng_probe)
-        alpha_src = sensors.alpha_probe           # прямое измерение
-        return cascade(sensors, alpha_src, setpoints(t), pids_probe, cfg.dt)
+        # alpha_src = прямое измерение зонда
+        alpha_src = measure_angle_of_attack(alpha, sp.probe_bias, sp.probe_noise, rng_probe)
+        return controls_builder(t, state, Va, alpha_src, rng_probe)
 
     def ctrl_noprobe(t, state, Va, alpha):
-        sensors = measure_all(state, Va, alpha, cfg.sensors, rng_noprobe)
-        alpha_src = estimate_kinematic(sensors.theta, sensors.gamma_gps)  # косвенная
-        return cascade(sensors, alpha_src, setpoints(t), pids_noprobe, cfg.dt)
+        # alpha_src = косвенная оценка theta - gamma_GPS
+        sensors = measure_all(state, Va, alpha, sp, rng_noprobe)
+        alpha_src = estimate_kinematic(sensors.theta, sensors.gamma_gps)
+        return controls_builder(t, state, Va, alpha_src, rng_noprobe)
 
     log_probe   = run(ctrl_probe,   aircraft, wind_params, cfg)
     log_noprobe = run(ctrl_noprobe, aircraft, wind_params, cfg)
     return log_probe, log_noprobe
 ```
 
-Разные `seed` для `rng` — решение принято автором, физически мотивировано.
+Разные seed для rng — решение принято автором, зафиксировано в memory.
 
 ---
 
-## 6. Сценарии (scenarios.py)
+## 7. Важные технические детали
 
-Каждый сценарий — функция `setpoints(t) -> (h_cmd, Va_cmd)`:
+### Знаковое соглашение delta_e
+
+В модели `Cmde = -0.5`:
+- `delta_e > 0` → момент вниз (пикирование)
+- `delta_e < 0` → момент вверх (кабрирование)
+
+В `PitchController.step()` — инверсия знака q-контура:
+```python
+delta_e_cmd = -self.pid_q.step(error_q, dt)   # control.py:229
+```
+Это намеренно и корректно. При желании набрать тангаж: q_ref > 0, error_q > 0, pid_q > 0, delta_e_cmd < 0 → кабрирование ✓.
+
+### h_dot формула
+
+В `dynamics.py:101`:
+```python
+dstate[H] = u * np.sin(theta) - w * np.cos(theta)
+```
+Это **правильная** формула (выведена из СК, z_body вниз). Комментарий в `state.py` содержит опечатку (знак у w обратный) — доверять коду, не комментарию.
+
+### Модель тяги
+
+```
+T = 0.5 * rho * S_prop * C_prop * ((k_motor * throttle)^2 - Va^2)
+```
+При `throttle < Va/k_motor` — тяга **отрицательная** (пропеллер тормозит).  
+Trim throttle = 0.398, k_motor = 80 → порог: Va = 31.8 м/с. При Va < 31.8 и trim throttle тяга положительна. Это использовалось в сценарии срыва: throttle = 0 → T ≈ −0.13 * Va² → сильное торможение.
+
+### Стандартные PID коэффициенты (пока не оптимизированы)
 
 ```python
-def setpoints_C1(t):   # горизонтальный полёт
-    return 100.0, 30.0
+PitchControlParams:
+    theta_Kp=1.5, theta_Ki=0.1, theta_Kd=0.3, theta_tau=0.1
+    q_Kp=0.5,    q_Ki=0.05,   q_Kd=0.1,    q_tau=0.05
+    h_Kp=0.01    # управление высотой через тягу (в демо = 0)
+    q_max = ±60°/с
 
-def setpoints_C2(t):   # кабрирование: рост тангажа 15-20°
-    if t < 5.0: return 100.0, 30.0
-    if t < 15.0: return 130.0, 30.0   # уставка по высоте вызовет рост тангажа
-    return 130.0, 30.0
-
-def setpoints_C4(t):   # выход на закритический УА
-    if t < 5.0: return 100.0, 30.0
-    return 100.0, 15.0   # резкое снижение скорости → рост α
-
-def setpoints_C6(t):   # снижение в слой сдвига ветра
-    return max(50.0, 100.0 - 2.0*t), 30.0   # плавное снижение
+KH (altitude → theta_ref) = 0.006 рад/м  (в alt_control_demo.py)
 ```
-
----
-
-## 7. Как добавить новый модуль и не сломать существующий
-
-1. Не изменять `dynamics.py`, `integrators.py`, `aero.py` — они **проверены**.
-2. `control.py` и `sensors.py` — новые файлы, не редактируют существующие.
-3. Интегрировать через `runner.run()` — передать новую `controls_fn`.
-4. После реализации добавить раздел в `check.py`.
-5. Запустить `check.py` — должно быть ALL CHECKS PASSED.
 
 ---
 
 ## 8. Параметры, которые автор должен предоставить
 
-Помечены `[АВТОР]` в `config.py`. Без них работает на аналоге Aerosonde:
+Помечены `[АВТОР]` в `config.py`. Без них — аналог Aerosonde:
 
 1. Масса, Jy, S, c, b вашего БПЛА
-2. Таблицы Cl/Cd/Cm по УА
-3. Уровни шума датчиков, **особенно шум зонда** (характеристика изделия)
-4. Стартовые коэффициенты ПИД
-5. Параметры ветра (постоянный, слой сдвига, порыв)
-6. Критический и предупредительный УА для профиля
-7. Таблица тяга→мощность (для С5)
-8. Закон тяги: коэффициент и max оборотов
+2. Таблицы CL / CD / Cm по УА
+3. Шум зонда УА (характеристика конкретного изделия)
+4. Критический и предупредительный УА для вашего профиля
+5. Параметры двигателя (k_motor, S_prop)
+6. Параметры ветра на полигоне (постоянный, слой сдвига)

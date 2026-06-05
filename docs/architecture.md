@@ -10,6 +10,8 @@ config.py          ← нет зависимостей (только dataclasses
     ├── state.py   ← config
     ├── aero.py    ← config
     ├── wind.py    ← config
+    ├── sensors.py ← (numpy only, параметры из config)
+    ├── control.py ← config (для ограничений рулей и тяги)
     │
     └── dynamics.py ← config, state, aero
             │
@@ -17,12 +19,17 @@ config.py          ← нет зависимостей (только dataclasses
                     │
                     └── runner.py ← config, state, wind, integrators
                             │
-                            ├── plotting.py  ← state, config, runner
-                            ├── animate.py   ← state (только индексы)
-                            └── demo.py      ← runner, plotting, config
+                            ├── plotting.py      ← state, config
+                            ├── animate.py       ← state (только индексы)
+                            ├── demo.py          ← runner, plotting, config
+                            ├── demo_control.py  ← runner, control, sensors, config
+                            └── alt_control_demo.py ← runner, control, sensors, config
 ```
 
 `check.py` — импортирует все модули, зависимость только в одну сторону.
+
+**Главное правило**: зависимости направлены только **вниз по графу**.  
+`sensors.py` и `control.py` не импортируют `runner.py` или друг друга.
 
 **Главное правило**: зависимости направлены только **вниз по графу**.  
 `aero.py` ничего не знает о `runner.py`, `runner.py` ничего не знает о `plotting.py`.
