@@ -5,34 +5,35 @@
 ## 1. Граф зависимостей модулей
 
 ```
-config.py          ← нет зависимостей (только dataclasses)
+config.py            ← нет зависимостей (только dataclasses)
     │
-    ├── state.py   ← config
-    ├── aero.py    ← config
-    ├── wind.py    ← config
-    ├── sensors.py ← (numpy only, параметры из config)
-    ├── control.py ← config (для ограничений рулей и тяги)
+    ├── state.py     ← config
+    ├── aero.py      ← config
+    ├── wind.py      ← config
+    ├── sensors.py   ← numpy only, параметры из config
+    ├── control.py   ← config (ограничения рулей и тяги)
+    ├── estimators.py ← numpy only (НЕ зависит от sensors или control)
     │
-    └── dynamics.py ← config, state, aero
+    └── dynamics.py  ← config, state, aero
             │
             └── integrators.py ← dynamics
                     │
                     └── runner.py ← config, state, wind, integrators
                             │
-                            ├── plotting.py      ← state, config
-                            ├── animate.py       ← state (только индексы)
-                            ├── demo.py          ← runner, plotting, config
-                            ├── demo_control.py  ← runner, control, sensors, config
-                            └── alt_control_demo.py ← runner, control, sensors, config
+                            ├── plotting.py       ← state, config
+                            ├── animate.py        ← state (только индексы)
+                            └── scenarios/
+                                ├── s1..s5        ← runner, control, sensors, config
+                                ├── s6            ← runner, control, sensors, config
+                                └── s7            ← runner, control, sensors, estimators, config
 ```
 
 `check.py` — импортирует все модули, зависимость только в одну сторону.
 
 **Главное правило**: зависимости направлены только **вниз по графу**.  
-`sensors.py` и `control.py` не импортируют `runner.py` или друг друга.
-
-**Главное правило**: зависимости направлены только **вниз по графу**.  
-`aero.py` ничего не знает о `runner.py`, `runner.py` ничего не знает о `plotting.py`.
+`sensors.py`, `control.py`, `estimators.py` — не импортируют `runner.py` или друг друга.  
+`estimators.py` намеренно не зависит от `sensors.py`: оценщик принимает уже готовые
+измерения (`theta_meas`, `Vx_gps`, `Vh_gps`), а не сырое состояние.
 
 ---
 

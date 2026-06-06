@@ -1,9 +1,10 @@
 """
 САУ (система автоматического управления) — каскадная ПИД-структура.
 
-Два контура:
+Три контура:
 1. Внешний (theta-контур): стабилизация угла тангажа theta
 2. Внутренний (q-контур): стабилизация угловой скорости q
+3. Контур скорости (Va-контур): удержание воздушной скорости через тягу
 
 Управляющие команды:
 - delta_e (отклонение руля высоты), рад
@@ -248,3 +249,84 @@ class PitchController:
     def __call__(self, t: float, meas: dict, dt: float) -> np.ndarray:
         """Синоним для step() для удобства."""
         return self.step(t, meas, dt)
+
+
+# ---------------------------------------------------------------------------
+# Контур удержания воздушной скорости
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SpeedControlParams:
+    """Параметры ПИД-регулятора воздушной скорости."""
+    Va_Kp: float = 0.1    # пропорциональный
+    Va_Ki: float = 0.01    # интегральный
+    Va_Kd: float = 0.01     # дифференциальный
+    Va_tau: float = 0.5    # фильтр производной, сек
+    Va_integral_limit: float = 0.5  # ограничение интеграла
+
+
+class SpeedController:
+    """
+    Контур удержания воздушной скорости: Va_ref → throttle.
+
+    Структура:
+        Va_ref (уставка скорости)
+          |
+          v
+        [PID_Va] -> delta_throttle
+          |
+          v
+        throttle = trim_throttle + delta_throttle
+          |
+          v
+        [Saturation 0..1] -> команда тяги
+    """
+
+    def __init__(self, aircraft, params: SpeedControlParams):
+        self.aircraft = aircraft
+
+        pid_p = PIDParams(
+            Kp=params.Va_Kp,
+            Ki=params.Va_Ki,
+            Kd=params.Va_Kd,
+            tau=params.Va_tau,
+            integral_limit=params.Va_integral_limit,
+        )
+        self.pid_Va = PID(pid_p, name="Va")
+
+        self.Va_ref = 30.0
+        self.trim_throttle = 0.5
+
+    def reset(self):
+        """Сброс интеграла ПИД. Уставка Va_ref не меняется."""
+        self.pid_Va.reset()
+
+    def set_Va_ref(self, Va_ref: float):
+        """Установить уставку воздушной скорости (м/с)."""
+        self.Va_ref = max(Va_ref, 1.0)
+
+    def set_trim_throttle(self, throttle: float):
+        """Установить базовую тягу (feedforward)."""
+        self.trim_throttle = np.clip(throttle,
+                                     self.aircraft.throttle_min,
+                                     self.aircraft.throttle_max)
+
+    def step(self, Va_meas: float, dt: float) -> float:
+        """
+        Один шаг контура скорости.
+
+        Args:
+            Va_meas: измеренная воздушная скорость, м/с
+            dt: шаг времени, сек
+
+        Returns:
+            throttle: команда тяги 0..1
+        """
+        error_Va = self.Va_ref - Va_meas
+        delta_throttle = self.pid_Va.step(error_Va, dt)
+        throttle = saturation(
+            self.trim_throttle + delta_throttle,
+            self.aircraft.throttle_min,
+            self.aircraft.throttle_max,
+        )
+        return throttle
