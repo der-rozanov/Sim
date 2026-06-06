@@ -127,7 +127,7 @@ def measure_gps_velocity_earth(u_body, w_body, theta, bias, noise_std, rng):
 
     # Преобразование в земную СК (определение см. state.py)
     Vx_earth_true =  u_body * ct - w_body * st
-    Vh_earth_true =  u_body * st + w_body * ct
+    Vh_earth_true =  u_body * st - w_body * ct
 
     bias_x = bias if isinstance(bias, (int, float)) else bias[0] if len(bias) > 0 else 0.0
     bias_h = bias if isinstance(bias, (int, float)) else bias[1] if len(bias) > 1 else 0.0

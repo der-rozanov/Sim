@@ -146,14 +146,66 @@ throttle = trim_throttle = const
 
 ---
 
-## 7. Что будет следующим шагом
-
-Следующий ключевой элемент — **`estimators.py`** и парный прогон:
+## 7. SpeedController — контур воздушной скорости (добавлен в С6)
 
 ```
-"С зондом":     alpha_src = зонд (measure_angle_of_attack)
-"Без зонда":    alpha_src = theta_meas - gamma_gps (косвенная оценка)
+Va_ref (уставка, м/с)
+    │
+    ▼  error_Va = Va_ref − Va_meas
+[PID_Va]  →  delta_throttle   (Va_Kp=0.08, Va_Ki=0.02, Va_Kd=0.0)
+    │
+    ▼  throttle = trim_throttle + delta_throttle
+[saturation 0..1]  →  команда тяги
 ```
 
-При наличии бокового ветра `gamma_gps ≠ gamma_air` → косвенная оценка даёт неверный alpha → ПИД управляет на неверном УА → ухудшение работы САУ.  
+**Ключевое отличие от С5**: в С5 газ = const = trim_throttle, поэтому Va дрейфует
+при наборе/снижении (±3.8 м/с). В С6 SpeedController удерживает Va в пределах ±0.6 м/с.
+
+**Параметры** (`SpeedControlParams`):
+
+| Параметр | Значение | Смысл |
+|----------|----------|-------|
+| `Va_Kp` | 0.08 | Пропорциональный: 1 м/с ошибки → 0.08 коррекции газа |
+| `Va_Ki` | 0.02 | Интегральный: убирает статическое смещение |
+| `Va_Kd` | 0.0 | Дифференциальный: нет (скорость плавная) |
+| `Va_tau` | 0.5 с | Фильтр производной |
+| `Va_integral_limit` | 0.5 | Ограничение интеграла |
+
+**Совместное использование с PitchController** (сценарии С6, С7):
+
+```python
+# PitchController отвечает за delta_e
+ctrl_out = controller.step(t, meas, cfg.dt)
+delta_e  = ctrl_out[0]          # руль высоты — от контура тангажа
+
+# SpeedController отвечает за throttle (независимо)
+throttle = spd_ctrl.step(Va_meas, cfg.dt)
+
+return np.array([delta_e, throttle])
+```
+
+---
+
+## 8. Что сделано и что дальше
+
+### Реализовано
+
+- `PitchController`: каскад theta+q → delta_e ✅
+- `SpeedController`: Va → throttle ✅
+- `estimators.py`: косвенная оценка УА (`estimate_alpha_indirect`) ✅
+- С6: контроль высоты + удержание Va ✅
+- С7: сравнение зонд vs ИНС+GPS ✅
+
+### Следующий шаг
+
+Парный прогон «с зондом vs без» (ТЗ раздел 6.4) — оба прогона с **идентичными**
+ПИД, сценарием, ветром и шумами общих датчиков; разница только в источнике УА:
+
+```
+"С зондом":   alpha_src = measure_angle_of_attack(alpha, ...)
+"Без зонда":  alpha_src = estimate_alpha_indirect(theta_meas, Vx_gps, Vh_gps)
+```
+
+При наличии сдвига ветра по высоте (`WindParams(dV_shear=X)`) косвенная оценка
+даёт систематическую ошибку → ПИД управляет на неверном УА → отклонения растут.
 Это **центральный тезис главы 8**, который симулятор должен доказать графиками.
