@@ -24,7 +24,8 @@ def wind(h: float, t: float, params: WindParams) -> tuple:
     Vwx = _constant(params)
     Vwx += _shear(h, params)
     Vwx += _gust(t, params)
-    return Vwx, 0.0   # вертикальный ветер пока нулевой (задел на будущее)
+    Vwh = _turbulence(t, params)
+    return Vwx, Vwh
 
 
 def _constant(params: WindParams) -> float:
@@ -62,3 +63,15 @@ def _gust(t: float, params: WindParams) -> float:
     if t0 <= t <= t0 + dur:
         return amp
     return 0.0
+
+
+def _turbulence(t: float, params: WindParams) -> float:
+    """
+    Синусоидальная вертикальная турбулентность.
+    Моделирует атмосферную болтанку: изменяет УА напрямую через воздушную скорость.
+    turb_amp  — амплитуда, м/с
+    turb_freq — частота, Гц (период = 1/turb_freq)
+    """
+    if params.turb_amp == 0.0:
+        return 0.0
+    return params.turb_amp * np.sin(2.0 * np.pi * params.turb_freq * t)
