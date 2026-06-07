@@ -18,7 +18,7 @@ derivatives(state, controls, t, params, wind_fn) -> dstate
   Кинематика:
     theta_dot = q
     x_dot     = u·cos θ − w·sin θ
-    h_dot     = u·sin θ + w·cos θ   (знак: h растёт вверх)
+    h_dot     = u·sin θ − w·cos θ   (w > 0 вниз → при w>0 высота убывает)
 
 Силы гравитации в связанной СК:
     fx_grav = −m·g·sin θ
