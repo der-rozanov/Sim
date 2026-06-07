@@ -19,8 +19,8 @@ import matplotlib.pyplot as plt
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from config import AircraftParams
-from aero import coef_CL, coef_CD
+from sim.config import AircraftParams
+from sim.aero import coef_CL, coef_CD
 
 params = AircraftParams()
 

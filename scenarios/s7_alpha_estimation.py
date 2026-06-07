@@ -29,13 +29,13 @@ from matplotlib.animation import FuncAnimation
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from config import AircraftParams, WindParams, SimConfig, SensorParams
+from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
 from runner import run, compute_trim, trim_state, print_summary
-from control import PitchController, PitchControlParams, SpeedController, SpeedControlParams
-from sensors import (measure_gyro, measure_altitude, measure_airspeed,
-                     measure_angle_of_attack, measure_gps_velocity_earth)
-from estimators import estimate_alpha_indirect
-from state import THETA, Q, H, X, U, W
+from control.controllers import PitchController, PitchControlParams, SpeedController, SpeedControlParams
+from control.sensors import (measure_gyro, measure_altitude, measure_airspeed,
+                              measure_angle_of_attack, measure_gps_velocity_earth)
+from control.estimators import estimate_alpha_indirect
+from sim.state import THETA, Q, H, X, U, W
 
 plt.rcParams["font.family"] = "DejaVu Sans"
 

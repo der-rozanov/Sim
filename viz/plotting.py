@@ -11,8 +11,8 @@ plot_integrator_check(...)          -- проверка качества инт�
 import numpy as np
 import matplotlib.pyplot as plt
 
-from state import U, W, Q, THETA, X, H as H_IDX
-from config import AircraftParams, WindParams
+from sim.state import U, W, Q, THETA, X, H as H_IDX
+from sim.config import AircraftParams, WindParams
 
 # Русские шрифты в matplotlib на Windows работают через rcParams
 plt.rcParams["font.family"] = "DejaVu Sans"
@@ -178,7 +178,7 @@ def plot_integrator_check(aircraft: AircraftParams,
     Отсутствие роста энергии подтверждает достоверность интегратора (RK4).
     """
     from runner import run, compute_trim, trim_state
-    from config import SimConfig
+    from sim.config import SimConfig
     import copy
 
     alpha_tr, de_tr, thr_tr = compute_trim(aircraft, cfg.Va0)

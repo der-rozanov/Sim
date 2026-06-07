@@ -30,11 +30,11 @@ if hasattr(sys.stdout, "reconfigure"):
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from config import AircraftParams, WindParams, SimConfig, SensorParams
+from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
 from runner import run, compute_trim, trim_state, print_summary
-from control import PitchController, PitchControlParams
-from sensors import measure_gyro, measure_altitude, measure_airspeed
-from state import THETA, Q, H, X
+from control.controllers import PitchController, PitchControlParams
+from control.sensors import measure_gyro, measure_altitude, measure_airspeed
+from sim.state import THETA, Q, H, X
 
 plt.rcParams["font.family"] = "DejaVu Sans"
 

@@ -3,21 +3,30 @@
 animate.py -- анимация результатов симуляции по готовому логу.
 
 Не зависит от симулятора: принимает Log и рисует анимацию.
-Запуск напрямую: python animate.py  (использует встроенный демо-прогон)
+Запуск напрямую: python viz/animate.py  (использует встроенный демо-прогон)
 
 API:
-    from animate import animate_log
+    from viz.animate import animate_log
     fig, anim = animate_log(log, params=aircraft, speed=5.0)
     plt.show()
 """
 
+import os
+import sys
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.animation import FuncAnimation
 from matplotlib.patches import Polygon as MplPolygon
 
-from state import X, H as H_IDX, THETA, Q
+# Когда файл запускается напрямую (python viz/animate.py),
+# добавляем корень проекта в sys.path.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.dirname(_HERE)
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+from sim.state import X, H as H_IDX, THETA, Q
 
 
 # ---------------------------------------------------------------------------
@@ -298,14 +307,12 @@ def _save(anim: FuncAnimation, path: str, fps: int):
 
 
 # ---------------------------------------------------------------------------
-# Запуск напрямую: python animate.py
+# Запуск напрямую: python viz/animate.py
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import sys
-    from config import AircraftParams, WindParams, SimConfig
+    from sim.config import AircraftParams, WindParams, SimConfig
     from runner import run, compute_trim, trim_state
-    import numpy as np
 
     print("Запуск демо-прогона для анимации...")
 

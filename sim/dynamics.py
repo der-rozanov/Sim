@@ -31,10 +31,10 @@ derivatives(state, controls, t, params, wind_fn) -> dstate
 """
 
 import numpy as np
-from config import AircraftParams
-from state import U, W, Q, THETA, X, H, N_STATES
-from aero import aero_forces_moments
-from state import air_velocity
+from .config import AircraftParams
+from .state import U, W, Q, THETA, X, H, N_STATES
+from .aero import aero_forces_moments
+from .state import air_velocity
 
 
 def thrust(throttle: float, Va: float, params: AircraftParams) -> float:

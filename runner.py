@@ -5,10 +5,10 @@
 from dataclasses import dataclass
 import numpy as np
 
-from config import AircraftParams, WindParams, SimConfig
-from state import initial_state, air_velocity, total_energy, U, W, Q, THETA, H, N_STATES
-from wind import wind as _wind
-from integrators import step_rk4
+from sim.config import AircraftParams, WindParams, SimConfig
+from sim.state import initial_state, air_velocity, total_energy, U, W, Q, THETA, H, N_STATES
+from sim.wind import wind as _wind
+from sim.integrators import step_rk4
 
 
 @dataclass
@@ -131,7 +131,7 @@ def trim_state(aircraft: AircraftParams, cfg) -> np.ndarray:
 
 def print_summary(log: Log, params: AircraftParams, label: str = ""):
     """Распечатать числовые итоги прогона."""
-    from state import THETA, H as H_idx
+    from sim.state import THETA, H as H_idx
     t, Va, alpha, h = log.t, log.Va, log.alpha, log.state[:, H_idx]
 
     alpha_warn = params.alpha_warning

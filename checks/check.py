@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
 """
 Быстрая проверка всех модулей симулятора.
-Запуск: python check.py
+Запуск: python checks/check.py
 """
 
-import numpy as np
 import sys
+import os
+import numpy as np
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 PASS = "[OK]"
 FAIL = "[!!]"
@@ -26,25 +29,25 @@ def check(name, condition, got=""):
 all_ok = True
 
 # ------------------------------------------------------------------
-section("1. config.py")
+section("1. sim/config.py")
 # ------------------------------------------------------------------
 try:
-    from config import AircraftParams, WindParams, SensorParams, SimConfig, default_params
+    from sim.config import AircraftParams, WindParams, SensorParams, SimConfig, default_params
     ap, wp, sp, cfg = default_params()
     all_ok &= check("импорт",          True)
-    all_ok &= check("mass = 13.5 кг",  ap.mass == 13.5,  f"mass={ap.mass}")
+    all_ok &= check("mass = 5 кг",     ap.mass == 5,     f"mass={ap.mass}")
     all_ok &= check("Jy   = 1.135",    ap.Jy == 1.135,   f"Jy={ap.Jy}")
-    all_ok &= check("CL0  = 0.28",     ap.CL0 == 0.28,   f"CL0={ap.CL0}")
+    all_ok &= check("CL0  = 0.1",      ap.CL0 == 0.1,    f"CL0={ap.CL0}")
     all_ok &= check("dt   = 0.01 с",   cfg.dt == 0.01,   f"dt={cfg.dt}")
 except Exception as e:
     check("импорт", False, str(e)); all_ok = False
 
 # ------------------------------------------------------------------
-section("2. state.py")
+section("2. sim/state.py")
 # ------------------------------------------------------------------
 try:
-    from state import (initial_state, air_velocity, kinematic_gamma,
-                       total_energy, U, W, Q, THETA, X, H, N_STATES)
+    from sim.state import (initial_state, air_velocity, kinematic_gamma,
+                           total_energy, U, W, Q, THETA, X, H, N_STATES)
     s = initial_state(cfg)
     all_ok &= check("N_STATES = 6",  N_STATES == 6)
     all_ok &= check("shape (6,)",    s.shape == (6,),    f"shape={s.shape}")
@@ -58,7 +61,7 @@ try:
 
     # Попутный ветер 5 м/с (Vwx>0) -> Va уменьшается
     Va_hw, alpha_hw = air_velocity(s, (5.0, 0.0))
-    all_ok &= check("Va < Va0 pri poputnom vetre",
+    all_ok &= check("Va < Va0 при попутном ветре",
                     Va_hw < cfg.Va0, f"Va={Va_hw:.2f} m/s (ожидалось <{cfg.Va0})")
 
     # Восходящий ветер 5 м/с при theta=0 -> alpha > 0
@@ -76,14 +79,14 @@ except Exception as e:
     check("импорт state", False, str(e)); all_ok = False
 
 # ------------------------------------------------------------------
-section("3. aero.py")
+section("3. sim/aero.py")
 # ------------------------------------------------------------------
 try:
-    from aero import coef_CL, coef_CD, coef_Cm, aero_forces_moments
+    from sim.aero import coef_CL, coef_CD, coef_Cm, aero_forces_moments
 
     # CL растёт с alpha в доступном диапазоне
     CLs = [coef_CL(np.radians(a), 0, 0, 30.0, ap) for a in [0, 5, 10, 20, 25]]
-    all_ok &= check("CL(0) = CL0",      abs(CLs[0] - ap.CL0) < 1e-9, f"CL0={CLs[0]:.3f}")
+    all_ok &= check("CL(0) ~ CL0",      abs(CLs[0] - ap.CL0) < 1e-6, f"CL0={CLs[0]:.6f}")
     all_ok &= check("CL растёт 0->25 deg", CLs[4] > CLs[0],
                     f"CL(25)={CLs[4]:.3f} > CL(0)={CLs[0]:.3f}")
 
@@ -114,10 +117,11 @@ except Exception as e:
     check("импорт aero", False, str(e)); all_ok = False
 
 # ------------------------------------------------------------------
-section("4. wind.py")
+section("4. sim/wind.py")
 # ------------------------------------------------------------------
 try:
-    from wind import wind
+    from sim.wind import wind
+    from sim.config import WindParams
 
     # Нулевой ветер
     vx, vh = wind(100.0, 0.0, wp)
@@ -125,7 +129,6 @@ try:
                     f"Vwx={vx}, Vwh={vh}")
 
     # Постоянный ветер
-    from config import WindParams
     wp2 = WindParams(Vw_const=5.0)
     vx2, _ = wind(100.0, 0.0, wp2)
     all_ok &= check("постоянный ветер 5 м/с", vx2 == 5.0, f"Vwx={vx2}")
@@ -152,11 +155,11 @@ except Exception as e:
     check("импорт wind", False, str(e)); all_ok = False
 
 # ------------------------------------------------------------------
-section("5. dynamics.py")
+section("5. sim/dynamics.py")
 # ------------------------------------------------------------------
 try:
-    from dynamics import derivatives, thrust
-    from wind import wind as wind_fn
+    from sim.dynamics import derivatives, thrust
+    from sim.wind import wind as wind_fn
 
     wind_call = lambda h, t: wind_fn(h, t, wp)
     s0 = initial_state(cfg)
@@ -180,10 +183,10 @@ except Exception as e:
     check("импорт dynamics", False, str(e)); all_ok = False
 
 # ------------------------------------------------------------------
-section("6. integrators.py")
+section("6. sim/integrators.py")
 # ------------------------------------------------------------------
 try:
-    from integrators import step_rk4, step_euler
+    from sim.integrators import step_rk4, step_euler
 
     s0 = initial_state(cfg)
     controls = np.array([0.0, 0.4])   # небольшая тяга

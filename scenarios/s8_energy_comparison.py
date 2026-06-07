@@ -26,13 +26,13 @@ from matplotlib.animation import FuncAnimation
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from config import AircraftParams, WindParams, SimConfig, SensorParams
+from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
 from runner import run, compute_trim, trim_state, print_summary
-from control import PitchController, PitchControlParams, SpeedController, SpeedControlParams
-from sensors import (measure_gyro, measure_altitude, measure_airspeed,
-                     measure_angle_of_attack, measure_gps_velocity_earth)
-from estimators import estimate_alpha_indirect
-from state import THETA, Q, H, X, U, W
+from control.controllers import PitchController, PitchControlParams, SpeedController, SpeedControlParams
+from control.sensors import (measure_gyro, measure_altitude, measure_airspeed,
+                              measure_angle_of_attack, measure_gps_velocity_earth)
+from control.estimators import estimate_alpha_indirect
+from sim.state import THETA, Q, H, X, U, W
 from flight_logger import FlightLogger
 
 plt.rcParams["font.family"] = "DejaVu Sans"
@@ -47,7 +47,7 @@ cfg         = SimConfig(Va0=30.0, h0=100.0, theta0=0.0, dt=0.01, t_end=60.0)
 
 H_TRIM    = 100.0
 H_HIGH    = 200.0
-VA_REF    = 25.0
+VA_REF    = 30.0
 VW        = wind_params.Vw_const
 T_CLIMB   = 10.0
 T_DESCEND = 40.0
