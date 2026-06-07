@@ -3,10 +3,10 @@
 Вьюер полётных логов (.flightlog).
 
 Запуск:
-    python viewer.py                              # диалог выбора файла
-    python viewer.py results/s8.flightlog         # открыть напрямую
-    python viewer.py results/s8.flightlog --speed 3.0   # скорость анимации
-    python viewer.py results/s8.flightlog --static      # статичный дашборд
+    python viz/viewer.py                              # диалог выбора файла
+    python viz/viewer.py results/s8.flightlog         # открыть напрямую
+    python viz/viewer.py results/s8.flightlog --speed 3.0   # скорость анимации
+    python viz/viewer.py results/s8.flightlog --static      # статичный дашборд
 
 Управление анимацией:
     Пробел — пауза / продолжение
@@ -26,10 +26,11 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.animation import FuncAnimation
 
-# flight_logger.py должен быть рядом с viewer.py
+# Добавляем корень проекта в sys.path (viewer лежит в viz/, корень на уровень выше)
 _HERE = os.path.dirname(os.path.abspath(__file__))
-if _HERE not in sys.path:
-    sys.path.insert(0, _HERE)
+_ROOT = os.path.dirname(_HERE)
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
 from flight_logger import load_log, print_log_info
 

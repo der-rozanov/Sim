@@ -10,7 +10,7 @@
 """
 
 import numpy as np
-from dynamics import derivatives
+from .dynamics import derivatives
 
 
 def step_euler(state: np.ndarray,

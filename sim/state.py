@@ -16,7 +16,7 @@
 """
 
 import numpy as np
-from config import AircraftParams, SimConfig
+from .config import AircraftParams, SimConfig
 
 # Именованные индексы — никаких «магических» чисел в остальном коде
 U     = 0

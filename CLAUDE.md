@@ -15,6 +15,61 @@
 решения и проверяет код. Claude Code — исполнитель: пишет и запускает код по ТЗ.
 Научные развилки, не описанные в ТЗ, не решать молча — выносить автору.
 
+## Структура проекта
+
+```
+sim/                  — ядро физики (изолировано, без управления)
+    config.py         — параметры ЛА, ветра, датчиков, прогона (AircraftParams и др.)
+    state.py          — вектор состояния, именованные индексы, air_velocity
+    dynamics.py       — derivatives(), thrust()  [чистая функция]
+    aero.py           — aero_forces_moments(), coef_CL/CD/Cm
+    integrators.py    — step_euler(), step_rk4()
+    wind.py           — wind(h, t, params)
+
+control/              — управление (импортирует только sim/)
+    controllers.py    — PitchController, SpeedController, PID, PIDParams
+    sensors.py        — measure_gyro/altitude/airspeed/angle_of_attack/gps_*
+    estimators.py     — estimate_alpha_indirect()
+
+runner.py             — главный цикл: run(), Log, compute_trim(), trim_state()
+flight_logger.py      — FlightLogger, load_log(), print_log_info()
+
+viz/                  — отображение (принимает Log, не знает физики)
+    plotting.py       — plot_dynamics/trajectory/energy/integrator_check()
+    animate.py        — animate_log()  [силуэт ЛА, анимация по Log]
+    viewer.py         — FlightLogViewer; CLI: python viz/viewer.py [файл.flightlog]
+
+scenarios/            — прогоны С1–С8; каждый: конфиг → run() → viz или logger.save()
+    s1_steady_flight.py   s5_altitude_control.py
+    s2_pitch_up.py        s6_speed_control.py
+    s3_pitch_down.py      s7_alpha_estimation.py
+    s4_stall.py           s8_energy_comparison.py
+
+checks/               — проверки здравого смысла
+    check.py          — 26 проверок всех модулей sim/; запуск: python checks/check.py
+    check_polar.py    — аэродинамическая поляра
+    check_motor.py    — характеристики силовой установки
+
+docs/                 — техническая документация
+results/              — .flightlog файлы (генерируемые, не коммитить)
+```
+
+## Правила импорта
+
+Внутри пакетов — относительные импорты (`from .config import ...`).
+Из сценариев/проверок — абсолютные после `sys.path.insert(0, "..")`:
+```python
+from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
+from sim.state  import THETA, Q, H, X, U, W
+from control.controllers import PitchController, PitchControlParams
+from control.sensors     import measure_gyro, measure_airspeed, ...
+from control.estimators  import estimate_alpha_indirect
+from runner       import run, compute_trim, trim_state, print_summary
+from flight_logger import FlightLogger
+from viz.animate  import animate_log
+from viz.plotting import plot_dynamics
+```
+
 ## Опорные файлы (в репозитории)
 
 - `TZ_simulator.md` — техническое задание: архитектура, модули, сценарии, этапы.
@@ -45,9 +100,13 @@
    содержит "зашитых" чисел физики.
 4. Управление заморожено на шаг интегрирования (внутри k1..k4 не пересчитывается)
    — это соответствует дискретной природе САУ.
-5. Модульность: физика/аэродинамика, датчики, оценка, регуляторы, ветер,
-   прогон/вывод, конфиг — раздельно. Боковой канал должен добавляться
-   расширением вектора состояния, не переписыванием продольного.
+5. Модульность реализована пакетами: `sim/` (физика) → `control/` (управление) →
+   `runner.py` / `flight_logger.py` → `viz/` (отображение) → `scenarios/` (прогоны).
+   Каждый слой знает только о нижележащих. `viz/` не импортирует `control/`.
+   Боковой канал добавляется расширением вектора состояния, не переписыванием продольного.
+6. Визуализация полностью отделена от прогона: сценарий отдаёт `Log` в `viz.*`
+   или сохраняет `.flightlog` через `FlightLogger`. Анимацию и графики менять
+   только в `viz/`, не трогая сценарии.
 
 ## Терминология (глоссарий проекта — единообразно в коде и комментариях)
 

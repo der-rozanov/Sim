@@ -12,7 +12,7 @@
 """
 
 import numpy as np
-from config import WindParams
+from .config import WindParams
 
 
 def wind(h: float, t: float, params: WindParams) -> tuple:

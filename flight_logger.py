@@ -57,9 +57,9 @@ import sys
 import datetime
 import numpy as np
 
-from config import AircraftParams, WindParams, SimConfig, SensorParams
+from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
 from runner import Log
-from state import THETA, Q, H, X, U, W
+from sim.state import THETA, Q, H, X, U, W
 
 # Папка для логов по умолчанию — results/ рядом с flight_logger.py
 _DEFAULT_RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")

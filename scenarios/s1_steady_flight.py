@@ -29,9 +29,9 @@ if hasattr(sys.stdout, "reconfigure"):
 # Добавить корень проекта в путь поиска модулей
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from config import AircraftParams, WindParams, SimConfig
+from sim.config import AircraftParams, WindParams, SimConfig
 from runner import run, compute_trim, trim_state, print_summary
-from state import THETA, Q, H, X, U, W
+from sim.state import THETA, Q, H, X, U, W
 
 plt.rcParams["font.family"] = "DejaVu Sans"
 

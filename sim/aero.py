@@ -6,7 +6,7 @@
 """
 
 import numpy as np
-from config import AircraftParams
+from .config import AircraftParams
 
 
 # ---------------------------------------------------------------------------
