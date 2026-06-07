@@ -41,10 +41,13 @@ def thrust(throttle: float, Va: float, params: AircraftParams) -> float:
     """
     Тяговое усилие винта, Н.
     Модель Beard & McLain (упрощённая):
-      T = 0.5 · ρ · S_prop · C_prop · (k_motor·δt)² − Va²)
+      T = 0.5 · ρ · S_prop · C_prop · ((k_motor·δt)² − Va²)
+    Зажим сверху T_max (физический предел мотора).
+    Авторотация (T < 0 при Va > k_motor·δt) сохраняется.
     """
     Vmotor = params.k_motor * throttle
-    return 0.5 * params.rho * params.S_prop * params.C_prop * (Vmotor**2 - Va**2)
+    T = 0.5 * params.rho * params.S_prop * params.C_prop * (Vmotor**2 - Va**2)
+    return min(T, params.T_max)
 
 
 def derivatives(state: np.ndarray,
