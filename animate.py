@@ -15,9 +15,40 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.animation import FuncAnimation
+from matplotlib.patches import Polygon as MplPolygon
 
 from state import X, H as H_IDX, THETA, Q
 
+
+# ---------------------------------------------------------------------------
+# Силуэт ЛА (вид сбоку, нос в сторону +x)
+#
+# Координаты нормированы: тело длиной 2.0, нос в точке x=+1.0.
+# Вращение и масштабирование выполняется в пикселях экрана — это гарантирует
+# правильную геометрию независимо от соотношения масштабов осей x и h.
+# ---------------------------------------------------------------------------
+
+_PLANE_SCALE_PX = 38  # «радиус» тела в пикселях (полная длина тела ≈ 76 px)
+
+# (вершины, facecolor, edgecolor, alpha, zorder)
+_PLANE_PARTS = (
+    # крыло (вид с ребра — хорда)
+    (np.array([[ 0.22,  0.06], [-0.20,  0.06], [-0.27, -0.04], [ 0.15, -0.04]]),
+     "steelblue",  "navy", 0.90, 5),
+    # горизонтальное оперение
+    (np.array([[-0.64,  0.04], [-0.96,  0.04], [-0.96, -0.02], [-0.64, -0.02]]),
+     "steelblue",  "navy", 0.90, 5),
+    # вертикальный киль
+    (np.array([[-0.66,  0.12], [-0.62,  0.46], [-0.94,  0.46], [-0.98,  0.12]]),
+     "steelblue",  "navy", 0.90, 5),
+    # фюзеляж
+    (np.array([[ 1.00,  0.00],
+               [ 0.62,  0.14], [ 0.10,  0.16],
+               [-0.50,  0.12], [-1.00,  0.02],
+               [-0.88, -0.06], [-0.42, -0.12],
+               [ 0.10, -0.14], [ 0.62, -0.13]]),
+     "royalblue", "darkblue", 1.00, 6),
+)
 
 # ---------------------------------------------------------------------------
 # Основная функция
@@ -58,6 +89,7 @@ def animate_log(log,
     alpha_all = np.degrees(log.alpha)
     h_all     = log.state[:, H_IDX]
     x_all     = log.state[:, X]
+    theta_all = log.state[:, THETA]   # угол тангажа, рад
     t_end     = t_all[-1]
 
     # --- Компоновка ---
@@ -93,10 +125,18 @@ def animate_log(log,
     ax_traj.plot(x_all[-1], h_all[-1], "rs", markersize=8, zorder=5, label="финиш")
     ax_traj.legend(fontsize=8, loc="upper left")
 
-    # Динамические объекты — траектория и маркер самолёта
-    traj_line,   = ax_traj.plot([], [], "b-",  linewidth=2.0, zorder=3)
-    traj_marker, = ax_traj.plot([], [], "b^",  markersize=10, zorder=6,
-                                 markeredgecolor="navy")
+    # Динамические объекты — пройденный путь и силуэт ЛА
+    traj_line, = ax_traj.plot([], [], "b-", linewidth=2.0, zorder=3)
+
+    # Создаём патчи силуэта; вершины будут обновляться каждый кадр
+    plane_patches = []
+    for verts_norm, fc, ec, al, zo in _PLANE_PARTS:
+        p = MplPolygon(verts_norm, closed=True,
+                       facecolor=fc, edgecolor=ec,
+                       linewidth=0.8, alpha=al, zorder=zo,
+                       transform=ax_traj.transData)
+        ax_traj.add_patch(p)
+        plane_patches.append(p)
 
     # Блок с текущими параметрами (прямо на графике траектории)
     info_box = ax_traj.text(
@@ -163,14 +203,25 @@ def animate_log(log,
     # -----------------------------------------------------------------------
     # init / update
     # -----------------------------------------------------------------------
-    _all_artists = (traj_line, traj_marker, info_box,
+    _all_artists = (traj_line, *plane_patches, info_box,
                     ln_Va, ln_al, ln_h,
                     pt_Va, pt_al, pt_h,
                     *vlines)
 
+    def _set_plane(i: int):
+        """Обновить вершины силуэта для шага i (ротация в пикселях → данные)."""
+        theta = theta_all[i]
+        c, s  = np.cos(theta), np.sin(theta)
+        R = np.array([[c, -s], [s, c]])
+        # позиция ЛА в пикселях экрана
+        xy_px = ax_traj.transData.transform((x_all[i], h_all[i]))
+        inv   = ax_traj.transData.inverted()
+        for patch, (verts_norm, *_) in zip(plane_patches, _PLANE_PARTS):
+            rotated = (R @ (verts_norm * _PLANE_SCALE_PX).T).T + xy_px
+            patch.set_xy(inv.transform(rotated))
+
     def init():
         traj_line.set_data([], [])
-        traj_marker.set_data([], [])
         info_box.set_text("")
         for ln in (ln_Va, ln_al, ln_h):
             ln.set_data([], [])
@@ -178,15 +229,16 @@ def animate_log(log,
             pt.set_data([], [])
         for vl in vlines:
             vl.set_xdata([0])
+        _set_plane(0)
         return _all_artists
 
     def update(fn):
         i = idx_list[fn]
         t_cur = t_all[i]
 
-        # Траектория
+        # Траектория + силуэт
         traj_line.set_data(x_all[:i+1], h_all[:i+1])
-        traj_marker.set_data([x_all[i]], [h_all[i]])
+        _set_plane(i)
 
         # Инфо-блок
         info_box.set_text(

@@ -46,7 +46,7 @@ cfg         = SimConfig(Va0=30.0, h0=100.0, theta0=0.0, dt=0.01, t_end=60.0)
 
 H_TRIM    = 100.0
 H_HIGH    = 200.0
-VA_REF    = 20.0
+VA_REF    = 25.0
 VW        = wind_params.Vw_const
 T_CLIMB   = 10.0
 T_DESCEND = 40.0
