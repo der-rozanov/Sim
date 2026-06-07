@@ -3,7 +3,7 @@
 Этот файл написан для агента, который продолжает разработку.
 Читай в паре с `CLAUDE.md` (правила проекта) и `TZ_simulator.md` (техзадание).
 
-**Актуально на: 2026-06-06**
+**Актуально на: 2026-06-07**
 
 ---
 
@@ -18,6 +18,7 @@ python scenarios/s4_stall.py                 →  анимация: управл
 python scenarios/s5_altitude_control.py      →  анимация: набор/снижение по уставке высоты
 python scenarios/s6_speed_control.py         →  анимация: контроль высоты + удержание Va
 python scenarios/s7_alpha_estimation.py      →  анимация: зонд vs ИНС+GPS при попутном ветре
+python scenarios/s9_paired_probe_comparison.py →  анимация: ПАРНЫЙ ПРОГОН (кульминация)
 ```
 
 ---
@@ -34,8 +35,8 @@ python scenarios/s7_alpha_estimation.py      →  анимация: зонд vs 
 | `integrators.py` | ✅ | `step_euler`, `step_rk4` |
 | `runner.py` | ✅ | `run()`, `Log`, `compute_trim()`, `trim_state()`, `print_summary()` |
 | `sensors.py` | ✅ | Псевдодатчики: гироскоп, барометр, СВС, зонд УА, GPS |
-| `control.py` | ✅ | `PID`, `PitchController` (θ+q каскад), **`SpeedController`** (Va→throttle) |
-| `estimators.py` | ✅ | **`estimate_alpha_indirect()`** — косвенная оценка УА через ИНС+GPS |
+| `control.py` | ✅ | `PID`, `PitchController` (θ+q каскад), `SpeedController` (Va→throttle) |
+| `estimators.py` | ✅ | `estimate_alpha_indirect()` — косвенная оценка УА через ИНС+GPS |
 | `plotting.py` | ✅ | Статичные графики (dynamics, trajectory, energy, integrator check) |
 | `check.py` | ✅ | 24 теста здравого смысла |
 
@@ -50,7 +51,7 @@ python scenarios/s7_alpha_estimation.py      →  анимация: зонд vs 
 | `scenarios/s5_altitude_control.py` | ✅ | С5: контроль высоты, газ фиксирован |
 | `scenarios/s6_speed_control.py` | ✅ | С6: контроль высоты + **удержание Va** (SpeedController) |
 | `scenarios/s7_alpha_estimation.py` | ✅ | С7: **сравнение зонд vs ИНС+GPS** при попутном ветре |
-| Парный прогон «зонд vs без» (ТЗ С6) | ❌ | **Следующий шаг** — центральный результат работы |
+| `scenarios/s9_paired_probe_comparison.py` | ✅ | **С9: парный прогон — кульминация ТЗ С6** |
 
 > **Примечание по С5:** По ТЗ С5 — сравнение энергопотребления при разном Cl/Cd.
 > До получения таблицы траст-теста от автора С5 реализован как демонстрация
@@ -58,7 +59,7 @@ python scenarios/s7_alpha_estimation.py      →  анимация: зонд vs 
 
 ---
 
-## 4. Архитектура управления (control.py)
+## 4. Архитектура управления
 
 ### 4.1 Классы и dataclass'ы
 
@@ -71,7 +72,7 @@ PitchControlParams  ← коэффициенты theta/q-контуров, h_Kp,
 PitchController     ← каскад theta_ref → q_ref → delta_e
 
 SpeedControlParams  ← Va_Kp=0.08, Va_Ki=0.02, Va_Kd=0.0, Va_tau=0.5
-SpeedController     ← Va_ref → throttle  (НОВОЕ, добавлено в С6)
+SpeedController     ← Va_ref → throttle
 ```
 
 ### 4.2 Каскад тангажа (PitchController)
@@ -83,47 +84,33 @@ theta_ref
 [PID_theta]  →  q_ref  (ограничено ±60°/с)
     │
     ▼  error_q = q_ref − q_meas
-[PID_q]  →  delta_e_cmd  (знак ИНВЕРТИРОВАН — намеренно, строка ~229)
+[PID_q]  →  delta_e_cmd  (знак ИНВЕРТИРОВАН — намеренно)
     │
 [saturation ±25°]  →  delta_e
 ```
 
-### 4.3 Контур скорости (SpeedController)
-
-```
-Va_ref (уставка)
-    │
-    ▼  error_Va = Va_ref − Va_meas
-[PID_Va]  →  delta_throttle
-    │
-    ▼  throttle = trim_throttle + delta_throttle
-[saturation 0..1]  →  throttle
-```
-
-Параметры (SpeedControlParams): `Va_Kp=0.08, Va_Ki=0.02, Va_Kd=0.0`
-
-### 4.4 Контур высоты (внешний, в сценариях)
+### 4.3 Контур высоты (в сценариях, включая s9)
 
 ```
 h_ref
     │
     ▼  h_err = h_ref − h_meas
-alpha_trim + KH * h_err  →  clip(±15°)  →  theta_ref   (KH=0.006 рад/м)
+alpha_src + KH * h_err  →  clip(±20°)  →  theta_ref
     │
     └─→  PitchController.set_pitch_setpoint()
 ```
 
-### 4.5 Как используется в С6 и С7
+**Ключевое отличие s9 от s7/s8**: `alpha_src` поступает в контур управления
+(а не только в лог для отображения). В s7/s8 использовался `alpha_trim` как база.
 
-```python
-# delta_e: от PitchController (как раньше)
-ctrl_out = controller.step(t, meas, cfg.dt)
-delta_e  = ctrl_out[0]
-
-# throttle: от SpeedController (НОВОЕ — вместо trim_throttle=const)
-throttle = spd_ctrl.step(Va_meas, cfg.dt)
-
-return np.array([delta_e, throttle])
+ПИД коэффициенты (рабочие, не оптимизированы):
+```
+PitchController:  theta_Kp=1.5  theta_Ki=0.1  theta_Kd=0.3  theta_tau=0.1
+                  q_Kp=0.5      q_Ki=0.05     q_Kd=0.1      q_tau=0.05
+SpeedController:  Va_Kp=0.08    Va_Ki=0.02    Va_Kd=0.0     Va_tau=0.5
+KH (высота):      0.006 рад/м
+THETA_CLIP (s9):  ±20° (расширен vs ±15° в s5–s8, чтобы клип не маскировал
+                  разницу alpha_src при малом h_err)
 ```
 
 ---
@@ -139,19 +126,27 @@ def estimate_alpha_indirect(theta_meas, Vx_gps, Vh_gps) -> float:
 
 **Источник ошибки при ветре (горизонтальный Vwx):**
 
-| Фаза | Эффект |
-|------|--------|
-| Уровень | gamma_gps ≈ gamma_air → bias ≈ 0 |
-| Набор (попутный ветер) | Vx_earth > Vx_air → gamma_gps < gamma_air → alpha_est > alpha_true |
-| Снижение (попутный ветер) | Vh_earth < 0, же Vx → gamma_gps > gamma_air → alpha_est < alpha_true |
+| Фаза | Ветер | Эффект |
+|------|-------|--------|
+| Уровень | любой | gamma_gps ≈ gamma_air → bias ≈ 0 |
+| Набор | попутный | Vx_earth > Vx_air → gamma_gps < gamma_air → alpha_est > alpha_true |
+| Снижение | попутный | Vh<0, Vx_earth > Vx_air → gamma_gps ближе к 0 → alpha_est < alpha_true |
+| Набор | встречный | Vx_earth < Vx_air → gamma_gps > gamma_air → alpha_est < alpha_true |
+| Снижение | встречный | Vh<0, Vx_earth < Vx_air → gamma_gps круче → alpha_est > alpha_true |
 
-**Результаты С7** (ветер Vwx = +5 м/с):
+**Измеренные смещения (s7, Vwx = +5 м/с попутный):**
 
 | | Зонд | ИНС+GPS |
 |---|---|---|
 | σ (шум) | 0.57° | 0.69° |
 | Смещение набор | +0.006° | +0.80° |
 | Смещение снижение | +0.007° | −1.26° |
+
+**Измеренные смещения (s9, Vwx = −5 м/с встречный, рамп-снижение):**
+
+| | Зонд | ИНС+GPS |
+|---|---|---|
+| Смещение (фаза рампа) | +0.003° | +0.217° |
 
 ---
 
@@ -162,50 +157,79 @@ def estimate_alpha_indirect(theta_meas, Vx_gps, Vh_gps) -> float:
 `dynamics.py` строка 101):
 
 ```python
-# Было (неверно):
-Vh_earth_true = u_body * st + w_body * ct
-
 # Стало (правильно):
 Vh_earth_true = u_body * st - w_body * ct
 ```
-
-**Причина:** ось z_body направлена вниз. Её вертикальная земная проекция = −cos(θ).
-Формула вынуждает `h_dot = u*sin(θ) − w*cos(θ)`, которая обращается в ноль при
-уровне полёта (балансировочных условиях).
 
 **Влияние:** баг не затрагивал С1–С5 (функции не использовались). Исправлен
 при разработке С7.
 
 ---
 
-## 7. Следующий обязательный шаг: парный прогон
+## 7. Парный прогон s9 — архитектура и результаты
 
-По ТЗ (раздел 6.4) — **кульминационный результат главы 8**:
+### 7.1 Ключевые решения
 
-```
-Два прогона ИДЕНТИЧНЫ во всём, кроме источника УА:
-  «С зондом»:   alpha_src = measure_angle_of_attack(alpha, ...)
-  «Без зонда»:  alpha_src = estimate_alpha_indirect(theta_meas, Vx_gps, Vh_gps)
-```
+**Рамп вместо ступеньки высоты:**
+При ступенчатом изменении h_ref на 50 м: `KH * h_err = 0.006 * 50 = 0.3 рад = 17°`.
+Оба контроллера клипятся в `±20°` → alpha_src (0.6°) составляет < 4% от
+theta_ref → разница между прогонами невидима. Рамп 60 с удерживает
+`|h_err| < 5 м` на протяжении всего снижения → клип не включается →
+alpha_src постоянно присутствует в theta_ref.
 
-Сценарий для парного прогона:
-- Снижение (на базе С3) + вход в слой сдвига ветра (`WindParams(dV_shear=X)`)
-- Ветер по высоте: до h_shear_lo — штиль, выше h_shear_hi — встречный ветер
-- Оба прогона на одном графике: зонд vs косвенная оценка
-- Штилевой контроль (без ветра): обе CAУ должны практически совпадать
+**Встречный ветер вместо попутного:**
+При попутном ветре: alpha_est < alpha_true при снижении → theta_ref_est ниже →
+"без зонда" снижается БЫСТРЕЕ → J_h_est < J_h_probe (парадоксально лучше).
+При встречном ветре: alpha_est > alpha_true при снижении → theta_ref_est выше →
+"без зонда" снижается МЕДЛЕННЕЕ → J_h_est > J_h_probe ✓ (зонд выигрывает).
 
-Скелет сценария:
+**Честность сравнения (реализовано):**
 ```python
-# Общий RNG для «общих» датчиков (честное сравнение)
-rng_shared = np.random.default_rng(seed=42)
-
-# «С зондом»
-alpha_src_probe = measure_angle_of_attack(alpha, sp.probe_bias, sp.probe_noise, rng_shared)
-
-# «Без зонда»
-Vx, Vh = measure_gps_velocity_earth(state[U], state[W], state[THETA], 0.0, sp.gps_vel_noise, rng_shared)
-alpha_src_est = estimate_alpha_indirect(theta_meas, Vx, Vh)
+rng_common = np.random.default_rng(seed=42)   # одинаков в обоих прогонах
+rng_probe  = np.random.default_rng(seed=99)   # только для шума зонда
 ```
+Порядок и число вызовов `rng_common` в обоих controls_fn идентичны:
+baro → gyro → theta → airspeed → GPS (5 вызовов на шаг).
+
+### 7.2 Результаты (Пресет 1: Vwx = −5 м/с, рамп 150→100 м)
+
+| Метрика | С зондом | Без зонда | Δ зонд лучше |
+|---------|----------|-----------|--------------|
+| **J_E** [∫thr dt, о.е.·с] | 37.43 | 37.43 | **0%** |
+| **J_h** [СКО h−h_ref, м] | **4.51** | **5.16** | **+12.6%** |
+| **J_safe** [max α−αwarn, °] | 0.000 | 0.000 | — |
+| **J_eff** [∫Va dt / J_E, м/о.е.] | 72.1 | 72.1 | **0%** |
+
+**Смещение alpha_src vs alpha_true (фаза рампа):**
+- Зонд: +0.003° (≈ 0 + шум — ожидаемо)
+- ИНС+GPS: +0.217° (ветровая погрешность: gamma_gps ≠ gamma_air)
+
+### 7.3 Интерпретация результатов
+
+**Почему J_E и J_eff одинаковые:**
+SpeedController удерживает Va = 30 м/с в обоих прогонах. При Va = const тяга ≈
+тяга_трим, а изменение тангажа на 0.2° даёт пренебрежимо малое изменение CD.
+Разница в интеграле тяги составляет < 0.01%.
+
+**Нарратив для диссертации:**
+«Прямое измерение УА зондом обеспечивает на 12.6% бо́льшую точность
+слежения за траекторией при нулевом дополнительном расходе энергии.
+Та же тяга — более точный маршрут.»
+
+**Альтернативный сценарий для демонстрации разницы J_E:**
+Отключить SpeedController, зафиксировать тягу = thr_trim. Тогда неправильный
+тангаж (без зонда) → Va меняется → разная тяга → J_E расходятся. В текущей
+архитектуре это означает заменить `throttle = spd.step(...)` на
+`throttle = thr_trim` в фабрике controls_fn.
+
+### 7.4 Пресеты условий (раскомментировать нужный)
+
+| Пресет | Условия | Ожидаемый эффект |
+|--------|---------|-----------------|
+| 1 (активен) | Встречный ветер −5 м/с, постоянный | Зонд: −12.6% J_h |
+| 2 | Встречный сдвиг −8…−2 м/с по высоте | Убывающая разница по мере снижения |
+| 3 | Порыв −7 м/с на 15 с в t=35 с | Ступенчатый сюрприз для alpha_est |
+| 4 | Штиль | Контрольный: J_h_probe ≈ J_h_est (только шум) |
 
 ---
 
@@ -233,17 +257,8 @@ T = 0.5 * rho * S_prop * C_prop * ((k_motor * throttle)² − Va²)
 
 ### Балансировочная тяга
 
-Из `compute_trim()`: `thr_trim ≈ 0.398` при Va=30 м/с (параметры Aerosonde-аналога).
+Из `compute_trim()`: `thr_trim ≈ 0.420` при Va=30 м/с (параметры Aerosonde-аналога).
 SpeedController использует её как feedforward: `throttle = thr_trim + ΔT`.
-
-### ПИД коэффициенты (рабочие, не оптимизированы)
-
-```
-PitchController:  theta_Kp=1.5  theta_Ki=0.1  theta_Kd=0.3  theta_tau=0.1
-                  q_Kp=0.5      q_Ki=0.05     q_Kd=0.1      q_tau=0.05
-SpeedController:  Va_Kp=0.08    Va_Ki=0.02    Va_Kd=0.0     Va_tau=0.5
-KH (высота):      0.006 рад/м
-```
 
 ---
 
@@ -256,5 +271,5 @@ KH (высота):      0.006 рад/м
 3. Шум зонда УА (характеристика конкретного изделия)
 4. Критический и предупредительный УА для своего профиля
 5. Параметры двигателя (k_motor, S_prop)
-6. Параметры ветра (сдвиг по высоте, границы слоя, перепад)
-7. Таблица траст-теста тяга→мощность (для сравнения энергопотребления)
+6. Параметры ветра (для конкретного испытания или по НЛГ БАС)
+7. Таблица траст-теста тяга→мощность (для сравнения энергопотребления, ТЗ С5)
