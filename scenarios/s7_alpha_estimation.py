@@ -36,6 +36,7 @@ from control.sensors import (measure_gyro, measure_altitude, measure_airspeed,
                               measure_angle_of_attack, measure_gps_velocity_earth)
 from control.estimators import estimate_alpha_indirect
 from sim.state import THETA, Q, H, X, U, W
+from flight_logger import FlightLogger
 
 plt.rcParams["font.family"] = "DejaVu Sans"
 
@@ -64,6 +65,20 @@ ANIM_FPS   = 25
 # ------------------------------------------------------------------
 alpha_trim, de_trim, thr_trim = compute_trim(aircraft, cfg.Va0)
 s0 = trim_state(aircraft, cfg)
+
+logger = FlightLogger(
+    scenario="С7: Оценка УА (зонд vs косвенная)",
+    description=f"Набор h={H_HIGH:.0f} м, ветер Vwx={VW:+.0f} м/с, Va_ref={VA_REF:.0f} м/с",
+    aircraft=aircraft,
+    wind_params=wind_params,
+    cfg=cfg,
+    sp=sp,
+    trim=(alpha_trim, de_trim, thr_trim),
+    events=[
+        {"t": T_CLIMB,   "label": "набор",    "color": "orange"},
+        {"t": T_DESCEND, "label": "снижение", "color": "dodgerblue"},
+    ],
+)
 
 print(f"Trim:  alpha={np.degrees(alpha_trim):.2f} deg  "
       f"delta_e={np.degrees(de_trim):.2f} deg  "
@@ -148,6 +163,13 @@ def controls_fn(t, state, Va, alpha):
 # ------------------------------------------------------------------
 log = run(controls_fn, aircraft, wind_params, cfg, state0=s0)
 print_summary(log, aircraft, label="С7  Оценка УА (зонд vs косвенная)")
+logger.save(
+    log,
+    alpha_probe=alpha_probe_buf,
+    alpha_est=alpha_est_buf,
+    h_ref=h_ref_buf,
+    theta_ref=theta_ref_buf,
+)
 
 # ------------------------------------------------------------------
 # Массивы данных

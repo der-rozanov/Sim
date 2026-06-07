@@ -36,6 +36,7 @@ from runner import run, compute_trim, trim_state, print_summary
 from control.controllers import PitchController, PitchControlParams
 from control.sensors import measure_gyro, measure_altitude, measure_airspeed
 from sim.state import THETA, Q, H, X
+from flight_logger import FlightLogger
 
 plt.rcParams["font.family"] = "DejaVu Sans"
 
@@ -59,6 +60,20 @@ ANIM_FPS   = 25
 # ------------------------------------------------------------------
 alpha_trim, de_trim, thr_trim = compute_trim(aircraft, cfg.Va0)
 s0 = trim_state(aircraft, cfg)
+
+logger = FlightLogger(
+    scenario="С3: Пикирование",
+    description=f"Трим → θ_ref={np.degrees(THETA_CLIMB):.0f}° → возврат, Va={cfg.Va0:.0f} м/с",
+    aircraft=aircraft,
+    wind_params=wind_params,
+    cfg=cfg,
+    sp=sp,
+    trim=(alpha_trim, de_trim, thr_trim),
+    events=[
+        {"t": T_TRIM,   "label": "пикирование", "color": "steelblue"},
+        {"t": T_RETURN, "label": "возврат",      "color": "darkorange"},
+    ],
+)
 
 print(f"Трим:  alpha={np.degrees(alpha_trim):.2f}°  "
       f"delta_e={np.degrees(de_trim):.2f}°  throttle={thr_trim:.3f}")
@@ -100,6 +115,7 @@ def controls_fn(t, state, Va, alpha):
 # ------------------------------------------------------------------
 log = run(controls_fn, aircraft, wind_params, cfg, state0=s0)
 print_summary(log, aircraft, label="С3  Пикирование -5°")
+logger.save(log, theta_ref=theta_ref_buf)
 
 # ------------------------------------------------------------------
 # Массивы данных

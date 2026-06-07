@@ -32,6 +32,7 @@ from runner import run, compute_trim, trim_state, print_summary
 from control.controllers import PitchController, PitchControlParams
 from control.sensors import measure_gyro, measure_altitude, measure_airspeed
 from sim.state import THETA, Q, H, X
+from flight_logger import FlightLogger
 
 plt.rcParams["font.family"] = "DejaVu Sans"
 
@@ -60,6 +61,20 @@ ANIM_FPS   = 25
 # ------------------------------------------------------------------
 alpha_trim, de_trim, thr_trim = compute_trim(aircraft, cfg.Va0)
 s0 = trim_state(aircraft, cfg)
+
+logger = FlightLogger(
+    scenario="С5: Контроль высоты",
+    description=f"Набор h={H_HIGH:.0f} м, Va={cfg.Va0:.0f} м/с",
+    aircraft=aircraft,
+    wind_params=wind_params,
+    cfg=cfg,
+    sp=sp,
+    trim=(alpha_trim, de_trim, thr_trim),
+    events=[
+        {"t": T_CLIMB,   "label": "набор",    "color": "orange"},
+        {"t": T_DESCEND, "label": "снижение", "color": "dodgerblue"},
+    ],
+)
 
 print(f"Trim:  alpha={np.degrees(alpha_trim):.2f} deg  "
       f"delta_e={np.degrees(de_trim):.2f} deg  "
@@ -112,6 +127,7 @@ def controls_fn(t, state, Va, alpha):
 # ------------------------------------------------------------------
 log = run(controls_fn, aircraft, wind_params, cfg, state0=s0)
 print_summary(log, aircraft, label="С5  Контроль высоты")
+logger.save(log, h_ref=h_ref_buf, theta_ref=theta_ref_buf)
 
 # ------------------------------------------------------------------
 # Массивы данных

@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from sim.config import AircraftParams, WindParams, SimConfig
 from runner import run, compute_trim, trim_state, print_summary
 from sim.state import THETA, Q, H, X, U, W
+from flight_logger import FlightLogger
 
 plt.rcParams["font.family"] = "DejaVu Sans"
 
@@ -46,6 +47,15 @@ cfg = SimConfig(Va0=30.0, h0=100.0, theta0=0.0, dt=0.01, t_end=30.0)
 # Балансировочные условия (аналитическое решение системы 2×2)
 # ------------------------------------------------------------------
 alpha_trim, de_trim, thr_trim = compute_trim(aircraft, cfg.Va0)
+
+logger = FlightLogger(
+    scenario="С1: Установившийся полёт",
+    description=f"Балансировочный полёт Va={cfg.Va0:.0f} м/с, h={cfg.h0:.0f} м",
+    aircraft=aircraft,
+    wind_params=wind_params,
+    cfg=cfg,
+    trim=(alpha_trim, de_trim, thr_trim),
+)
 
 print("=" * 56)
 print("С1: Установившийся полёт — балансировочные условия")
@@ -66,6 +76,7 @@ log = run(lambda t, s, Va, alpha: ctrl_arr,
           aircraft, wind_params, cfg, state0=s0)
 
 print_summary(log, aircraft, label="С1  Установившийся полёт")
+logger.save(log)
 
 # ------------------------------------------------------------------
 # Вычислить отклонения от балансировочного режима
