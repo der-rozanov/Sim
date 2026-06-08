@@ -107,11 +107,18 @@ class PitchControlParams:
 
     # H-контур (управление высотой через скорость)
     h_Kp: float = 1.0        # управление тягой по высоте
-    Va_ref: float = 30.0       # опорная скорость, м/с
+    Va_ref: float = 30.0     # расчётная скорость (точка настройки ПИД), м/с
+
+    # Gain scheduling: масштабирование усиления q-контура по Va
+    # delta_e *= (Va_ref / Va_meas)^2  — компенсирует падение эффективности руля
+    gain_scheduling: bool = True
 
     # Ограничения
     q_max: float = np.radians(60.0)    # макс желаемая угловая скорость, рад/с
     q_min: float = np.radians(-60.0)
+    # Диапазон масштабирования: не позволяем уйти слишком далеко от расчётной точки
+    gs_scale_min: float = 0.25   # нижний предел scale (Va_meas >> Va_ref)
+    gs_scale_max: float = 9.0    # верхний предел scale (Va_meas << Va_ref)
 
 
 class PitchController:
@@ -163,6 +170,11 @@ class PitchController:
         # Управление высотой через тягу
         self.h_Kp = params.h_Kp
         self.Va_ref = params.Va_ref
+
+        # Gain scheduling
+        self.gain_scheduling = params.gain_scheduling
+        self.gs_scale_min = params.gs_scale_min
+        self.gs_scale_max = params.gs_scale_max
 
         # Уставки (будут переустановлены в start_maneuver)
         self.theta_ref = 0.0
@@ -228,6 +240,14 @@ class PitchController:
         # Q-контур: рассогласование по угловой скорости
         error_q = q_ref - q_meas
         delta_e_cmd = -self.pid_q.step(error_q, dt)  # ИНВЕРТИРОВАННЫЙ знак!
+
+        # Gain scheduling: эффективность руля ∝ Va² → компенсируем обратно
+        if self.gain_scheduling:
+            Va_meas = meas.get('Va', self.Va_ref)
+            Va_safe = max(Va_meas, 1.0)
+            scale = np.clip((self.Va_ref / Va_safe) ** 2,
+                            self.gs_scale_min, self.gs_scale_max)
+            delta_e_cmd *= scale
 
         # Насыщение рулевой команды
         delta_e = saturation(delta_e_cmd,
