@@ -24,7 +24,8 @@ def wind(h: float, t: float, params: WindParams) -> tuple:
     Vwx = _constant(params)
     Vwx += _shear(h, params)
     Vwx += _gust(t, params)
-    return Vwx, 0.0   # вертикальный ветер пока нулевой (задел на будущее)
+    Vwh  = _gust_vwh(t, params)
+    return Vwx, Vwh
 
 
 def _constant(params: WindParams) -> float:
@@ -46,6 +47,14 @@ def _shear(h: float, params: WindParams) -> float:
 
     h_clipped = np.clip(h, lo, hi)
     return dV * (h_clipped - lo) / (hi - lo)
+
+
+def _gust_vwh(t: float, params: WindParams) -> float:
+    """Вертикальный порыв: та же временна́я маска, что и горизонтальный."""
+    if params.gust_vwh == 0.0:
+        return 0.0
+    t0, dur = params.gust_t0, params.gust_dur
+    return params.gust_vwh if t0 <= t <= t0 + dur else 0.0
 
 
 def _gust(t: float, params: WindParams) -> float:
