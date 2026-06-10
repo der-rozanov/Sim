@@ -75,7 +75,7 @@ H_MAX  = 500.0
 H_MIN  = 10.0
 KH     = 0.006          # коэффициент h→θ_ref, рад/м (из ТЗ)
 
-SIM_STEPS_PER_FRAME = 2       # dt=0.01, fps=50  →  1× реальное время
+SIM_STEPS_PER_FRAME = 4       # dt=0.01, fps=50  →  1× реальное время
 ANIM_FPS   = 50
 WINDOW_SEC = 30.0
 HISTORY    = 9000
