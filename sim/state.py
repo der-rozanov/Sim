@@ -96,7 +96,7 @@ def kinematic_gamma(state: np.ndarray) -> float:
     theta = state[THETA]
     ct, st = np.cos(theta), np.sin(theta)
 
-    Vx_earth =  u * ct - w * st   # горизонтальная составляющая земной скорости
+    Vx_earth =  u * ct + w * st   # горизонтальная составляющая земной скорости
     Vh_earth =  u * st - w * ct   # вертикальная составляющая (вверх)
 
     return np.arctan2(Vh_earth, Vx_earth)

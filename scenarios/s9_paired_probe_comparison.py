@@ -68,7 +68,7 @@ plt.rcParams["font.family"] = "DejaVu Sans"
 # theta_ref = ±20° не включается, и разница alpha_src всегда видна.
 PRESET_NAME = "Встречный ветер, рамп-снижение"
 aircraft    = AircraftParams()
-wind_params = WindParams(Vw_const=-15.0)   # м/с, встречный ветер (минус = встречный)
+wind_params = WindParams(Vw_const=-5.0)   # м/с, встречный ветер (минус = встречный)
 sp  = SensorParams()
 cfg = SimConfig(Va0=30.0, h0=150.0, dt=0.01, t_end=90.0)
 

@@ -17,7 +17,7 @@ derivatives(state, controls, t, params, wind_fn) -> dstate
 
   Кинематика:
     theta_dot = q
-    x_dot     = u·cos θ − w·sin θ
+    x_dot     = u·cos θ + w·sin θ
     h_dot     = u·sin θ − w·cos θ   (w > 0 вниз → при w>0 высота убывает)
 
 Силы гравитации в связанной СК:
@@ -100,7 +100,7 @@ def derivatives(state: np.ndarray,
 
     # Кинематика
     dstate[THETA] = q
-    dstate[X] = u * np.cos(theta) - w * np.sin(theta)
+    dstate[X] = u * np.cos(theta) + w * np.sin(theta)
     dstate[H] = u * np.sin(theta) - w * np.cos(theta)
 
     return dstate

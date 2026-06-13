@@ -289,4 +289,12 @@ fig.text(0.98, 0.01, summary, ha="right", va="bottom", fontsize=8.5,
                    edgecolor="gray", alpha=0.9))
 
 plt.tight_layout(rect=[0, 0.05, 1, 1])
+
+save_path = sys.argv[1] if len(sys.argv) > 1 else None
+if save_path is not None:
+    import os
+    os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
+    fig.savefig(save_path, dpi=120, bbox_inches="tight")
+    print(f"Сохранено: {save_path}")
+
 plt.show()
