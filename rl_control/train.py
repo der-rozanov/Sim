@@ -99,7 +99,7 @@ def train(
             theta_err  = theta_ref - state[THETA]
             q_val      = state[Q]
 
-            action_idx = agent.select_action(theta_err, q_val, epsilon)
+            action_idx = agent.select_action(theta_err, q_val, prev_action_idx, epsilon)
             controls   = np.array([agent.actions[action_idx], thr_trim])
 
             state_next = step_rk4(state, controls, dt, t, aircraft, wind_fn)
@@ -119,7 +119,8 @@ def train(
             )
             total_reward += reward
 
-            agent.update(theta_err, q_val, action_idx, reward, theta_err_next, q_next)
+            agent.update(theta_err, q_val, prev_action_idx, action_idx,
+                         reward, theta_err_next, q_next)
 
             if ep_states is not None:
                 ep_states.append(state.copy())
