@@ -77,7 +77,9 @@ def plot_training(rewards: list, episode_logs: list) -> None:
     # ── Панель 3: тепловая карта Q-таблицы ────────────────────────────────
     ax3 = fig.add_subplot(gs[1, :])
 
-    best_actions = np.argmax(agent.q_table, axis=2)   # (N_THETA_BINS, N_Q_BINS)
+    # Q-таблица: (N_THETA_BINS, N_Q_BINS, prev_action, action).
+    # Усредняем по prev_action → лучшее действие в среднем по истории.
+    best_actions = np.argmax(agent.q_table.mean(axis=2), axis=2)  # (N_THETA_BINS, N_Q_BINS)
 
     theta_ticks = np.linspace(np.degrees(THETA_ERR_MIN), np.degrees(THETA_ERR_MAX), N_THETA_BINS)
     q_ticks     = np.linspace(Q_RATE_MIN, Q_RATE_MAX, N_Q_BINS)

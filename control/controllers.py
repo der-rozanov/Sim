@@ -278,8 +278,8 @@ class PitchController:
 @dataclass
 class SpeedControlParams:
     """Параметры ПИД-регулятора воздушной скорости."""
-    Va_Kp: float = 0.1    # пропорциональный
-    Va_Ki: float = 0.01    # интегральный
+    Va_Kp: float = 0.25    # пропорциональный
+    Va_Ki: float = 0.05    # интегральный
     Va_Kd: float = 0.01     # дифференциальный
     Va_tau: float = 0.5    # фильтр производной, сек
     Va_integral_limit: float = 0.5  # ограничение интеграла

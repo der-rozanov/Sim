@@ -76,11 +76,13 @@ print(f"Трим:  alpha={np.degrees(alpha_trim):.2f}  "
 # ------------------------------------------------------------------
 # controls_fn
 # ------------------------------------------------------------------
-theta_ref_log = []
+theta_ref_log  = []
+_prev_action   = [2]   # нейтральное действие (смещение = 0.0); список — мутируемое замыкание
 
 def controls_fn(t, state, _Va, _alpha):
-    ref   = theta_ref_schedule(t)
-    de    = agent.get_delta_e(ref - state[THETA], state[Q])
+    ref = theta_ref_schedule(t)
+    action_idx, de = agent.get_action(ref - state[THETA], state[Q], _prev_action[0])
+    _prev_action[0] = action_idx
     theta_ref_log.append(ref)
     return np.array([de, thr_trim])
 
