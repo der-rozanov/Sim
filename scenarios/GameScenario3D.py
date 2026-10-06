@@ -102,6 +102,7 @@ class Game(Entity):
         self.speed = SpeedController(aircraft, SpeedControlParams())
         self.speed.set_trim_throttle(self.thr_trim)
         self.lat = LateralController(aircraft, LateralControlParams())
+        self.KH = KH                   # высота → θ_ref (стенд Bench3D меняет на лету)
 
         self.rec = []                  # (t, state, controls, Va, alpha, beta, wind)
         self.events = []
@@ -202,7 +203,7 @@ class Game(Entity):
 
     def _sau(self, s, Va, beta, dt):
         if self.h_hold:
-            self.theta_ref = float(np.clip(self.alpha_trim + KH * (self.h_ref - s[H]),
+            self.theta_ref = float(np.clip(self.alpha_trim + self.KH * (self.h_ref - s[H]),
                                            -THETA_LIM, THETA_LIM))
         self.pitch.set_pitch_setpoint(self.theta_ref)
         de = self.pitch.step(self.t, {"q": s[Q], "theta": s[THETA], "h": s[H], "Va": Va}, dt)[0]
