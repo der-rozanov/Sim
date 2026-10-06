@@ -26,6 +26,7 @@ python checks/check_lateral.py              # боковой канал в от�
 python scenarios/s1_steady_flight.py        # балансировочный полёт
 python scenarios/s12_coordinated_turn.py    # разворот с боковой САУ
 python viz/viewer.py results/<файл>.flightlog
+python viz/viewer3d.py                      # 3D-тренажёр, последний лог из results/
 ```
 
 ---
@@ -74,6 +75,7 @@ Sim/
 Python 3.x
 numpy
 matplotlib
+ursina      # только для viz/viewer3d.py (3D-тренажёр, РЕШ-16)
 ```
 
 Никаких сторонних физических движков.
