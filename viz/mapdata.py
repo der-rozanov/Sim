@@ -22,6 +22,8 @@
 import os
 import io
 import json
+import time
+import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
@@ -44,10 +46,18 @@ def _merc_px(lat, lon, z):
     return x, y
 
 
-def _fetch(url):
+def _fetch(url, retries=5):
+    """Скачать тайл; при сетевом сбое (таймаут, обрыв) — повтор с паузой 2, 4, 8… с."""
     req = urllib.request.Request(url, headers=UA)
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return Image.open(io.BytesIO(r.read())).convert("RGB")
+    for attempt in range(retries):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return Image.open(io.BytesIO(r.read())).convert("RGB")
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+            if attempt == retries - 1:
+                raise
+            print(f"[map] повтор {attempt + 1}/{retries - 1}: {url} ({e})")
+            time.sleep(2 ** (attempt + 1))
 
 
 def _mosaic(url_tpl, z, x0, x1, y0, y1):
