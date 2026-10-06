@@ -184,6 +184,7 @@ class PitchController:
 
         # Уставки (будут переустановлены в start_maneuver)
         self.theta_ref = 0.0
+        self.q_ref = 0.0    # последняя уставка угловой скорости (для логирования)
         self.h_ref = 100.0  # высота удержания
         self.trim_throttle = 0.5  # дефолт, обновляется при инициализации
 
@@ -242,6 +243,7 @@ class PitchController:
 
         # Ограничение желаемой угловой скорости
         q_ref = saturation(q_ref, self.q_min, self.q_max)
+        self.q_ref = q_ref
 
         # Q-контур: рассогласование по угловой скорости
         error_q = q_ref - q_meas
