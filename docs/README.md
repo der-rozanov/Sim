@@ -41,7 +41,8 @@ Sim/
 ├── sim/                 Физика 6DOF: config, state, dynamics, aero, wind, integrators
 ├── control/             САУ: controllers (ПИД тангажа/скорости, боковая), sensors,
 │                        estimators, aua (АУА), lqr (LQR)
-├── viz/                 plotting, animate, viewer (пока только продольный канал)
+├── viz/                 plotting, animate, viewer (продольный канал);
+│                        viewer3d — 3D-тренажёр на Ursina (6DOF)
 ├── scenarios/           s1–s13, lateral_common, GameScenario, lab6/
 ├── checks/              check, check_lateral, check_polar, check_motor, check_optimal_speed
 ├── rl_control/          экспериментальный RL-регулятор (вне основной линии)
@@ -53,7 +54,8 @@ Sim/
     ├── architecture.md     Зависимости, Log, controls_fn, совместимость
     ├── control.md          Продольная и боковая САУ, расчёт коэффициентов
     ├── SENSORS.md          Псевдодатчики
-    ├── decisions.md        Журнал решений РЕШ-01…15
+    ├── viewer3d.md         3D-тренажёр: запуск, клавиши, СК, проверки
+    ├── decisions.md        Журнал решений РЕШ-01…16
     ├── scenarios_report.md Результаты С1–С13
     └── continuation.md     Исторический (2026-06)
 ```
