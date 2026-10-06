@@ -87,8 +87,13 @@ def _auto_path(scenario: str, results_dir: str) -> str:
     os.makedirs(results_dir, exist_ok=True)
     now   = datetime.datetime.now()
     stem  = _sanitize_scenario(scenario)
-    fname = f"Sim_{stem}_{now.strftime('%H-%M-%S')}_{now.strftime('%Y-%m-%d')}.flightlog"
-    return os.path.join(results_dir, fname)
+    base  = f"Sim_{stem}_{now.strftime('%H-%M-%S')}_{now.strftime('%Y-%m-%d')}"
+    path  = os.path.join(results_dir, base + ".flightlog")
+    k = 2
+    while os.path.exists(path):          # два сохранения в одну секунду — не затирать
+        path = os.path.join(results_dir, f"{base}_{k}.flightlog")
+        k += 1
+    return path
 
 
 # ---------------------------------------------------------------------------

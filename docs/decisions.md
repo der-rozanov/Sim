@@ -160,7 +160,8 @@ w_wind = Vwx·sin(θ) − Vwh·cos(θ)
 ## РЕШ-16: 3D-визуализация на Ursina (исключение из «только numpy + matplotlib»)
 
 **Решение (автор, 2026-10-06):** 3D-тренажёр (`viz/viewer3d.py`) — на движке
-Ursina (Panda3D), `pip install ursina`. Зависимость допустима только в `viz/`;
+Ursina (Panda3D), `pip install ursina`. Зависимость допустима только в `viz/` и
+`scenarios/GameScenario3D.py`;
 `sim/`, `control/`, `runner.py` по-прежнему только numpy. Альтернативы:
 mplot3d (10–15 кадров/с, ошибки перекрытия по глубине), Three.js (только
 проигрывание логов), pyqtgraph. Порядок: блок 1 — проигрывание `.flightlog`,
