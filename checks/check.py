@@ -35,8 +35,10 @@ try:
     from sim.config import AircraftParams, WindParams, SensorParams, SimConfig, default_params
     ap, wp, sp, cfg = default_params()
     all_ok &= check("импорт",          True)
-    all_ok &= check("mass = 5 кг",     ap.mass == 5,     f"mass={ap.mass}")
+    all_ok &= check("mass = 10 кг",    ap.mass == 10,    f"mass={ap.mass}")
     all_ok &= check("Jy   = 1.135",    ap.Jy == 1.135,   f"Jy={ap.Jy}")
+    all_ok &= check("Jx*Jz > Jxz^2 (тензор инерции положительно определён)",
+                    ap.Jx * ap.Jz > ap.Jxz**2)
     all_ok &= check("CL0  = 0.1",      ap.CL0 == 0.1,    f"CL0={ap.CL0}")
     all_ok &= check("dt   = 0.01 с",   cfg.dt == 0.01,   f"dt={cfg.dt}")
 except Exception as e:
@@ -49,8 +51,8 @@ try:
     from sim.state import (initial_state, air_velocity, kinematic_gamma,
                            total_energy, U, W, Q, THETA, X, H, N_STATES)
     s = initial_state(cfg)
-    all_ok &= check("N_STATES = 6",  N_STATES == 6)
-    all_ok &= check("shape (6,)",    s.shape == (6,),    f"shape={s.shape}")
+    all_ok &= check("N_STATES = 12", N_STATES == 12)
+    all_ok &= check("shape (12,)",   s.shape == (12,),   f"shape={s.shape}")
     all_ok &= check("Va0 в u",       s[U] == cfg.Va0,   f"u={s[U]}")
     all_ok &= check("h0 в H",        s[H] == cfg.h0,    f"h={s[H]}")
 
@@ -124,29 +126,34 @@ try:
     from sim.config import WindParams
 
     # Нулевой ветер
-    vx, vh = wind(100.0, 0.0, wp)
-    all_ok &= check("нулевой ветер при Vw_const=0", vx == 0.0 and vh == 0.0,
-                    f"Vwx={vx}, Vwh={vh}")
+    vx, vh, vy = wind(100.0, 0.0, wp)
+    all_ok &= check("нулевой ветер при Vw_const=0", vx == 0.0 and vh == 0.0 and vy == 0.0,
+                    f"Vwx={vx}, Vwh={vh}, Vwy={vy}")
+
+    # Боковой ветер — третья компонента, продольные не трогает
+    vx_c, vh_c, vy_c = wind(100.0, 0.0, WindParams(Vw_cross=4.0))
+    all_ok &= check("боковой ветер 4 м/с -> Vwy", vy_c == 4.0 and vx_c == 0.0,
+                    f"Vwy={vy_c}")
 
     # Постоянный ветер
     wp2 = WindParams(Vw_const=5.0)
-    vx2, _ = wind(100.0, 0.0, wp2)
+    vx2 = wind(100.0, 0.0, wp2)[0]
     all_ok &= check("постоянный ветер 5 м/с", vx2 == 5.0, f"Vwx={vx2}")
 
     # Сдвиг ветра: ниже слоя — ноль, внутри — линейно, выше — полный
     wp3 = WindParams(Vw_const=0.0, h_shear_lo=50.0, h_shear_hi=100.0, dV_shear=10.0)
-    vx_lo, _  = wind(30.0,  0.0, wp3)
-    vx_mid, _ = wind(75.0,  0.0, wp3)
-    vx_hi, _  = wind(110.0, 0.0, wp3)
+    vx_lo  = wind(30.0,  0.0, wp3)[0]
+    vx_mid = wind(75.0,  0.0, wp3)[0]
+    vx_hi  = wind(110.0, 0.0, wp3)[0]
     all_ok &= check("сдвиг: ниже слоя = 0",     abs(vx_lo)  < 1e-9,  f"{vx_lo:.2f}")
     all_ok &= check("сдвиг: середина = 5 м/с",  abs(vx_mid - 5.0) < 1e-9, f"{vx_mid:.2f}")
     all_ok &= check("сдвиг: выше слоя = 10 м/с", abs(vx_hi - 10.0) < 1e-9, f"{vx_hi:.2f}")
 
     # Порыв работает только в нужный момент
     wp4 = WindParams(gust_amp=8.0, gust_t0=5.0, gust_dur=2.0)
-    vx_before, _ = wind(100.0, 4.9, wp4)
-    vx_during, _ = wind(100.0, 6.0, wp4)
-    vx_after,  _ = wind(100.0, 7.1, wp4)
+    vx_before = wind(100.0, 4.9, wp4)[0]
+    vx_during = wind(100.0, 6.0, wp4)[0]
+    vx_after  = wind(100.0, 7.1, wp4)[0]
     all_ok &= check("порыв: до = 0",       abs(vx_before) < 1e-9, f"{vx_before:.1f}")
     all_ok &= check("порыв: во время = 8", abs(vx_during - 8.0) < 1e-9, f"{vx_during:.1f}")
     all_ok &= check("порыв: после = 0",    abs(vx_after)  < 1e-9, f"{vx_after:.1f}")
@@ -166,7 +173,7 @@ try:
 
     # derivatives возвращает вектор нужной длины
     ds = derivatives(s0, np.array([0.0, 0.0]), 0.0, ap, wind_call)
-    all_ok &= check("derivatives: shape (6,)", ds.shape == (6,), f"shape={ds.shape}")
+    all_ok &= check("derivatives: shape (12,)", ds.shape == (12,), f"shape={ds.shape}")
 
     # Тяга: нулевой газ -> тяга может быть < 0 (торможение),
     #       газ=1 -> тяга > 0
@@ -216,6 +223,120 @@ try:
 
 except Exception as e:
     check("импорт integrators", False, str(e)); all_ok = False
+
+# ------------------------------------------------------------------
+section("7. Модель 6DOF: боковой канал")
+# ------------------------------------------------------------------
+try:
+    from dataclasses import replace
+    from sim.state import (V, P, R, PHI, PSI, Y, air_data, rotation_body_to_earth)
+    from sim.dynamics import derivatives, thrust, _gammas
+    from sim.aero import aero_forces_moments
+    from sim.integrators import step_rk4
+    from runner import compute_trim, trim_state
+
+    LAT = [V, P, R, PHI, PSI]
+    calm = lambda h, t: (0.0, 0.0, 0.0)
+    a_tr, de_tr, thr_tr = compute_trim(ap, cfg.Va0)
+    s_tr = trim_state(ap, cfg)
+    c_tr = np.array([de_tr, thr_tr, 0.0, 0.0])
+
+    # 7.1 Матрица поворота ортогональна
+    Rm = rotation_body_to_earth(0.3, -0.2, 1.1)
+    all_ok &= check("R·R^T = I, det R = 1",
+                    np.allclose(Rm @ Rm.T, np.eye(3)) and abs(np.linalg.det(Rm) - 1) < 1e-12)
+
+    # 7.2 Симметричный полёт (в т.ч. с продольным и вертикальным ветром):
+    #     производные боковых состояний строго нулевые
+    wind_long = lambda h, t: (-4.0, 1.5, 0.0)
+    s_test = s_tr.copy(); s_test[Q] = 0.1; s_test[THETA] += 0.1
+    ds = derivatives(s_test, c_tr, 0.0, ap, wind_long)
+    all_ok &= check("симметричный полёт: d(v,p,r,phi,psi)/dt = 0",
+                    np.all(ds[LAT] == 0.0), f"max={np.max(np.abs(ds[LAT])):.1e}")
+
+    # 7.3 Вырождение в продольные уравнения (docs/physics.md, раздел 3.5)
+    Va_t, al_t, _ = air_data(s_test, wind_long(0.0, 0.0))
+    fx_a, fz_a, M_a = aero_forces_moments(Va_t, al_t, s_test[Q], de_tr, ap)
+    th, u_, w_, q_ = s_test[THETA], s_test[U], s_test[W], s_test[Q]
+    mg = ap.mass * ap.g
+    ref = np.array([
+        (fx_a + thrust(thr_tr, Va_t, ap) - mg * np.sin(th)) / ap.mass - q_ * w_,
+        (fz_a + mg * np.cos(th)) / ap.mass + q_ * u_,
+        M_a / ap.Jy,
+        q_,
+        u_ * np.cos(th) + w_ * np.sin(th),
+        u_ * np.sin(th) - w_ * np.cos(th),
+    ])
+    err = np.max(np.abs(ds[[U, W, Q, THETA, X, H]] - ref))
+    all_ok &= check("6DOF -> продольные уравнения при v=p=r=phi=psi=0", err < 1e-9,
+                    f"max|err|={err:.1e}")
+
+    # 7.4 Инвариантность к курсу: полёт на восток (psi=90°) — та же продольная динамика
+    s_e = s_tr.copy(); s_e[PSI] = np.pi / 2
+    d_n = derivatives(s_tr, c_tr, 0.0, ap, calm)
+    d_e = derivatives(s_e,  c_tr, 0.0, ap, calm)
+    all_ok &= check("psi=90°: производные u,w,q,theta,h не меняются",
+                    np.allclose(d_n[[U, W, Q, THETA, H]], d_e[[U, W, Q, THETA, H]], atol=1e-12))
+    all_ok &= check("psi=90°: dy/dt = Va, dx/dt = 0",
+                    abs(d_e[Y] - cfg.Va0) < 1e-9 and abs(d_e[X]) < 1e-9,
+                    f"dx={d_e[X]:.1e}  dy={d_e[Y]:.3f}")
+
+    # 7.5 Знак УС: ветер на восток при psi=0 -> поток слева -> beta < 0
+    _, _, b_cw = air_data(s_tr, (0.0, 0.0, 5.0))
+    all_ok &= check("боковой ветер слева -> beta < 0", b_cw < 0,
+                    f"beta={np.degrees(b_cw):.2f} deg")
+    # Скольжение v>0 (поток справа): крен влево (p_dot<0), нос вправо (r_dot>0)
+    s_b = s_tr.copy(); s_b[V] = 2.0
+    d_b = derivatives(s_b, c_tr, 0.0, ap, calm)
+    all_ok &= check("beta>0: поперечная устойчивость, p_dot<0", d_b[P] < 0, f"p_dot={d_b[P]:.3f}")
+    all_ok &= check("beta>0: флюгерная устойчивость, r_dot>0",  d_b[R] > 0, f"r_dot={d_b[R]:.3f}")
+
+    # 7.6 Знаки рулей
+    d_a = derivatives(s_tr, c_tr + [0, 0, np.radians(5), 0], 0.0, ap, calm)
+    d_r = derivatives(s_tr, c_tr + [0, 0, 0, np.radians(5)], 0.0, ap, calm)
+    all_ok &= check("delta_a>0 -> крен вправо (p_dot>0)", d_a[P] > 0, f"p_dot={d_a[P]:.3f}")
+    all_ok &= check("delta_r>0 -> нос влево (r_dot<0)",   d_r[R] < 0, f"r_dot={d_r[R]:.3f}")
+
+    # 7.7 Связь крен-рыскание через Jxz (B&M упр. 3.4)
+    G_0  = _gammas(replace(ap, Jxz=0.0))
+    G_xz = _gammas(ap)
+    all_ok &= check("Jxz=0: момент крена не даёт r_dot (Г4=0)", G_0[3] == 0.0)
+    all_ok &= check("Jxz≠0: момент крена даёт r_dot (Г4≠0)",   G_xz[3] != 0.0,
+                    f"Г4={G_xz[3]:.4f}")
+
+    # 7.8 Прогон 20 с из трима без боковых возмущений: боковые состояния = 0
+    s = s_tr.copy(); t = 0.0
+    for _ in range(2000):
+        s = step_rk4(s, c_tr, cfg.dt, t, ap, calm); t += cfg.dt
+    all_ok &= check("20 с трима: боковые состояния = 0", np.all(s[LAT + [Y]] == 0.0))
+
+    # 7.9 Собственные движения бокового канала (линеаризация в триме)
+    eps = 1e-6
+    idx = [V, P, R, PHI]
+    f0 = derivatives(s_tr, c_tr, 0.0, ap, calm)
+    A = np.zeros((4, 4))
+    for j, k in enumerate(idx):
+        s_p = s_tr.copy(); s_p[k] += eps
+        A[:, j] = (derivatives(s_p, c_tr, 0.0, ap, calm)[idx] - f0[idx]) / eps
+    eig = np.linalg.eigvals(A)
+    cplx = eig[np.abs(eig.imag) > 1e-6]
+    real = np.sort(eig[np.abs(eig.imag) <= 1e-6].real)
+    print("        собственные значения [v,p,r,phi]: "
+          + ", ".join(f"{e.real:+.3f}{e.imag:+.3f}j" for e in eig))
+    all_ok &= check("голландский шаг: комплексная пара", len(cplx) == 2)
+    if len(cplx) == 2 and len(real) == 2:
+        wn = abs(cplx[0]); zeta = -cplx[0].real / wn
+        all_ok &= check("голландский шаг затухает", cplx[0].real < 0,
+                        f"wn={wn:.2f} рад/с  zeta={zeta:.2f}  T={2*np.pi/abs(cplx[0].imag):.2f} с")
+        all_ok &= check("апериодика крена: быстрая и устойчивая", real[0] < -1.0,
+                        f"lambda={real[0]:.2f} 1/с  tau={-1/real[0]:.2f} с")
+        spiral = real[1]
+        print(f"        спиральная мода: lambda={spiral:+.4f} 1/с  "
+              + ("(устойчива)" if spiral < 0 else f"(неустойчива, T2={np.log(2)/spiral:.1f} с)"))
+
+except Exception as e:
+    import traceback; traceback.print_exc()
+    check("6DOF", False, str(e)); all_ok = False
 
 # ------------------------------------------------------------------
 print("\n" + "="*50)

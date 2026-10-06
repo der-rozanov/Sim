@@ -1,14 +1,17 @@
 """
-Модель ветра wind(h, t, params) -> (Vwx, Vwh).
+Модель ветра wind(h, t, params) -> (Vwx, Vwh, Vwy).
 
-Возвращает компоненты ветра в земной СК:
-  Vwx > 0 — попутный горизонтальный ветер (в направлении полёта), м/с
+Возвращает компоненты ветра в земной СК (скорость воздушной массы):
+  Vwx > 0 — ветер на север (при psi=0 — попутный), м/с
   Vwh > 0 — восходящий вертикальный ветер, м/с
+  Vwy > 0 — ветер на восток (при psi=0 — боковой, слева направо), м/с
+Боковая составляющая — последняя, чтобы пара (Vwx, Vwh) продольного кода
+не сдвинулась.
 
-Три составляющие (складываются):
-  1. Постоянный горизонтальный ветер
-  2. Сдвиг ветра по высоте (основной демонстрационный сценарий)
-  3. Одиночный порыв (импульс)
+Составляющие (складываются):
+  1. Постоянный ветер (северный и восточный)
+  2. Сдвиг ветра по высоте (северная составляющая, основной демонстрационный сценарий)
+  3. Одиночный порыв (импульс) по всем трём осям
 """
 
 import numpy as np
@@ -19,13 +22,14 @@ def wind(h: float, t: float, params: WindParams) -> tuple:
     """
     Суммарный ветер на высоте h в момент времени t.
 
-    Возвращает: (Vwx, Vwh) в м/с
+    Возвращает: (Vwx, Vwh, Vwy) в м/с
     """
     Vwx = _constant(params)
     Vwx += _shear(h, params)
     Vwx += _gust(t, params)
     Vwh  = _gust_vwh(t, params)
-    return Vwx, Vwh
+    Vwy  = params.Vw_cross + _gust_vwy(t, params)
+    return Vwx, Vwh, Vwy
 
 
 def _constant(params: WindParams) -> float:
@@ -55,6 +59,14 @@ def _gust_vwh(t: float, params: WindParams) -> float:
         return 0.0
     t0, dur = params.gust_t0, params.gust_dur
     return params.gust_vwh if t0 <= t <= t0 + dur else 0.0
+
+
+def _gust_vwy(t: float, params: WindParams) -> float:
+    """Боковой порыв: та же временна́я маска, что и горизонтальный."""
+    if params.gust_vwy == 0.0:
+        return 0.0
+    t0, dur = params.gust_t0, params.gust_dur
+    return params.gust_vwy if t0 <= t <= t0 + dur else 0.0
 
 
 def _gust(t: float, params: WindParams) -> float:

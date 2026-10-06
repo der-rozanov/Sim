@@ -1,8 +1,9 @@
 """
-Аэродинамическая модель продольного канала.
+Аэродинамическая модель ЛА.
 
 Коэффициенты и силы по Beard & McLain гл. 4.
-Модель CL — нелинейная (sigmoid), корректно воспроизводит срыв.
+Продольный канал: модель CL — нелинейная (sigmoid), корректно воспроизводит срыв.
+Боковой канал: линейная модель CY, Croll, Cn по β, p̂, r̂, δa, δr.
 """
 
 import numpy as np
@@ -119,3 +120,49 @@ def aero_forces_moments(Va: float, alpha: float, q: float,
     fz = -D * sa - L * ca
 
     return fx, fz, M_pitch
+
+
+# ---------------------------------------------------------------------------
+# Боковой канал
+# ---------------------------------------------------------------------------
+
+def _lateral_coef(C0, C_beta, C_p, C_r, C_da, C_dr,
+                  beta, p_hat, r_hat, delta_a, delta_r) -> float:
+    """Линейная боковая модель: C = C0 + C_beta·β + C_p·p̂ + C_r·r̂ + C_da·δa + C_dr·δr."""
+    return (C0 + C_beta * beta + C_p * p_hat + C_r * r_hat
+            + C_da * delta_a + C_dr * delta_r)
+
+
+def aero_lateral(Va: float, beta: float, p: float, r: float,
+                 delta_a: float, delta_r: float,
+                 params: AircraftParams) -> tuple:
+    """
+    Боковая аэродинамическая сила и моменты крена/рыскания в связанной СК.
+
+      p̂ = b·p/(2Va),  r̂ = b·r/(2Va)
+      fy     = q_dyn·S   · CY
+      L_roll = q_dyn·S·b · Croll
+      N_yaw  = q_dyn·S·b · Cn
+
+    Возвращает: (fy, L_roll, N_yaw)
+      fy     — вдоль y_body (вправо), Н
+      L_roll — вокруг x_body, Н·м  [> 0 — правое крыло вниз]
+      N_yaw  — вокруг z_body, Н·м  [> 0 — нос вправо]
+    """
+    pr = params
+    q_dyn   = 0.5 * pr.rho * Va**2
+    Va_safe = max(Va, 1.0)
+    p_hat   = pr.b * p / (2.0 * Va_safe)
+    r_hat   = pr.b * r / (2.0 * Va_safe)
+    args    = (beta, p_hat, r_hat, delta_a, delta_r)
+
+    CY    = _lateral_coef(pr.CY0, pr.CY_beta, pr.CY_p, pr.CY_r,
+                          pr.CY_da, pr.CY_dr, *args)
+    Croll = _lateral_coef(pr.Croll0, pr.Croll_beta, pr.Croll_p, pr.Croll_r,
+                          pr.Croll_da, pr.Croll_dr, *args)
+    Cn    = _lateral_coef(pr.Cn0, pr.Cn_beta, pr.Cn_p, pr.Cn_r,
+                          pr.Cn_da, pr.Cn_dr, *args)
+
+    return (q_dyn * pr.S * CY,
+            q_dyn * pr.S * pr.b * Croll,
+            q_dyn * pr.S * pr.b * Cn)

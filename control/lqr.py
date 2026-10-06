@@ -78,7 +78,7 @@ class LQRController:
             aircraft:      параметры ЛА
             state_trim:    6-мерный вектор состояния в точке трима
             controls_trim: [delta_e_trim, throttle_trim]
-            wind_fn:       wind(h, t) → (Vwx, Vwh)
+            wind_fn:       wind(h, t) → (Vwx, Vwh, Vwy)
             dt:            шаг интегрирования, с
             params:        параметры LQR
         """

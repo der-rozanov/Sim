@@ -6,7 +6,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from sim.config import AircraftParams, WindParams, SimConfig
-from sim.state import initial_state, air_velocity, total_energy, U, W, Q, THETA, H, N_STATES
+from sim.state import (initial_state, air_data, total_energy, full_controls,
+                       U, W, Q, THETA, H, N_STATES, N_CONTROLS)
 from sim.wind import wind as _wind
 from sim.integrators import step_rk4
 
@@ -15,14 +16,15 @@ from sim.integrators import step_rk4
 class Log:
     """Результат одного прогона симулятора."""
     t:        np.ndarray   # (N,)      время, с
-    state:    np.ndarray   # (N, 6)    вектор состояния
-    controls: np.ndarray   # (N, 2)    [delta_e рад, throttle 0-1]
+    state:    np.ndarray   # (N, 12)   вектор состояния (индексы — sim.state)
+    controls: np.ndarray   # (N, 4)    [delta_e рад, throttle 0-1, delta_a рад, delta_r рад]
     Va:       np.ndarray   # (N,)      воздушная скорость, м/с
     alpha:    np.ndarray   # (N,)      УА, рад
     E_kin:    np.ndarray   # (N,)      кинетическая энергия, Дж
     E_pot:    np.ndarray   # (N,)      потенциальная энергия, Дж
     E_total:  np.ndarray   # (N,)      полная механическая энергия, Дж
-    wind_vec: np.ndarray   # (N, 2)    [Vwx, Vwh] м/с
+    wind_vec: np.ndarray   # (N, 3)    [Vwx, Vwh, Vwy] м/с
+    beta:     np.ndarray = None  # (N,) УС, рад
 
 
 def run(controls_fn,
@@ -34,8 +36,11 @@ def run(controls_fn,
     """
     Запустить симуляцию и вернуть лог.
 
-    controls_fn(t, state, Va, alpha) -> np.ndarray([delta_e, throttle])
+    controls_fn(t, state, Va, alpha) -> np.ndarray([delta_e, throttle(, delta_a, delta_r)])
         Вызывается на каждом шаге. Управление заморожено до следующего шага.
+        Продольные сценарии могут отдавать 2 элемента — тогда delta_a = delta_r = 0.
+        УС для боковой САУ — log/air_data (в controls_fn передаются Va, alpha
+        для совместимости).
 
     integrator: step(state, controls, dt, t, params, wind_fn) -> state
         По умолчанию RK4.
@@ -47,13 +52,14 @@ def run(controls_fn,
     log = Log(
         t        = np.empty(n),
         state    = np.empty((n, N_STATES)),
-        controls = np.empty((n, 2)),
+        controls = np.empty((n, N_CONTROLS)),
         Va       = np.empty(n),
         alpha    = np.empty(n),
         E_kin    = np.empty(n),
         E_pot    = np.empty(n),
         E_total  = np.empty(n),
-        wind_vec = np.empty((n, 2)),
+        wind_vec = np.empty((n, 3)),
+        beta     = np.empty(n),
     )
 
     state = initial_state(cfg) if state0 is None else state0.copy()
@@ -63,8 +69,8 @@ def run(controls_fn,
     for i in range(n):
         h = state[H]
         w_vec = wind_call(h, t)
-        Va, alpha = air_velocity(state, w_vec)
-        controls = controls_fn(t, state, Va, alpha)
+        Va, alpha, beta = air_data(state, w_vec)
+        controls = full_controls(controls_fn(t, state, Va, alpha))
         Ek, Ep, Et = total_energy(state, aircraft)
 
         log.t[i]        = t
@@ -76,6 +82,7 @@ def run(controls_fn,
         log.E_pot[i]    = Ep
         log.E_total[i]  = Et
         log.wind_vec[i] = w_vec
+        log.beta[i]     = beta
 
         # Остановить если ЛА достиг земли
         if h < 0.0:
@@ -119,7 +126,7 @@ def compute_trim(aircraft: AircraftParams, Va: float) -> tuple:
 
 
 def trim_state(aircraft: AircraftParams, cfg) -> np.ndarray:
-    """Вектор состояния в точке балансировки (горизонтальный полёт)."""
+    """Вектор состояния в точке балансировки (горизонтальный полёт на север, без крена)."""
     alpha_tr, _, _ = compute_trim(aircraft, cfg.Va0)
     s = np.zeros(N_STATES)
     s[U]     = cfg.Va0 * np.cos(alpha_tr)
@@ -171,4 +178,5 @@ def _trim_log(log: Log, last_i: int) -> Log:
         E_pot    = log.E_pot[:last_i],
         E_total  = log.E_total[:last_i],
         wind_vec = log.wind_vec[:last_i],
+        beta     = log.beta[:last_i],
     )

@@ -109,6 +109,9 @@ def measure_gps_velocity_earth(u_body, w_body, theta, bias, noise_std, rng):
     """
     GPS: земная скорость (горизонтальная и вертикальная).
     Преобразование из связанной СК в земную и добавление шума.
+    Продольная версия (полёт без крена и скольжения): Vx = u·cos θ + w·sin θ.
+    Знак исправлен 2026-10-06 (было −w·sin θ) — согласовано с dynamics и
+    state.kinematic_gamma, см. docs/physics.md раздел 3.5.
 
     Args:
         u_body: продольная скорость в связанной СК, м/с
@@ -126,7 +129,7 @@ def measure_gps_velocity_earth(u_body, w_body, theta, bias, noise_std, rng):
     ct, st = np.cos(theta), np.sin(theta)
 
     # Преобразование в земную СК (определение см. state.py)
-    Vx_earth_true =  u_body * ct - w_body * st
+    Vx_earth_true =  u_body * ct + w_body * st
     Vh_earth_true =  u_body * st - w_body * ct
 
     bias_x = bias if isinstance(bias, (int, float)) else bias[0] if len(bias) > 0 else 0.0
