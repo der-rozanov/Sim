@@ -8,6 +8,8 @@
 Боковой канал — LateralController:
   chi_ref → [ПИ chi] → phi_ref → [ПИ phi − Kd·p] → delta_a
   beta (зонд) → [ПИ beta] → delta_r
+Навигация (необязательно, s14) — WaypointNavigator: положение (GPS) → chi_ref, h_ref
+(B&M гл. 10–11, control/navigation.py); без маршрута — расписание chi_ref_fn(t).
 
 Источники измерений:
   h — барометр, Va — СВС, q/p — гироскоп, theta/phi — ИНС,
@@ -16,7 +18,7 @@
 
 import numpy as np
 
-from sim.state import THETA, Q, H, P, PHI, PSI, air_data, earth_velocity
+from sim.state import THETA, Q, H, P, PHI, PSI, X, Y, air_data, earth_velocity
 from runner import compute_trim
 from control.controllers import (PitchController, PitchControlParams,
                                  SpeedController, SpeedControlParams,
@@ -32,14 +34,16 @@ class FullSAU:
     Полная САУ ЛА: высота + скорость + курс с координацией разворота.
 
     chi_ref_fn(t) -> chi_ref, рад — расписание уставки курса.
+    nav — WaypointNavigator: пока у него есть маршрут, курс и высота — от него.
     Буферы *_buf заполняются на каждом шаге — для печати и логгера.
     """
 
     def __init__(self, aircraft, sp, cfg, rng, chi_ref_fn,
                  lat_params: LateralControlParams = None,
-                 h_ref: float = None, Va_ref: float = None):
+                 h_ref: float = None, Va_ref: float = None, nav=None):
         self.ac, self.sp, self.cfg, self.rng = aircraft, sp, cfg, rng
         self.chi_ref_fn = chi_ref_fn
+        self.nav = nav
         self.h_ref  = cfg.h0  if h_ref  is None else h_ref
         self.Va_ref = cfg.Va0 if Va_ref is None else Va_ref
 
@@ -77,6 +81,18 @@ class FullSAU:
         beta_true  = self._beta_true(t, state)
         beta_meas  = measure_sideslip(beta_true, sp.probe_beta_bias, sp.probe_beta_noise, rng)
 
+        # ---- Навигация (GPS-положение — только с навигатором: s12/s13 без
+        # изменений в последовательности шума) ---------------------------
+        ref = None
+        if self.nav is not None:
+            pn_meas = state[X] + rng.normal(0.0, sp.gps_pos_noise)
+            pe_meas = state[Y] + rng.normal(0.0, sp.gps_pos_noise)
+            ref = self.nav.step(pn_meas, pe_meas, chi_meas)
+        if ref is not None:
+            chi_ref, self.h_ref = ref
+        else:
+            chi_ref = self.chi_ref_fn(t)
+
         # ---- Продольный канал (как С6) ---------------------------------
         theta_ref = np.clip(self.alpha_trim + KH * (self.h_ref - h_meas),
                             np.radians(-15.0), np.radians(15.0))
@@ -86,7 +102,7 @@ class FullSAU:
         throttle = self.speed.step(Va_meas, self.cfg.dt)
 
         # ---- Боковой канал ---------------------------------------------
-        self.lat.set_course(self.chi_ref_fn(t))
+        self.lat.set_course(chi_ref)
         delta_a, delta_r = self.lat.step({'chi': chi_meas, 'phi': phi_meas,
                                           'p': p_meas, 'beta': beta_meas}, self.cfg.dt)
 

@@ -19,7 +19,13 @@ GameScenario3D — пилотирование ЛА в реальном врем�
   A / D  — уставка путевого угла χ_ref ∓10°
   X / Z  — уставка скорости Va_ref ±1 м/с
   H      — удержание высоты (захват текущей)
+  N      — навигация по маршруту вкл/выкл (маршрут — в окне карты; уставки χ_ref
+           и h_ref даёт WaypointNavigator, control/navigation.py). Ручные уставки
+           W/S/A/D навигацию выключают.
 Боковой канал САУ — LateralController (как в s12/s13): χ → φ_ref → δa, β → δr.
+
+Окно карты (viz/map_panel.py, отдельный процесс): вид сверху, ЛА и след; точки
+маршрута ставятся мышью, «Лететь по маршруту» — САУ ведёт по точкам.
 Измерения в САУ — истинные (без шума), как в исходном GameScenario.
 
 Общие: Пробел — пауза, R — сброс, 1–4 — камера, M — масштаб силуэта, Esc — выход.
@@ -28,11 +34,14 @@ GameScenario3D — пилотирование ЛА в реальном врем�
     python scenarios/GameScenario3D.py
     python scenarios/GameScenario3D.py --wind-n -5 --wind-e 3   # ветер, м/с
     python scenarios/GameScenario3D.py --ap --cam 3              # старт с включённой САУ
+    python scenarios/GameScenario3D.py --no-map                  # без окна карты
 """
 
 import sys
 import os
 import argparse
+import queue
+import multiprocessing as mp
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -51,6 +60,8 @@ from flight_logger import FlightLogger
 from control.controllers import (PitchController, PitchControlParams,
                                  SpeedController, SpeedControlParams,
                                  LateralController, LateralControlParams, wrap_angle)
+from control.navigation import WaypointNavigator, NavParams
+from viz import map_panel
 from viz.viewer3d import (View3D, make_app, MAPS, ned_to_u, body_axes,
                           screenshot_and_quit)
 from ursina import Entity, application, held_keys, time as utime
@@ -84,10 +95,15 @@ def _wrap180(a):
 
 class Game(Entity):
 
-    HELP = ("W/S δe  A/D δa  Q/E δr  ↑/↓ трим  X/Z газ  P САУ  H высота  "
+    HELP = ("W/S δe  A/D δa  Q/E δr  ↑/↓ трим  X/Z газ  P САУ  H высота  N маршрут  "
             "Пробел пауза  R сброс  1-4 камера  Esc выход")
 
-    def __init__(self, aircraft, wind_params, cfg, terrain, cam=1, ap=False, shot=None):
+    def __init__(self, aircraft, wind_params, cfg, terrain, cam=1, ap=False, shot=None,
+                 q_map=None):
+        """q_map — (q_cmd, q_tel) окна карты (viz/map_panel.py) или None."""
+        self.q_map = q_map
+        self.nav = WaypointNavigator(NavParams())
+        self.route, self.loop = [], False        # маршрут из окна карты: [(N, E, h), ...]
         super().__init__()
         self.ac, self.wp, self.cfg = aircraft, wind_params, cfg
         self.wind_call = lambda h, t: _wind(h, t, wind_params)
@@ -126,6 +142,7 @@ class Game(Entity):
         self.controls = np.array([self.de_trim, self.thr_trim, 0.0, 0.0])
         self.theta_ref, self.Va_ref = self.alpha_trim, self.cfg.Va0
         self.h_ref, self.chi_ref = self.cfg.h0, 0.0
+        self.nav_on = False
         self.trail = []
 
     def _event(self, label, color="orange"):
@@ -135,6 +152,7 @@ class Game(Entity):
         self.ap = not self.ap
         self.h_hold = False
         if not self.ap:
+            self._nav_off()
             self.de_trim_man = self.controls[0]          # без рывка при выключении
             self.surf = np.array([self.controls[0], 0.0, 0.0])
             self.thr = self.controls[1]
@@ -153,6 +171,73 @@ class Game(Entity):
         self.lat.reset()
         self._event("САУ вкл", "dodgerblue")
 
+    # --- навигация по маршруту ----------------------------------------------
+    def _nav_go(self):
+        """Лететь по маршруту с первой точки (САУ включается, если выключена)."""
+        if not self.route or self.crashed:
+            return
+        if not self.ap:
+            self._toggle_ap()
+        s = self.state
+        self.nav.set_route(self.route, start=(s[X], s[Y], s[H]))
+        self.nav_on, self.h_hold = True, True
+        self._event("маршрут: старт", "dodgerblue")
+
+    def _nav_off(self, why="маршрут: стоп"):
+        """Навигация выкл: САУ держит текущие путевой угол и высоту."""
+        if not self.nav_on:
+            return
+        self.nav_on = False
+        Vx, Vy, _ = earth_velocity(self.state)
+        self.chi_ref = float(np.arctan2(Vy, Vx))
+        self.h_hold, self.h_ref = True, float(np.clip(self.state[H], H_MIN, H_MAX))
+        self._event(why, "gray")
+
+    def _nav_ref(self, s):
+        """Уставки χ_ref, h_ref от навигатора на шаг (если навигация включена)."""
+        if self.nav_on:
+            Vx, Vy, _ = earth_velocity(s)
+            self.chi_ref, h_ref = self.nav.step(s[X], s[Y], np.arctan2(Vy, Vx))
+            self.h_ref = float(np.clip(h_ref, H_MIN, H_MAX))
+
+    def _poll_map(self):
+        if self.q_map is None:
+            return
+        while True:
+            try:
+                kind, val = self.q_map[0].get_nowait()
+            except queue.Empty:
+                break
+            if kind == "route":
+                self.route, self.loop = [tuple(w) for w in val["wps"]], bool(val["loop"])
+                self.nav.params.loop = self.loop
+                pts = ned_to_u(*(np.array(self.route) * [1, 1, -1]).T) if self.route else []
+                self.view.set_route(pts, self.loop)
+                if self.nav_on and not self.route:
+                    self._nav_off()
+                elif self.nav_on:                  # правка в полёте — к точке с тем же номером
+                    self.nav.update_route(self.route)
+            elif kind == "go":
+                self._nav_go()
+            elif kind == "stop":
+                self._nav_off()
+
+    def _map_telemetry(self):
+        if self.q_map is None:
+            return
+        s, nav = self.state, self.nav
+        Va = air_data(s, self.wind_call(s[H], self.t))[0]
+        tgt = nav.target if self.nav_on else None
+        msg = {"t": self.t, "n": s[X], "e": s[Y], "h": s[H], "psi": s[PSI], "Va": Va,
+               "ap": self.ap, "nav": self.nav_on, "idx": nav.idx, "mode": nav.mode,
+               "circle": (tuple(nav.circle[:3])
+                          if self.nav_on and nav.mode in ("fillet", "orbit") else None),
+               "dist": float(np.hypot(tgt[0] - s[X], tgt[1] - s[Y])) if tgt is not None else 0.0}
+        try:
+            self.q_map[1].put_nowait(msg)
+        except queue.Full:
+            pass
+
     # --- ввод ---------------------------------------------------------------
     def input(self, key):
         if self.view.handle_key(key):
@@ -166,6 +251,11 @@ class Game(Entity):
             self.reset()
         elif key == "p":
             self._toggle_ap()
+        elif key == "n":
+            if self.nav_on:
+                self._nav_off()
+            else:
+                self._nav_go()
         elif key == "h" and self.ap:
             self.h_hold = not self.h_hold
             self.h_ref = float(self.state[H])
@@ -178,6 +268,7 @@ class Game(Entity):
             else:
                 self.thr = float(np.clip(self.thr + sgn * THR_STEP, 0.0, 1.0))
         elif self.ap and base in ("w", "s"):
+            self._nav_off("маршрут: ручная уставка")
             sgn = 1 if base == "s" else -1                  # S — вверх
             if self.h_hold:
                 self.h_ref = float(np.clip(self.h_ref + sgn * H_STEP, H_MIN, H_MAX))
@@ -185,6 +276,7 @@ class Game(Entity):
                 self.theta_ref = float(np.clip(self.theta_ref + sgn * THETA_STEP,
                                                -THETA_LIM, THETA_LIM))
         elif self.ap and base in ("a", "d"):
+            self._nav_off("маршрут: ручная уставка")
             sgn = 1 if base == "d" else -1                  # D — вправо
             self.chi_ref = wrap_angle(self.chi_ref + sgn * CHI_STEP)
         elif not self.ap and base in ("up arrow", "down arrow"):
@@ -206,6 +298,7 @@ class Game(Entity):
         return np.array([self.surf[0], self.thr, self.surf[1], self.surf[2]])
 
     def _sau(self, s, Va, beta, dt):
+        self._nav_ref(s)
         if self.h_hold:
             self.theta_ref = float(np.clip(self.alpha_trim + self.KH * (self.h_ref - s[H]),
                                            -THETA_LIM, THETA_LIM))
@@ -220,6 +313,7 @@ class Game(Entity):
 
     # --- кадр -------------------------------------------------------------------
     def update(self):
+        self._poll_map()
         dt = self.cfg.dt
         if not (self.paused or self.crashed):
             self.acc += utime.dt
@@ -241,6 +335,7 @@ class Game(Entity):
         self.view.render(pos, nose, up, c[0], c[2], c[3], c[1],
                          np.array(self.trail), utime.dt)
         self._hud()
+        self._map_telemetry()
 
         self._frames += 1
         if self.shot and self._frames == 300:
@@ -274,8 +369,12 @@ class Game(Entity):
         if self.ap:
             ref = (f"h_ref {self.h_ref:6.0f} м" if self.h_hold
                    else f"θ_ref {deg(self.theta_ref):5.1f}°")
+            nav = ""
+            if self.nav_on:
+                nav = ("  НАВ: кружение" if self.nav.mode == "orbit" else
+                       f"  НАВ → точка {self.nav.idx + 1}/{len(self.route)}")
             mode = (f"САУ  {ref}  Va_ref {self.Va_ref:4.1f}\n"
-                    f"     χ_ref {deg(self.chi_ref) % 360:5.1f}°")
+                    f"     χ_ref {deg(self.chi_ref) % 360:5.1f}°{nav}")
         else:
             mode = f"РУЧНОЙ  трим δe {deg(self.de_trim_man):5.2f}°\n"
         state = "ПАУЗА" if self.paused else ""
@@ -310,6 +409,16 @@ class Game(Entity):
                      events=self.events).save(log)
 
 
+def start_map_window(terrain, h_new, geometry, px=720):
+    """Окно карты (viz/map_panel.py) в отдельном процессе; возвращает (q_cmd, q_tel).
+    px — ширина карты в окне, пикс (фон — в map_panel.ZOOM_MAX раз крупнее, для масштаба)."""
+    q_cmd, q_tel = mp.Queue(maxsize=100), mp.Queue(maxsize=200)
+    mp.Process(target=map_panel.run, daemon=True,
+               args=(q_cmd, q_tel, terrain.save_top_image(px * map_panel.ZOOM_MAX), (terrain.map_x, terrain.map_z),
+                     geometry, h_new)).start()
+    return q_cmd, q_tel
+
+
 def main():
     ap = argparse.ArgumentParser(description="Пилотирование ЛА в 3D (Ursina)")
     ap.add_argument("--wind-n", type=float, default=0.0, help="ветер на север, м/с")
@@ -319,6 +428,7 @@ def main():
     ap.add_argument("--ap", action="store_true", help="старт с включённой САУ")
     ap.add_argument("--shot", default=None, help="скриншот через ~300 кадров и выход")
     ap.add_argument("--map", default="default", choices=list(MAPS), help="карта мира")
+    ap.add_argument("--no-map", action="store_true", help="без окна карты (маршрута)")
     a = ap.parse_args()
 
     aircraft = AircraftParams()
@@ -326,7 +436,9 @@ def main():
     cfg = SimConfig(Va0=30.0, h0=a.h0, theta0=0.0, dt=0.01, t_end=1e9)
 
     app, terrain = make_app(f"3D: пилотирование — {MAPS[a.map].title}", a.map)
-    game = Game(aircraft, wind_params, cfg, terrain, cam=a.cam, ap=a.ap, shot=a.shot)
+    q_map = None if (a.no_map or a.shot) else start_map_window(terrain, a.h0, "-0+0")
+    game = Game(aircraft, wind_params, cfg, terrain, cam=a.cam, ap=a.ap, shot=a.shot,
+                q_map=q_map)
     try:
         app.run()
     finally:

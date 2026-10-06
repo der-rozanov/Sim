@@ -28,6 +28,10 @@
 
 Высота поверхности height(X, Z) — та же функция, по которой построена сетка
 (используется для тени следа, отвеса и столкновения в игре).
+
+Вид сверху top_image() / save_top_image() — фон окна карты (viz/map_panel.py):
+та же раскраска, что у сетки, север вверх, охват map_x × map_z; строится
+после build().
 """
 
 import json
@@ -124,6 +128,31 @@ class World:
         self._build_map().parent = self.root
         self._build_plain_tiles()
         return self.root
+
+    # --- вид сверху (окно карты) ---------------------------------------------
+    def top_image(self, px: int = 720):
+        """Вид карты сверху, север вверх: PIL RGB шириной px (высота — по пропорциям карты)."""
+        from PIL import Image, ImageDraw
+        (x0, x1), (z0, z1) = self.map_x, self.map_z
+        W, H = px, int(round(px * (z1 - z0) / (x1 - x0)))
+        img = self._top_base().convert("RGB").resize((W, H), Image.LANCZOS)
+        to_px = lambda pts: [((x - x0) / (x1 - x0) * W, (z1 - z) / (z1 - z0) * H) for x, z in pts]
+        self._top_overlay(ImageDraw.Draw(img), to_px, W / (x1 - x0))
+        return img
+
+    def save_top_image(self, px: int = 720) -> str:
+        """Сохранить вид сверху в viz/map_cache/top_<имя>.png (кэш, не в git); путь к файлу."""
+        d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "map_cache")
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, f"top_{self.name}.png")
+        self.top_image(px).save(path)
+        return path
+
+    def _top_base(self):
+        raise NotImplementedError
+
+    def _top_overlay(self, draw, to_px, scale):
+        """Дорисовать поверх фона (дороги, ВПП); scale — пикс/м."""
 
     def follow(self, pos):
         """Переставить квадраты равнины вокруг ЛА (только при смене квадрата)."""
@@ -241,6 +270,9 @@ class DefaultMap(World):
         valley = (self.river_dist(Xc, Zc) < 230) | (self.lake_dist(Xc, Zc) < 160)
         col = _blend(col, PALETTE["bank"], _smooth(-0.5, -2.5, Yc) * valley)
         _grid_mesh(X, Y, Z, col).parent = root
+        top = col.copy()                                   # для вида сверху: вода — где дно
+        top[(Yc < WATER_Y) & valley] = (0.25, 0.45, 0.62)
+        self._top_col = top
 
         self._build_water().parent = root
         self._build_road().parent = root
@@ -248,6 +280,20 @@ class DefaultMap(World):
         self._build_village().parent = root
         self._build_trees().parent = root
         return root
+
+    def _top_base(self):
+        from PIL import Image
+        a = np.clip(self._top_col.transpose(1, 0, 2)[::-1] * 255, 0, 255).astype(np.uint8)
+        return Image.fromarray(a)                          # строки — с севера на юг
+
+    def _top_overlay(self, draw, to_px, scale):
+        draw.line(to_px(ROAD), fill=(92, 87, 79), width=max(1, round(8 * scale)))
+        L, W = RUNWAY["len"], RUNWAY["w"]
+        draw.polygon(to_px([(-W / 2, -L / 2), (W / 2, -L / 2), (W / 2, L / 2), (-W / 2, L / 2)]),
+                     fill=(82, 82, 87))
+        draw.polygon(to_px([(30, -310), (150, -310), (150, -190), (30, -190)]), fill=(107, 107, 112))
+        cx, cz = VILLAGE
+        draw.ellipse(to_px([(cx - 230, cz + 230), (cx + 230, cz - 230)]), outline=(150, 120, 100))
 
     def _build_water(self):
         Zs = np.arange(LAKE_Z, MAP_Z[1], 20.0)
@@ -427,6 +473,16 @@ class KainkiMap(World):
         self._build_airfield().parent = root
         return root
 
+    def _top_base(self):
+        from PIL import Image
+        return Image.open(os.path.join(self.cache, "ortho.jpg"))
+
+    def _top_overlay(self, draw, to_px, scale):
+        (ax, az), aw, al = self.APRON
+        draw.polygon(to_px(_rect((ax, az), aw, al, 107.7)), fill=(120, 120, 122))
+        for p0, p1, w in self.STRIPS:
+            draw.polygon(to_px(_strip(p0, p1, max(w, 2.0 / scale))), fill=(102, 102, 107))
+
     def _on_ground(self, pts, dy=0.5):
         """Точки (X, Z) → (X, рельеф + dy, Z)."""
         pts = np.asarray(pts, float)
@@ -490,6 +546,7 @@ class KainkiOsmMap(KainkiMap):
         from viz.osmdata import load
         self.areas, self.lines, self.buildings = load(self.CACHE_NAME, self.LAT0, self.LON0, self.SIZE)
         img, masks = self._render()
+        self._top_img = img
         S, h = self.SIZE, self.CELL
         n = int(S / h)
         s = -S / 2 + h * np.arange(n + 1)
@@ -506,6 +563,9 @@ class KainkiOsmMap(KainkiMap):
         self._build_osm_buildings().parent = root
         self._build_airfield().parent = root
         return root
+
+    def _top_base(self):
+        return self._top_img
 
     # --- текстура ------------------------------------------------------------
     def _px(self, pts):

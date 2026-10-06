@@ -48,6 +48,8 @@ control/              — управление (импортирует толь�
     estimators.py     — estimate_alpha_indirect()
     aua.py            — AngleOfAttackProtector (АУА, надзор над УА) — s10
     lqr.py            — LQRController продольного канала (scipy DARE) — s11
+    navigation.py     — WaypointNavigator, NavParams: полёт по точкам (B&M 10–11): прямая/
+                        окружность векторным полем, углы — дугой R_fillet, кружение у последней
 
 runner.py             — главный цикл: run(), Log, compute_trim(), trim_state(), print_summary()
 flight_logger.py      — FlightLogger, load_log(), print_log_info()
@@ -66,8 +68,10 @@ viz/                  — отображение (принимает Log, не �
                         CLI: python viz/viewer3d.py [файл.flightlog] [--map kainki]
     bench_panel.py    — окно стенда САУ (tkinter): блок-схема, ползунки, осциллограф;
                         процесс-спутник scenarios/Bench3D.py, связь через очереди
+    map_panel.py      — окно карты (tkinter): вид сверху, ЛА, след, точки маршрута мышью;
+                        процесс-спутник GameScenario3D/Bench3D; фон — World.save_top_image()
 
-scenarios/            — прогоны s1–s13; каждый: конфиг → run() → viz или logger.save()
+scenarios/            — прогоны s1–s14; каждый: конфиг → run() → viz или logger.save()
     s1_steady_flight.py    — балансировка, тримовый горизонтальный полёт
     s2_pitch_up.py         — кабрирование (уставка theta_ref > 0)
     s3_pitch_down.py       — пикирование (уставка theta_ref < 0)
@@ -84,13 +88,16 @@ scenarios/            — прогоны s1–s13; каждый: конфиг �
     s12_coordinated_turn.py — разворот 0°→90°→−45°, β=0 по зонду vs δr=0
     s13_crosswind.py       — ступенька бокового ветра: удержание путевого угла,
                              сверка с треугольником скоростей
-    lateral_common.py      — FullSAU: полная САУ 6DOF (высота+Va+курс) для s12/s13
+    s14_waypoints.py       — полёт по точкам (WaypointNavigator): штиль и боковой ветер
+    lateral_common.py      — FullSAU: полная САУ 6DOF (высота+Va+курс; nav= — по точкам)
     GameScenario.py        — интерактивное ручное/автоматическое управление (клавиши, 2D)
     GameScenario3D.py      — пилотирование в 3D в реальном времени (Ursina): ручной режим
-                             6DOF + САУ (θ/h, Va, курс); полёт пишется в .flightlog
+                             6DOF + САУ (θ/h, Va, курс, маршрут — окно карты, N);
+                             полёт пишется в .flightlog
     Bench3D.py             — учебный стенд САУ: 3D + окно блок-схем (viz/bench_panel.py,
                              tkinter, отдельный процесс) с ползунками параметров на лету;
-                             вкладки: крен, тангаж/высота, скорость, рыскание, защита по α
+                             вкладки: крен, тангаж/высота, скорость, рыскание, защита по α,
+                             навигация; + окно карты с маршрутом
     lab6/                  — учебная лабораторная по лекции 6 (L1–L3 + solutions/)
 
 rl_control/           — экспериментальный RL-регулятор тангажа (Q-learning), вне основной линии
@@ -114,8 +121,8 @@ docs/                 — техническая документация (ка�
     SENSORS.md        — псевдодатчики
     viewer3d.md       — 3D-тренажёр: запуск, клавиши, СК и ориентация, проверки
     architecture.md   — зависимости, Log, controls_fn, совместимость 6DOF
-    decisions.md      — журнал решений РЕШ-01…16 (почему сделано так)
-    scenarios_report.md — результаты сценариев С1–С13
+    decisions.md      — журнал решений РЕШ-01…17 (почему сделано так)
+    scenarios_report.md — результаты сценариев С1–С14
     continuation.md   — ИСТОРИЧЕСКИЙ (состояние на 2026-06)
 results/              — .flightlog файлы (генерируемые, в .gitignore)
 ```
@@ -291,8 +298,13 @@ from viz.plotting import plot_dynamics
 
 Результаты получены при m=5 кг и до исправления знака Vx_earth — перезапустить.
 
+- **Навигация по точкам (блок 4 дорожной карты, 2026-10-06)**: `control/navigation.py`
+  (B&M 10–11, скругление углов R = 200 м), s14; окно карты `viz/map_panel.py` в
+  GameScenario3D и Bench3D (точки мышью, «Лететь по маршруту»), вкладка «Навигация»
+  стенда. Прямые: |e_py| ≤ 3.5 м (штиль), ≤ 6.6 м (ветер 5 м/с). docs/control.md р. 10.
+
 ### Не реализовано из ТЗ
-- Боковой канал Б4: сравнение УС «зонд vs косвенная оценка», waypoint, 3D-траектория
+- Боковой канал Б4: сравнение УС «зонд vs косвенная оценка» (на паузе)
 - ТЗ С5: сравнение двух установившихся режимов с разным Cl/Cd
 - s9_b: парный прогон с метрикой реальной работы мотора T·Va (запланирован)
 - Штилевой контрольный прогон вынесен в Пресет 4 s9 (раскомментировать)

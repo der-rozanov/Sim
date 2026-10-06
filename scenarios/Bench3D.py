@@ -11,6 +11,11 @@ Bench3D — испытательный стенд САУ для студенто
   Рыскание (β)    β = 0 → [ПИ β] → [× −1] → [огр. δr]
   Защита по α     автомат защиты от выхода на закритические УА (control/aua.py,
                   отключаемый): между контуром высоты и ПИД тангажа; по истинному α
+  Навигация       маршрут (окно карты) → [менеджер маршрута] → [следование по
+                  прямой / окружности] → χ_ref, h_ref  (control/navigation.py)
+
+Окно карты (viz/map_panel.py, третий процесс): вид сверху, ЛА и след, точки
+маршрута ставятся мышью; «Лететь по маршруту» — САУ ведёт по точкам.
 Регуляторы — штатные PitchController, SpeedController, LateralController
 (как в GameScenario3D); по умолчанию параметры штатные — летает.
 
@@ -21,11 +26,13 @@ Bench3D — испытательный стенд САУ для студенто
   A / D  — уставка курса χ_ref ∓10°    (кнопки ступенек и толчков — в окне схемы)
   W / S  — уставка высоты ∓10 м        X / Z — Va_ref ±1 м/с
   P      — САУ вкл/выкл (выкл — ручное управление, контуры разомкнуты)
+  N      — навигация по маршруту вкл/выкл (ручные уставки её выключают)
   Пробел — пауза, R — сброс, 1–4 — камера, Esc — выход
 
 Запуск:
     python scenarios/Bench3D.py
     python scenarios/Bench3D.py --wind-e 5 --map kainki
+    python scenarios/Bench3D.py --no-map            # без окна карты
 """
 
 import sys
@@ -41,7 +48,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
 from sim.config import AircraftParams, WindParams, SimConfig
-from sim.state import H, P, Q, PHI, THETA, air_data, earth_velocity
+from sim.state import H, P, Q, PHI, THETA, X, Y, air_data, earth_velocity
 from sim.aero import aero_forces_moments
 from control.controllers import (LateralControlParams, PitchControlParams,
                                  SpeedControlParams, wrap_angle)
@@ -49,7 +56,9 @@ from control.aua import AngleOfAttackProtector, AUAParams, AUAState
 from viz.viewer3d import make_app, MAPS
 from ursina import window, Vec2
 from viz import bench_panel
-from GameScenario3D import Game, _wrap180, KH, H_MIN, H_MAX, VA_MIN, VA_MAX, THETA_LIM
+from GameScenario3D import (Game, _wrap180, start_map_window,
+                            KH, H_MIN, H_MAX, VA_MIN, VA_MAX, THETA_LIM)
+from control.navigation import NavParams
 
 WIN_3D = (900, 720)               # 3D-окно у левого края экрана, окно схемы — у правого
 
@@ -67,7 +76,8 @@ STALL_THETA = np.radians(15.0)
 def param_spec(aircraft):
     """Параметры на схемах: (вкладка, ключ, подпись, мин, макс, шаг, по умолчанию).
     Углы — в градусах; шаг None — флажок вкл/выкл."""
-    lat, pit, spd = LateralControlParams(), PitchControlParams(), SpeedControlParams()
+    lat, pit, spd, nav = (LateralControlParams(), PitchControlParams(), SpeedControlParams(),
+                          NavParams())
     aua = default_aua(aircraft)
     deg = lambda x: round(float(np.degrees(x)))
     return [
@@ -106,6 +116,13 @@ def param_spec(aircraft):
         ("prot", "th_warn", "Δθ_пред, °", -10.0, 0.0, 0.5, deg(aua.theta_warn_delta)),
         ("prot", "th_rec", "θ_восст, °", -30.0, 5.0, 1.0, deg(aua.theta_recovery)),
         ("prot", "thr_rec", "δt_восст", 0.0, 1.0, 0.05, aua.throttle_recovery),
+
+        ("nav", "R_fillet", "R скругления, м", 0.0, 600.0, 10.0, nav.R_fillet),
+        ("nav", "R_orbit", "R кружения, м", 100.0, 800.0, 10.0, nav.R_orbit),
+        ("nav", "orbit_cw", "кружение по часовой", None, None, None, nav.orbit_cw),
+        ("nav", "chi_inf", "χ∞, °", 0.0, 90.0, 1.0, deg(nav.chi_inf)),
+        ("nav", "k_path", "k_path, 1/м", 0.0, 0.1, 0.001, nav.k_path),
+        ("nav", "k_orbit", "k_orbit", 0.0, 10.0, 0.1, nav.k_orbit),
     ]
 
 
@@ -147,10 +164,17 @@ def apply_params(g, v):
     pr.theta_warn_delta, pr.theta_recovery = r(v["th_warn"]), r(v["th_rec"])
     pr.throttle_recovery = v["thr_rec"]
 
+    nv = g.nav.params
+    nv.R_fillet, nv.R_orbit, nv.orbit_cw = v["R_fillet"], v["R_orbit"], bool(v["orbit_cw"])
+    nv.chi_inf, nv.k_path, nv.k_orbit = r(v["chi_inf"]), v["k_path"], v["k_orbit"]
+    if g.nav.mode == "orbit":                       # кружение — с новыми R и направлением
+        cn, ce, _, _ = g.nav.circle
+        g.nav.circle = (cn, ce, nv.R_orbit, 1.0 if nv.orbit_cw else -1.0)
+
 
 class Bench(Game):
 
-    HELP = ("A/D χ_ref -/+10°  W/S h_ref  X/Z Va_ref  P САУ вкл/выкл  "
+    HELP = ("A/D χ_ref -/+10°  W/S h_ref  X/Z Va_ref  P САУ вкл/выкл  N маршрут  "
             "Пробел пауза  R сброс  1-4 камера  Esc выход")
 
     def __init__(self, aircraft, wind_params, cfg, terrain, q_par, q_tel, **kw):
@@ -179,6 +203,7 @@ class Bench(Game):
     def _sau(self, s, Va, beta, dt):
         """Как Game._sau, но между контуром высоты и ПИД тангажа стоит автомат
         защиты от закритических α (по истинному α); плюс режим «Срыв» и толчки."""
+        self._nav_ref(s)
         if self.stall:
             theta_cmd = STALL_THETA
         else:
@@ -222,11 +247,17 @@ class Bench(Game):
                 return
             if kind == "par":
                 apply_params(self, val)
+            elif kind == "go":
+                self._nav_go()
+            elif kind == "stop":
+                self._nav_off()
             elif not self.ap:                  # ступеньки и толчки — только с САУ
                 continue
             elif kind == "chi":
+                self._nav_off("маршрут: ручная уставка")
                 self.chi_ref = wrap_angle(self.chi_ref + np.radians(val))
             elif kind == "h":
+                self._nav_off("маршрут: ручная уставка")
                 self.h_hold = True
                 self.h_ref = float(np.clip(self.h_ref + val, H_MIN, H_MAX))
             elif kind == "va":
@@ -283,6 +314,13 @@ class Bench(Game):
             "prot_on": self.prot.enabled, "prot_state": int(self.prot.state),
             "theta_cmd": deg(self.theta_cmd), "stall": self.stall,
             "ny": -aero_forces_moments(Va, alpha, s[Q], c[0], self.ac)[1] / (self.ac.mass * self.ac.g),
+            # навигация
+            "nav_on": self.nav_on, "nav_mode": self.nav.mode if self.nav_on else "—",
+            "nav_idx": self.nav.idx + 1, "nav_n": len(self.route),
+            "e_py": self.nav.e_py if self.nav_on else 0.0,
+            "chi_q": deg(self.nav.chi_q) % 360,
+            "nav_dist": (float(np.hypot(*(self.nav.target[:2] - s[[X, Y]])))
+                         if self.nav_on and self.nav.target is not None else 0.0),
         }
         try:
             self.q_tel.put_nowait(msg)
@@ -297,6 +335,7 @@ def main():
     ap.add_argument("--h0", type=float, default=200.0, help="начальная высота, м")
     ap.add_argument("--cam", type=int, default=1, choices=[1, 2, 3, 4])
     ap.add_argument("--map", default="default", choices=list(MAPS), help="карта мира")
+    ap.add_argument("--no-map", action="store_true", help="без окна карты (маршрута)")
     a = ap.parse_args()
 
     aircraft = AircraftParams()
@@ -310,7 +349,8 @@ def main():
 
     app, terrain = make_app(f"Стенд САУ — {MAPS[a.map].title}", a.map, size=WIN_3D)
     window.position = Vec2(0, 40)          # заголовок окна виден — можно перетащить
-    game = Bench(aircraft, wind_params, cfg, terrain, q_par, q_tel, cam=a.cam)
+    q_map = None if a.no_map else start_map_window(terrain, a.h0, "+0-40", px=560)
+    game = Bench(aircraft, wind_params, cfg, terrain, q_par, q_tel, cam=a.cam, q_map=q_map)
     try:
         app.run()
     finally:

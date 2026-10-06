@@ -44,7 +44,7 @@ from viz.world3d import World, make_world, MAPS
 
 from ursina import (Ursina, Entity, Mesh, Text, Sky, Vec3, Color, camera, scene,
                     window, mouse, held_keys, application, time as utime,
-                    DirectionalLight, AmbientLight)
+                    DirectionalLight, AmbientLight, destroy)
 from ursina.shaders.lit_with_shadows_shader import lit_with_shadows_shader
 from ursina.shaders.unlit_shader import unlit_shader
 
@@ -243,6 +243,9 @@ class View3D:
         self.trail = _line([], Color(1.0, 0.25, 0.2, 1), 3.0)
         self.shadow = _line([], Color(0.1, 0.12, 0.1, 0.8), 2.0)
         self.drop = _line([], Color(1, 1, 1, 0.5), 1.0)
+        self.route = _line([], Color(1.0, 0.83, 0.0, 0.9), 2.5)     # маршрут навигации
+        self.route.enabled = False
+        self.route_poles = []
 
         font = _font()
         Entity(parent=camera.ui, model="quad", color=Color(0, 0, 0, 0.45), origin=(-0.5, 0.5),
@@ -264,6 +267,16 @@ class View3D:
                  origin=(0.5, -0.5), scale=0.55, font=font, color=Color(1, 1, 1, 0.6),
                  text=terrain.attribution)
         self.set_fog()
+
+    def set_route(self, pts, loop=False):
+        """Маршрут: линия через точки (N, 3) в СК Ursina и отвесы до земли."""
+        for e in self.route_poles:
+            destroy(e)
+        P = np.asarray(pts, float).reshape(-1, 3)
+        _set_line(self.route, np.vstack([P, P[:1]]) if loop and len(P) > 2 else P)
+        self.route.enabled = len(P) > 0
+        self.route_poles = [_line([p, (p[0], float(self.ter.height(p[0], p[2])), p[2])],
+                                  Color(1.0, 0.83, 0.0, 0.7), 1.5) for p in P]
 
     def set_fog(self):
         # шейдер Ursina: доля тумана = расстояние / (end − start); в обзоре — реже

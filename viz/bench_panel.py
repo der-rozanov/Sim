@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Окно испытательного стенда САУ: вкладки по контурам (крен, тангаж/высота,
-скорость, рыскание, защита по α). На каждой вкладке — блок-схема контура с ползунками
+скорость, рыскание, защита по α, навигация). На каждой вкладке — блок-схема контура с ползунками
 параметров, живыми значениями сигналов, кнопками воздействий и осциллограф.
 Работает в ОТДЕЛЬНОМ процессе (tkinter, стандартная библиотека) рядом с
 3D-окном scenarios/Bench3D.py.
@@ -11,6 +11,7 @@
                          ("chi" | "h" | "va", шаг)  — ступенька уставки (°, м, м/с)
                          ("kick", "de" | "da" | "dr") — толчок рулём на 1 с
                          ("stall" | "stall_off", _)  — режим «Срыв» вкл / отмена
+                         ("go" | "stop", _)  — навигация по маршруту (окно карты) вкл / выкл
     q_tel  (3D → окно):  dict сигналов на конец кадра (см. Bench3D._telemetry)
 
 Модуль физики и САУ не импортирует — только рисует то, что пришло.
@@ -61,6 +62,9 @@ SLIDER_POS = {
     "prot_on": (1010, 60, 0, C_BOX),
     "a_warn": (967, 88, 70, C_BOX), "a_crit": (967, 152, 70, C_BOX), "a_exit": (967, 216, 70, C_BOX),
     "th_warn": (1053, 88, 70, C_BOX), "th_rec": (1053, 152, 70, C_BOX), "thr_rec": (1053, 216, 70, C_BOX),
+    # навигация
+    "R_fillet": (295, 62, 160, C_BOX), "R_orbit": (295, 120, 160, C_BOX), "orbit_cw": (295, 183, 0, C_BOX),
+    "chi_inf": (600, 62, 160, C_BOX), "k_path": (600, 120, 160, C_BOX), "k_orbit": (600, 178, 160, C_BOX),
 }
 
 # Осциллограф вкладки: (заголовок, [(ключ, цвет, подпись, пунктир)], шкала)
@@ -85,10 +89,14 @@ SCOPES = {
              ("тангаж θ, °", [("theta_cmd", "#999", "θ_ref (h)", 1), ("theta_ref", C_REF, "θ_ref*", 1),
                               ("theta", C_MEAS, "θ", 0)], ("sym", 10)),
              ("тяга δt", [("thr", C_CTRL, "δt", 0)], ("fix", 0.0, 1.0))],
+    "nav": [("отклонение от линии / окружности e_py, м", [("e_py", C_MEAS, "e_py", 0)], ("sym", 20)),
+            ("курс χ, °", [("chi_ref", C_REF, "χ_ref", 1), ("chi", C_MEAS, "χ", 0)], ("auto", 30)),
+            ("высота h, м", [("h_ref", C_REF, "h_ref", 1), ("h", C_MEAS, "h", 0)], ("auto", 20)),
+            ("крен φ, °", [("phi_ref", C_REF, "φ_ref", 1), ("phi", C_MEAS, "φ", 0)], ("sym", 35))],
 }
 
 TABS = [("roll", "Крен"), ("pitch", "Тангаж / высота"), ("speed", "Скорость"), ("yaw", "Рыскание (β)"),
-        ("prot", "Защита по α")]
+        ("prot", "Защита по α"), ("nav", "Навигация")]
 
 
 class Panel:
@@ -106,7 +114,8 @@ class Panel:
         self.nb = ttk.Notebook(root)
         self.nb.pack(fill="both", expand=True)
         draw = {"roll": self._draw_roll, "pitch": self._draw_pitch,
-                "speed": self._draw_speed, "yaw": self._draw_yaw, "prot": self._draw_prot}
+                "speed": self._draw_speed, "yaw": self._draw_yaw, "prot": self._draw_prot,
+                "nav": self._draw_nav}
         for name, title in TABS:
             f = tk.Frame(self.nb, bg="white")
             self.nb.add(f, text=f"  {title}  ")
@@ -415,6 +424,46 @@ class Panel:
         self._footer(cv, "Зоны шкалы: норма / предупреждение (α_пред) / критический (α_крит) / срыв "
                          "(α_срыв из параметров ЛА).  «Срыв» без защиты — сваливание; R в 3D-окне — сброс.")
 
+    def _draw_nav(self, cv):
+        A, V = self._arrow, self._val
+        MODES = {"line": "прямая", "fillet": "дуга скругления", "orbit": "кружение", "—": "выкл"}
+        self._title(cv, "Навигация по точкам: маршрут → менеджер маршрута → следование → χ_ref, h_ref")
+        self._box(cv, 15, 95, 140, 185, "Маршрут")
+        cv.create_text(77, 135, text="точки w₁…w_N\n(окно карты)", font=FONT, justify="center")
+        V(cv, 77, 170, lambda m: f"N = {m['nav_n']}")
+        A(cv, 140, 140, 175, 140)
+        self._box(cv, 175, 35, 415, 275, "Менеджер маршрута")
+        V(cv, 295, 228, lambda m: "режим: " + MODES.get(m["nav_mode"], m["nav_mode"]))
+        V(cv, 295, 250, lambda m: (f"цель {m['nav_idx']}/{m['nav_n']}, до неё {m['nav_dist']:.0f} м"
+                                    if m["nav_on"] and m["nav_mode"] != "orbit" else ""))
+        A(cv, 415, 140, 465, 140)
+        cv.create_text(440, 120, text="участок\nили круг", font=FONT_S, justify="center")
+        self._box(cv, 465, 35, 735, 275, "Следование по прямой / окружности")
+        V(cv, 600, 236, lambda m: f"e_py = {m['e_py']:+.1f} м", C_MEAS)
+        V(cv, 600, 256, lambda m: f"χ_q = {m['chi_q']:5.1f}°")
+        A(cv, 735, 100, 800, 100)
+        cv.create_text(767, 88, text="χ_ref", font=FONT_B, fill=C_REF)
+        V(cv, 767, 114, lambda m: f"{m['chi_ref'] % 360:5.1f}°", C_REF)
+        A(cv, 735, 200, 800, 200)
+        cv.create_text(767, 188, text="h_ref", font=FONT_B, fill=C_REF)
+        V(cv, 767, 214, lambda m: f"{m['h_ref']:.0f} м", C_REF)
+        self._box(cv, 800, 70, 945, 130, "Курс → крен → δa")
+        cv.create_text(872, 112, text="(вкладка «Крен»)", font=FONT_S)
+        self._box(cv, 800, 170, 945, 230, "Высота → θ → δe")
+        cv.create_text(872, 212, text="(вкладка «Тангаж»)", font=FONT_S)
+        A(cv, 945, 100, 985, 100)
+        A(cv, 945, 200, 985, 200)
+        self._box(cv, 985, 70, 1065, 230, "ЛА")
+        cv.create_text(1025, 150, text="6DOF", font=FONT)
+        A(cv, 1025, 230, 1025, 318, 295, 318, 295, 276)                  # положение (GPS)
+        A(cv, 600, 318, 600, 276)
+        cv.create_text(820, 306, text="p = (N, E) — GPS", font=FONT_B, fill=C_MEAS)
+        off = cv.create_text(600, 340, text="", font=FONT_B, fill="#c33")
+        self._dyn(cv, lambda c, m: c.itemconfigure(
+            off, text="" if m["nav_on"] else "НАВИГАЦИЯ ВЫКЛ — поставьте точки на карте и «Лететь»"))
+        self._footer(cv, "Прямая: χ_ref = χ_q − χ∞·(2/π)·atan(k_path·e_py).   Окружность: "
+                         "χ_ref = ∠(p − c) + λ(π/2 + atan(k_orbit(d − ρ)/ρ)).   Углы — дугой R скругления.")
+
     # --- ползунки и кнопки ----------------------------------------------------
     def _controls(self, tab, cv):
         for t, key, label, lo, hi, res, default in self.spec:
@@ -458,6 +507,9 @@ class Panel:
         if tab == "prot":
             kick(None, "Срыв: δt = 0, θ_ref = +15°", "stall")
             kick(None, "Отмена срыва", "stall_off")
+        if tab == "nav":
+            kick(None, "Лететь по маршруту", "go")
+            kick(None, "Стоп (держать курс и высоту)", "stop")
         tk.Button(bar, text="Параметры по умолчанию", font=FONT,
                   command=lambda: self._defaults(tab)).pack(side="right", padx=8)
 
