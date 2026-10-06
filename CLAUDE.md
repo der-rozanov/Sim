@@ -64,6 +64,8 @@ viz/                  — отображение (принимает Log, не �
     osmdata.py        — загрузка/разбор OpenStreetMap (Overpass) для карты kainki_osm
     viewer3d.py       — 3D-тренажёр (Ursina): мир, силуэт с рулями, 4 камеры;
                         CLI: python viz/viewer3d.py [файл.flightlog] [--map kainki]
+    bench_panel.py    — окно стенда САУ (tkinter): блок-схема, ползунки, осциллограф;
+                        процесс-спутник scenarios/Bench3D.py, связь через очереди
 
 scenarios/            — прогоны s1–s13; каждый: конфиг → run() → viz или logger.save()
     s1_steady_flight.py    — балансировка, тримовый горизонтальный полёт
@@ -86,6 +88,8 @@ scenarios/            — прогоны s1–s13; каждый: конфиг �
     GameScenario.py        — интерактивное ручное/автоматическое управление (клавиши, 2D)
     GameScenario3D.py      — пилотирование в 3D в реальном времени (Ursina): ручной режим
                              6DOF + САУ (θ/h, Va, курс); полёт пишется в .flightlog
+    Bench3D.py             — учебный стенд САУ: 3D + окно блок-схемы (viz/bench_panel.py,
+                             tkinter, отдельный процесс) с ползунками параметров на лету
     lab6/                  — учебная лабораторная по лекции 6 (L1–L3 + solutions/)
 
 rl_control/           — экспериментальный RL-регулятор тангажа (Q-learning), вне основной линии
@@ -153,7 +157,8 @@ from viz.plotting import plot_dynamics
 - Интегратор пишется вручную (RK4 основной, Эйлер опционально).
 - scipy допустим только при явной необходимости и с согласования автора.
 - Исключение (РЕШ-16): `ursina` (Panda3D, тянет pillow) — только в `viz/viewer3d.py`,
-  `viz/world3d.py`, `viz/mapdata.py`, `viz/osmdata.py` и `scenarios/GameScenario3D.py`.
+  `viz/world3d.py`, `viz/mapdata.py`, `viz/osmdata.py`, `scenarios/GameScenario3D.py`
+  и `scenarios/Bench3D.py`.
   В `sim/`, `control/`, `runner.py` не импортировать. Спутниковые тайлы Esri — только
   локальный кэш `viz/map_cache/` (в .gitignore), в репозиторий не класть.
 

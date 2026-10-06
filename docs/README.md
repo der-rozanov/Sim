@@ -30,6 +30,7 @@ python viz/viewer3d.py                      # 3D-проигрыватель, п�
 python scenarios/GameScenario3D.py          # пилотирование в 3D (ручной режим / САУ)
 python scenarios/GameScenario3D.py --map kainki   # то же над аэродромом Каинки (спутниковый снимок)
 python scenarios/GameScenario3D.py --map kainki_osm   # Каинки в стиле учебной карты (OpenStreetMap)
+python scenarios/Bench3D.py               # стенд САУ: 3D + блок-схема с параметрами на лету
 ```
 
 ---
