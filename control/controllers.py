@@ -1,14 +1,20 @@
 """
 САУ (система автоматического управления) — каскадная ПИД-структура.
 
-Три контура:
+Продольный канал:
 1. Внешний (theta-контур): стабилизация угла тангажа theta
 2. Внутренний (q-контур): стабилизация угловой скорости q
 3. Контур скорости (Va-контур): удержание воздушной скорости через тягу
 
+Боковой канал (LateralController):
+4. Курс chi -> уставка крена phi_ref
+5. Крен phi (+ демпфирование по p) -> элероны delta_a
+6. Скольжение beta -> руль направления delta_r (координированный разворот)
+
 Управляющие команды:
 - delta_e (отклонение руля высоты), рад
 - throttle (тяга/обороты), 0..1
+- delta_a (элероны), рад;  delta_r (руль направления), рад
 """
 
 import numpy as np
@@ -350,3 +356,124 @@ class SpeedController:
             self.aircraft.throttle_max,
         )
         return throttle
+
+
+# ---------------------------------------------------------------------------
+# Боковой канал: курс -> крен -> элероны; скольжение -> руль направления
+# ---------------------------------------------------------------------------
+
+def wrap_angle(angle: float) -> float:
+    """Привести угол к диапазону [−π, π) — для рассогласования по курсу."""
+    return (angle + np.pi) % (2.0 * np.pi) - np.pi
+
+
+@dataclass
+class LateralControlParams:
+    """
+    Параметры боковой САУ (B&M гл. 6, последовательное замыкание контуров).
+
+    Коэффициенты рассчитаны для параметров-аналога Aerosonde при Va = 30 м/с
+    (расчёт — docs/control.md, раздел «Боковой канал»).
+    """
+    # Контур крена: delta_a = Kp·e_phi + Ki·∫e_phi − Kd·p
+    phi_Kp: float = 0.83      # δa_max / e_phi_max = 25° / 30°
+    phi_Ki: float = 0.05      # малый интеграл — снимает статическую ошибку крена
+    phi_Kd: float = 0.10      # демпфирование по угловой скорости крена p (гироскоп)
+    phi_integral_limit: float = 0.2   # рад·с
+
+    # Контур курса: phi_ref = Kp·e_chi + Ki·∫e_chi
+    chi_Kp: float = 4.5
+    chi_Ki: float = 1.65
+    chi_integral_limit: float = 0.1   # рад·с → вклад интеграла ≤ ~9.5° крена
+    phi_ref_max: float = np.radians(30.0)  # ограничение уставки крена
+
+    # Контур скольжения: delta_r = −(Kp·beta + Ki·∫beta)
+    beta_hold: bool = True    # False — руль направления в нейтрали (δr = 0)
+    # Ограничено шумом зонда: Kp=2 даёт дрожание руля ~1.6°/шаг при шуме β 0.6°
+    beta_Kp: float = 0.5
+    beta_Ki: float = 1.0
+    beta_integral_limit: float = 0.2  # рад·с
+
+
+class LateralController:
+    """
+    Боковая САУ: курс chi_ref -> (delta_a, delta_r).
+
+    Структура:
+        chi_ref (уставка курса)
+          |   chi_meas (GPS: путевой угол)
+          v
+        [PI_chi] -> phi_ref  [Saturation ±phi_ref_max]
+          |   phi_meas (ИНС), p_meas (гироскоп)
+          v
+        [PI_phi − Kd·p] -> delta_a  [Saturation ±delta_a_max]
+
+        beta_meas (зонд: УС)
+          v
+        [PI_beta] -> delta_r  [Saturation ±delta_r_max]
+
+    Знаки (docs/physics.md, раздел 2): delta_a > 0 — крен вправо,
+    delta_r > 0 — нос влево; чтобы убрать beta > 0 (поток справа), нос
+    доворачивается вправо, поэтому delta_r = −K·beta.
+    """
+
+    def __init__(self, aircraft, params: LateralControlParams):
+        self.aircraft = aircraft
+        self.params = params
+
+        self.pid_chi = PID(PIDParams(Kp=params.chi_Kp, Ki=params.chi_Ki,
+                                     integral_limit=params.chi_integral_limit), name="chi")
+        self.pid_phi = PID(PIDParams(Kp=params.phi_Kp, Ki=params.phi_Ki,
+                                     integral_limit=params.phi_integral_limit), name="phi")
+        self.pid_beta = PID(PIDParams(Kp=params.beta_Kp, Ki=params.beta_Ki,
+                                      integral_limit=params.beta_integral_limit), name="beta")
+
+        self.chi_ref = 0.0
+        self.phi_ref = 0.0   # последняя уставка крена (для логирования)
+
+    def reset(self):
+        """Сброс интегралов всех контуров."""
+        self.pid_chi.reset()
+        self.pid_phi.reset()
+        self.pid_beta.reset()
+
+    def set_course(self, chi_ref: float):
+        """Установить уставку курса (путевого угла), рад."""
+        self.chi_ref = wrap_angle(chi_ref)
+
+    def step(self, meas: dict, dt: float) -> tuple:
+        """
+        Один шаг боковой САУ.
+
+        Args:
+            meas: {
+                'chi':  путевой угол (GPS), рад
+                'phi':  угол крена (ИНС), рад
+                'p':    угловая скорость крена (гироскоп), рад/с
+                'beta': УС (зонд), рад
+            }
+            dt: шаг времени, сек
+
+        Returns:
+            (delta_a, delta_r), рад
+        """
+        pr, ac = self.params, self.aircraft
+
+        # Контур курса -> уставка крена (рассогласование по кратчайшему пути)
+        e_chi = wrap_angle(self.chi_ref - meas['chi'])
+        self.phi_ref = saturation(self.pid_chi.step(e_chi, dt),
+                                  -pr.phi_ref_max, pr.phi_ref_max)
+
+        # Контур крена -> элероны (демпфирование по измеренной p, а не по производной ошибки)
+        e_phi = self.phi_ref - meas['phi']
+        delta_a = saturation(self.pid_phi.step(e_phi, dt) - pr.phi_Kd * meas['p'],
+                             -ac.delta_a_max, ac.delta_a_max)
+
+        # Контур скольжения -> руль направления
+        if pr.beta_hold:
+            delta_r = saturation(-self.pid_beta.step(meas['beta'], dt),
+                                 -ac.delta_r_max, ac.delta_r_max)
+        else:
+            delta_r = 0.0
+
+        return delta_a, delta_r

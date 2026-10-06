@@ -339,6 +339,51 @@ except Exception as e:
     check("6DOF", False, str(e)); all_ok = False
 
 # ------------------------------------------------------------------
+section("8. Боковая САУ (control/controllers.py: LateralController)")
+# ------------------------------------------------------------------
+try:
+    from control.controllers import LateralController, LateralControlParams, wrap_angle
+    from control.sensors import measure_gps_course
+
+    all_ok &= check("wrap_angle(350°) = −10°",
+                    abs(np.degrees(wrap_angle(np.radians(350))) + 10) < 1e-9)
+    all_ok &= check("GPS-курс: скорость на восток -> chi = 90°",
+                    abs(np.degrees(measure_gps_course(0.0, 30.0, 0.0, None)) - 90) < 1e-9)
+
+    level = {'chi': 0.0, 'phi': 0.0, 'p': 0.0, 'beta': 0.0}
+    lc = LateralController(ap, LateralControlParams())
+    lc.set_course(np.radians(20))
+    da, dr = lc.step(level, cfg.dt)
+    all_ok &= check("курс правее -> phi_ref > 0, delta_a > 0 (крен вправо)",
+                    lc.phi_ref > 0 and da > 0,
+                    f"phi_ref={np.degrees(lc.phi_ref):.1f}°  δa={np.degrees(da):.1f}°")
+
+    lc = LateralController(ap, LateralControlParams())
+    lc.set_course(np.radians(-170))           # из 170° в −170°: кратчайший путь вправо
+    lc.step({**level, 'chi': np.radians(170)}, cfg.dt)
+    all_ok &= check("170° -> −170°: разворот по кратчайшему пути (вправо)",
+                    lc.phi_ref > 0, f"phi_ref={np.degrees(lc.phi_ref):.1f}°")
+
+    lc = LateralController(ap, LateralControlParams())
+    _, dr = lc.step({**level, 'beta': np.radians(3)}, cfg.dt)
+    all_ok &= check("beta > 0 -> delta_r < 0 (нос вправо, на поток)", dr < 0,
+                    f"δr={np.degrees(dr):.2f}°")
+    lc = LateralController(ap, LateralControlParams(beta_hold=False))
+    _, dr = lc.step({**level, 'beta': np.radians(3)}, cfg.dt)
+    all_ok &= check("beta_hold=False -> delta_r = 0", dr == 0.0)
+
+    lc = LateralController(ap, LateralControlParams())
+    lc.set_course(np.pi / 2)
+    lc.step(level, cfg.dt)
+    all_ok &= check("уставка крена ограничена ±phi_ref_max",
+                    abs(lc.phi_ref) <= LateralControlParams().phi_ref_max + 1e-12,
+                    f"phi_ref={np.degrees(lc.phi_ref):.1f}°")
+
+except Exception as e:
+    import traceback; traceback.print_exc()
+    check("LateralController", False, str(e)); all_ok = False
+
+# ------------------------------------------------------------------
 print("\n" + "="*50)
 if all_ok:
     print("  ALL CHECKS PASSED")
