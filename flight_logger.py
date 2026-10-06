@@ -59,7 +59,7 @@ import numpy as np
 
 from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
 from runner import Log
-from sim.state import THETA, Q, H, X, U, W
+from sim.state import THETA, Q, H, X, U, W, V, P, R, PHI, PSI, Y, DA, DR
 
 # Папка для логов по умолчанию — results/ рядом с flight_logger.py
 _DEFAULT_RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
@@ -210,7 +210,7 @@ class FlightLogger:
             "description": self._description,
             "saved_at":    datetime.datetime.now().isoformat(timespec="seconds"),
             "aircraft": {
-                "mass": ac.mass, "Jy": ac.Jy,
+                "mass": ac.mass, "Jx": ac.Jx, "Jy": ac.Jy, "Jz": ac.Jz, "Jxz": ac.Jxz,
                 "S": ac.S, "b": ac.b, "c": ac.c,
                 "rho": ac.rho, "g": ac.g,
                 "CL0": ac.CL0, "CLa": ac.CLa, "CLde": ac.CLde,
@@ -223,10 +223,12 @@ class FlightLogger:
             },
             "wind": {
                 "Vw_const":   self._wind.Vw_const,
+                "Vw_cross":   self._wind.Vw_cross,
                 "h_shear_lo": self._wind.h_shear_lo,
                 "h_shear_hi": self._wind.h_shear_hi,
                 "dV_shear":   self._wind.dV_shear,
                 "gust_amp":   self._wind.gust_amp,
+                "gust_vwy":   self._wind.gust_vwy,
                 "gust_t0":    self._wind.gust_t0,
                 "gust_dur":   self._wind.gust_dur,
             },
@@ -260,14 +262,24 @@ class FlightLogger:
             "channels": {
                 "t":          "время, с",
                 "h":          "высота, м",
-                "x":          "горизонтальная дальность, м",
+                "x":          "координата на север (при psi=0 — дальность), м",
+                "y":          "координата на восток, м",
+                "v":          "боковая скорость (связ.), м/с",
+                "p":          "угловая скорость крена, рад/с",
+                "r":          "угловая скорость рыскания, рад/с",
+                "phi":        "угол крена, рад",
+                "psi":        "угол рыскания, рад",
+                "beta_true":  "истинный УС, рад",
+                "wind_y":     "боковой (восточный) ветер, м/с",
+                "delta_a":    "элероны, рад",
+                "delta_r":    "руль направления, рад",
                 "u":          "продольная скорость (связ.), м/с",
                 "w":          "нормальная скорость (связ.), м/с",
                 "theta":      "угол тангажа, рад",
                 "q":          "угловая скорость тангажа, рад/с",
                 "Va":         "воздушная скорость, м/с",
                 "alpha_true": "истинный УА, рад",
-                "gamma":      "угол траектории (по воздуху), рад",
+                "gamma":      "угол траектории (по воздуху, theta − alpha; точен без крена), рад",
                 "wind_x":     "горизонтальный ветер, м/с",
                 "wind_h":     "вертикальный ветер, м/с",
                 "delta_e":    "руль высоты, рад",
@@ -302,6 +314,16 @@ class FlightLogger:
             q           = log.state[:, Q],
             Va          = log.Va,
             alpha_true  = alpha_true,
+            y           = log.state[:, Y],
+            v           = log.state[:, V],
+            p           = log.state[:, P],
+            r           = log.state[:, R],
+            phi         = log.state[:, PHI],
+            psi         = log.state[:, PSI],
+            beta_true   = log.beta,
+            wind_y      = log.wind_vec[:, 2],
+            delta_a     = log.controls[:, DA],
+            delta_r     = log.controls[:, DR],
             gamma       = gamma,
             wind_x      = log.wind_vec[:, 0],
             wind_h      = log.wind_vec[:, 1],

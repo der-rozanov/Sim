@@ -86,15 +86,20 @@ def derivatives(state, controls, t, params, wind_fn) -> dstate:
 @dataclass
 class Log:
     t:        ndarray (N,)      # время
-    state:    ndarray (N, 6)    # [u, w, q, θ, x, h] на каждом шаге
-    controls: ndarray (N, 2)    # [δe, throttle]
+    state:    ndarray (N, 12)   # [u, w, q, θ, x, h, v, p, r, φ, ψ, y] на каждом шаге
+    controls: ndarray (N, 4)    # [δe, throttle, δa, δr]
     Va:       ndarray (N,)      # воздушная скорость
     alpha:    ndarray (N,)      # УА в радианах
     E_kin:    ndarray (N,)      # кинетическая энергия, Дж
     E_pot:    ndarray (N,)      # потенциальная энергия, Дж
     E_total:  ndarray (N,)      # полная механическая энергия, Дж
-    wind_vec: ndarray (N, 2)    # [Vwx, Vwh] в м/с
+    wind_vec: ndarray (N, 3)    # [Vwx, Vwh, Vwy] в м/с
+    beta:     ndarray (N,)      # УС в радианах
 ```
+
+Столбцы 0..5 `state`, 0..1 `controls`, 0..1 `wind_vec` имеют тот же смысл,
+что и в продольной версии — старый код с `log.state[:, H]`,
+`log.controls[:, 0]`, `log.wind_vec[:, 1]` работает без изменений.
 
 Обращение к компонентам состояния из лога:
 ```python
@@ -113,8 +118,15 @@ h_final = log.state[-1, H]    # финальная высота
 def my_controller(t: float, state: ndarray, Va: float, alpha: float) -> ndarray:
     delta_e  = ...   # рад
     throttle = ...   # 0.0 … 1.0
-    return np.array([delta_e, throttle])
+    return np.array([delta_e, throttle])                 # продольный сценарий
+    # или
+    return np.array([delta_e, throttle, delta_a, delta_r])  # с боковым каналом
 ```
+
+Если возвращено 2 элемента, `runner` дополняет их нулями (`state.full_controls`):
+δa = δr = 0. УС в `controls_fn` не передаётся (сигнатура сохранена для
+совместимости) — боковая САУ вычисляет его сама через `state.air_data()`
+или берёт с псевдодатчика.
 
 Передаётся в `run()`. Примеры:
 ```python
@@ -151,7 +163,10 @@ k4 = derivatives(state + dt*k3,   controls, t+dt,   ...)
 
 ```python
 # Штиль
-wind_call = lambda h, t: (0.0, 0.0)
+wind_call = lambda h, t: (0.0, 0.0, 0.0)
+
+# Возвращается (Vwx, Vwh, Vwy) — север, вверх, восток.
+# Пара (Vwx, Vwh) без третьего элемента тоже принимается (Vwy = 0).
 
 # Реальная модель с параметрами
 wind_call = lambda h, t: wind(h, t, wind_params)
@@ -186,14 +201,26 @@ wind_call = lambda h, t: (5.0 * np.sin(t), 0.0)
 
 ---
 
-## 10. Как добавить боковой канал (Этап 3)
+## 10. Боковой канал (модель 6DOF, реализовано 2026-10-06)
 
-1. Расширить вектор состояния в `state.py` — добавить индексы `V, P, R, PHI, PSI, Y`.
-2. Добавить боковые уравнения в `dynamics.derivatives()`.
-3. Добавить боковые аэрокоэффициенты в `config.py` и `aero.py`.
-4. Добавить боковые управления в `controls_fn` (элероны, руль направления).
+Сделано расширением, не переписыванием:
 
-Продольный канал при этом **не меняется** — расширение, не переписывание.
+1. `state.py` — индексы `V, P, R, PHI, PSI, Y` (6..11) дописаны после продольных;
+   индексы управления `DE, DT, DA, DR`; `full_controls()`; матрица поворота
+   `rotation_body_to_earth()`; `earth_velocity()`; `air_data()` → (Va, α, β).
+   `air_velocity()` сохранён и возвращает (Va, α), как раньше.
+2. `dynamics.derivatives()` — полные уравнения 6DOF (docs/physics.md, раздел 3).
+3. `config.py` / `aero.py` — Jx, Jz, Jxz, боковые коэффициенты `CY_*`, `Croll_*`,
+   `Cn_*`, функция `aero_lateral()`.
+4. `wind.py` — третья компонента `Vwy` (постоянный боковой ветер `Vw_cross`,
+   боковой порыв `gust_vwy`).
+
+Гарантия совместимости: при v = p = r = φ = ψ = 0, δa = δr = 0 уравнения
+вырождаются точно в прежние продольные (проверка 7.3 в `checks/check.py`;
+регрессия по прогону с ветром и дублетом руля — совпадение u, w, q, θ, h
+до бита). Все сценарии s1–s11 и lab6 работают без правок.
+
+Адекватность бокового канала в открытом контуре — `checks/check_lateral.py`.
 
 ---
 
