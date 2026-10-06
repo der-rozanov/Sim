@@ -9,6 +9,8 @@ Bench3D — испытательный стенд САУ для студенто
                   → [× −(Va₀/Va)²] → [огр. δe]
   Скорость        Va_ref → [ПИД Va] + δt_трим → [огр. 0…1]
   Рыскание (β)    β = 0 → [ПИ β] → [× −1] → [огр. δr]
+  Защита по α     автомат защиты от выхода на закритические УА (control/aua.py,
+                  отключаемый): между контуром высоты и ПИД тангажа; по истинному α
 Регуляторы — штатные PitchController, SpeedController, LateralController
 (как в GameScenario3D); по умолчанию параметры штатные — летает.
 
@@ -40,12 +42,14 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from sim.config import AircraftParams, WindParams, SimConfig
 from sim.state import H, P, Q, PHI, THETA, air_data, earth_velocity
+from sim.aero import aero_forces_moments
 from control.controllers import (LateralControlParams, PitchControlParams,
                                  SpeedControlParams, wrap_angle)
+from control.aua import AngleOfAttackProtector, AUAParams, AUAState
 from viz.viewer3d import make_app, MAPS
 from ursina import window, Vec2
 from viz import bench_panel
-from GameScenario3D import Game, _wrap180, KH, H_MIN, H_MAX, VA_MIN, VA_MAX
+from GameScenario3D import Game, _wrap180, KH, H_MIN, H_MAX, VA_MIN, VA_MAX, THETA_LIM
 
 WIN_3D = (900, 720)               # 3D-окно у левого края экрана, окно схемы — у правого
 
@@ -54,11 +58,17 @@ WIN_3D = (900, 720)               # 3D-окно у левого края экр�
 KICK = {"de": (0, np.radians(3.0)), "da": (2, np.radians(5.0)), "dr": (3, np.radians(5.0))}
 KICK_T = 1.0
 
+# Режим «Срыв» (кнопка на вкладке защиты): тяга 0 и θ_ref = STALL_THETA — скорость падает,
+# α растёт. С защитой режим снимается, когда автомат перехватил управление (КРИТ);
+# без защиты — кнопкой «Отмена».
+STALL_THETA = np.radians(15.0)
+
 
 def param_spec(aircraft):
     """Параметры на схемах: (вкладка, ключ, подпись, мин, макс, шаг, по умолчанию).
     Углы — в градусах; шаг None — флажок вкл/выкл."""
     lat, pit, spd = LateralControlParams(), PitchControlParams(), SpeedControlParams()
+    aua = default_aua(aircraft)
     deg = lambda x: round(float(np.degrees(x)))
     return [
         ("roll", "chi_Kp", "Kp", 0.0, 10.0, 0.05, lat.chi_Kp),
@@ -88,7 +98,21 @@ def param_spec(aircraft):
         ("yaw", "beta_Kp", "Kp", 0.0, 3.0, 0.05, lat.beta_Kp),
         ("yaw", "beta_Ki", "Ki", 0.0, 3.0, 0.05, lat.beta_Ki),
         ("yaw", "dr_max", "±δr_max, °", 2.0, 25.0, 1.0, deg(aircraft.delta_r_max)),
+
+        ("prot", "prot_on", "защита вкл", None, None, None, aua.enabled),
+        ("prot", "a_warn", "α_пред, °", 5.0, 30.0, 0.5, deg(aua.alpha_warn)),
+        ("prot", "a_crit", "α_крит, °", 5.0, 30.0, 0.5, deg(aua.alpha_crit)),
+        ("prot", "a_exit", "α_выход, °", 0.0, 25.0, 0.5, deg(aua.alpha_exit)),
+        ("prot", "th_warn", "Δθ_пред, °", -10.0, 0.0, 0.5, deg(aua.theta_warn_delta)),
+        ("prot", "th_rec", "θ_восст, °", -30.0, 5.0, 1.0, deg(aua.theta_recovery)),
+        ("prot", "thr_rec", "δt_восст", 0.0, 1.0, 0.05, aua.throttle_recovery),
     ]
+
+
+def default_aua(aircraft):
+    """Штатные параметры автомата защиты: пороги — из параметров ЛА."""
+    return AUAParams(enabled=True, alpha_warn=aircraft.alpha_warning,
+                     alpha_crit=aircraft.alpha_crit)
 
 
 def apply_params(g, v):
@@ -115,6 +139,14 @@ def apply_params(g, v):
     lat.pid_beta.Kp, lat.pid_beta.Ki = v["beta_Kp"], v["beta_Ki"]
     lat.aircraft.delta_r_max = r(v["dr_max"])
 
+    pr = g.prot
+    if pr.enabled and not v["prot_on"]:
+        pr.reset()                                   # выключили — автомат в исходное
+    pr.enabled = bool(v["prot_on"])
+    pr.alpha_warn, pr.alpha_crit, pr.alpha_exit = r(v["a_warn"]), r(v["a_crit"]), r(v["a_exit"])
+    pr.theta_warn_delta, pr.theta_recovery = r(v["th_warn"]), r(v["th_rec"])
+    pr.throttle_recovery = v["thr_rec"]
+
 
 class Bench(Game):
 
@@ -123,6 +155,7 @@ class Bench(Game):
 
     def __init__(self, aircraft, wind_params, cfg, terrain, q_par, q_tel, **kw):
         self.q_par, self.q_tel = q_par, q_tel
+        self.prot = AngleOfAttackProtector(aircraft, default_aua(aircraft))
         super().__init__(aircraft, wind_params, cfg, terrain, **kw)
         # Ограничения рулей на стенде меняет только САУ, не модель ЛА
         self.lat.aircraft = dataclasses.replace(aircraft)
@@ -132,6 +165,9 @@ class Bench(Game):
         super().reset()
         self.chi_unwrap = None             # непрерывный χ для осциллографа
         self.kick = None                   # (индекс руля, добавка, t_конца)
+        self.stall = False                 # режим «Срыв»
+        self.theta_cmd = 0.0               # θ_ref до автомата защиты (для схемы)
+        self.prot.reset()
         self._toggle_ap()                  # стенд стартует с САУ
         self.h_hold, self.h_ref = True, float(self.state[H])
 
@@ -141,10 +177,42 @@ class Bench(Game):
         self._telemetry()
 
     def _sau(self, s, Va, beta, dt):
-        c = super()._sau(s, Va, beta, dt)
+        """Как Game._sau, но между контуром высоты и ПИД тангажа стоит автомат
+        защиты от закритических α (по истинному α); плюс режим «Срыв» и толчки."""
+        if self.stall:
+            theta_cmd = STALL_THETA
+        else:
+            if self.h_hold:
+                self.theta_ref = float(np.clip(self.alpha_trim + self.KH * (self.h_ref - s[H]),
+                                               -THETA_LIM, THETA_LIM))
+            theta_cmd = self.theta_ref
+        alpha = air_data(s, self.wind_call(s[H], self.t))[1]
+        out = self.prot.step(alpha, theta_cmd, self.speed.trim_throttle, dt)
+        self.theta_cmd = theta_cmd
+
+        self.pitch.set_pitch_setpoint(out.theta_ref)
+        de = self.pitch.step(self.t, {"q": s[Q], "theta": s[THETA], "h": s[H], "Va": Va}, dt)[0]
+        thr = 0.0 if self.stall else self.speed.step(Va, dt)
+        if out.force_throttle is not None:
+            thr = out.force_throttle
+        Vx, Vy, _ = earth_velocity(s)
+        self.lat.set_course(self.chi_ref)
+        da, dr = self.lat.step({"chi": np.arctan2(Vy, Vx), "phi": s[PHI],
+                                "p": s[P], "beta": beta}, dt)
+        c = np.array([de, thr, da, dr])
         if self.kick and self.t < self.kick[2]:
             c[self.kick[0]] += self.kick[1]
+
+        if self.stall and out.state == AUAState.CRITICAL:    # защита перехватила
+            self._stall_off(s)
+            self._event("защита: перехват", "orange")
         return c
+
+    def _stall_off(self, s):
+        """Выход из режима «Срыв»: удержание текущей высоты, контур скорости снова в работе."""
+        self.stall = False
+        self.h_hold, self.h_ref = True, float(np.clip(s[H], H_MIN, H_MAX))
+        self.speed.reset()
 
     def _poll_panel(self):
         while True:
@@ -164,6 +232,12 @@ class Bench(Game):
             elif kind == "va":
                 self.Va_ref = float(np.clip(self.Va_ref + val, VA_MIN, VA_MAX))
                 self.speed.set_Va_ref(self.Va_ref)
+            elif kind == "stall":
+                self.stall = True
+                self._event("срыв: δt = 0, θ_ref +15°", "red")
+            elif kind == "stall_off" and self.stall:
+                self._stall_off(self.state)
+                self._event("срыв: отмена", "gray")
             elif kind == "kick":
                 idx, amp = KICK[val]
                 self.kick = (idx, amp, self.t + KICK_T)
@@ -201,7 +275,14 @@ class Bench(Game):
             "Va_ref": spd.Va_ref, "Va": Va, "e_Va": spd.Va_ref - Va,
             "thr_trim": spd.trim_throttle, "dthr": c[1] - spd.trim_throttle, "thr": c[1],
             # рыскание
-            "beta": deg(beta), "dr": deg(c[3]), "alpha": deg(alpha),
+            "beta": deg(beta), "dr": deg(c[3]),
+            # защита по α
+            "alpha": deg(alpha), "a_warn": deg(self.prot.alpha_warn),
+            "a_crit": deg(self.prot.alpha_crit), "a_exit": deg(self.prot.alpha_exit),
+            "a_stall": deg(self.ac.alpha_stall),
+            "prot_on": self.prot.enabled, "prot_state": int(self.prot.state),
+            "theta_cmd": deg(self.theta_cmd), "stall": self.stall,
+            "ny": -aero_forces_moments(Va, alpha, s[Q], c[0], self.ac)[1] / (self.ac.mass * self.ac.g),
         }
         try:
             self.q_tel.put_nowait(msg)

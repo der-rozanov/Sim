@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Окно испытательного стенда САУ: вкладки по контурам (крен, тангаж/высота,
-скорость, рыскание). На каждой вкладке — блок-схема контура с ползунками
+скорость, рыскание, защита по α). На каждой вкладке — блок-схема контура с ползунками
 параметров, живыми значениями сигналов, кнопками воздействий и осциллограф.
 Работает в ОТДЕЛЬНОМ процессе (tkinter, стандартная библиотека) рядом с
 3D-окном scenarios/Bench3D.py.
@@ -10,6 +10,7 @@
     q_par  (окно → 3D):  ("par", {ключ: значение})  — все параметры САУ
                          ("chi" | "h" | "va", шаг)  — ступенька уставки (°, м, м/с)
                          ("kick", "de" | "da" | "dr") — толчок рулём на 1 с
+                         ("stall" | "stall_off", _)  — режим «Срыв» вкл / отмена
     q_tel  (3D → окно):  dict сигналов на конец кадра (см. Bench3D._telemetry)
 
 Модуль физики и САУ не импортирует — только рисует то, что пришло.
@@ -56,6 +57,10 @@ SLIDER_POS = {
     "beta_hold": (215, 80, 0, C_BOX),
     "beta_Kp": (215, 108, 110, C_BOX), "beta_Ki": (215, 165, 110, C_BOX),
     "dr_max": (480, 140, 80, C_SAT),
+    # защита по α
+    "prot_on": (1010, 60, 0, C_BOX),
+    "a_warn": (967, 88, 70, C_BOX), "a_crit": (967, 152, 70, C_BOX), "a_exit": (967, 216, 70, C_BOX),
+    "th_warn": (1053, 88, 70, C_BOX), "th_rec": (1053, 152, 70, C_BOX), "thr_rec": (1053, 216, 70, C_BOX),
 }
 
 # Осциллограф вкладки: (заголовок, [(ключ, цвет, подпись, пунктир)], шкала)
@@ -74,9 +79,16 @@ SCOPES = {
     "yaw": [("скольжение β, °", [("beta", C_MEAS, "β", 0)], ("sym", 2)),
             ("руль направления δr, °", [("dr", C_CTRL, "δr", 0)], ("sym", 2)),
             ("крен φ, °", [("phi_ref", C_REF, "φ_ref", 1), ("phi", C_MEAS, "φ", 0)], ("sym", 35))],
+    "prot": [("угол атаки α, °", [("a_warn", "#e69500", "α_пред", 1), ("a_crit", "#b00000", "α_крит", 1),
+                                  ("alpha", C_MEAS, "α", 0)], ("auto", 10)),
+             ("скорость Va, м/с", [("Va_ref", C_REF, "Va_ref", 1), ("Va", C_MEAS, "Va", 0)], ("auto", 6)),
+             ("тангаж θ, °", [("theta_cmd", "#999", "θ_ref (h)", 1), ("theta_ref", C_REF, "θ_ref*", 1),
+                              ("theta", C_MEAS, "θ", 0)], ("sym", 10)),
+             ("тяга δt", [("thr", C_CTRL, "δt", 0)], ("fix", 0.0, 1.0))],
 }
 
-TABS = [("roll", "Крен"), ("pitch", "Тангаж / высота"), ("speed", "Скорость"), ("yaw", "Рыскание (β)")]
+TABS = [("roll", "Крен"), ("pitch", "Тангаж / высота"), ("speed", "Скорость"), ("yaw", "Рыскание (β)"),
+        ("prot", "Защита по α")]
 
 
 class Panel:
@@ -94,7 +106,7 @@ class Panel:
         self.nb = ttk.Notebook(root)
         self.nb.pack(fill="both", expand=True)
         draw = {"roll": self._draw_roll, "pitch": self._draw_pitch,
-                "speed": self._draw_speed, "yaw": self._draw_yaw}
+                "speed": self._draw_speed, "yaw": self._draw_yaw, "prot": self._draw_prot}
         for name, title in TABS:
             f = tk.Frame(self.nb, bg="white")
             self.nb.add(f, text=f"  {title}  ")
@@ -143,6 +155,12 @@ class Panel:
         for name, (c, _, vals) in self.tabs.items():
             if c is cv:
                 vals.append((item, fmt))
+
+    def _dyn(self, cv, fn):
+        """Динамический элемент схемы: fn(холст, сигналы) вызывается каждый тик."""
+        for name, (c, _, vals) in self.tabs.items():
+            if c is cv:
+                vals.append((None, fn))
 
     @staticmethod
     def _title(cv, text):
@@ -314,6 +332,89 @@ class Panel:
         self._footer(cv, "δr = −(Kp·β + Ki·∫β);  флажок выкл — руль направления в нейтрали (δr = 0). "
                          "β измеряется истинный (без шума).")
 
+    def _draw_prot(self, cv):
+        A, V = self._arrow, self._val
+        self._title(cv, "Автомат защиты от выхода на закритические углы атаки (отключаемый)")
+        cv.create_text(50, 92, text="θ_ref", font=FONT_B, fill=C_REF)
+        cv.create_text(50, 108, text="(контур h)", font=FONT_S)
+        V(cv, 50, 126, lambda m: f"{m['theta_cmd']:+.1f}°", C_REF)
+        A(cv, 85, 100, 130, 100)
+
+        # автомат: диаграмма состояний
+        self._box(cv, 130, 40, 560, 245, "Автомат защиты по α")
+        nodes = {0: (195, 110, "НОРМ", "—"), 1: (345, 110, "ПРЕД", "θ_ref + Δθ"),
+                 2: (495, 110, "КРИТ", "θ_восст, δt_восст"), 3: (495, 205, "ВОССТ", "θ_восст, δt_восст")}
+        rects = {}
+        for k, (x, y, name, act) in nodes.items():
+            hw = 45 if k < 2 else 52                      # КРИТ/ВОССТ шире — длинная подпись
+            rects[k] = cv.create_rectangle(x - hw, y - 20, x + hw, y + 20, outline=C_LINE, width=1.5,
+                                           fill="white")
+            cv.create_text(x, y - 7, text=name, font=FONT_B)
+            cv.create_text(x, y + 9, text=act, font=FONT_S)
+        sm = ("Segoe UI", 7)
+        A(cv, 240, 103, 300, 103); cv.create_text(270, 92, text="α ≥ α_пред", font=sm)
+        A(cv, 300, 117, 240, 117); cv.create_text(270, 128, text="α < α_пред", font=sm)
+        A(cv, 390, 110, 443, 110); cv.create_text(420, 99, text="α ≥ α_крит", font=sm)
+        A(cv, 485, 130, 485, 185); cv.create_text(482, 158, text="α < α_крит", font=sm, anchor="e")
+        A(cv, 505, 185, 505, 130); cv.create_text(509, 158, text="рецидив", font=sm, anchor="w")
+        A(cv, 443, 205, 195, 205, 195, 130); cv.create_text(320, 196, text="α < α_выход", font=sm)
+        off = cv.create_text(345, 232, text="", font=FONT_B, fill="#c33")
+        colors = {0: "#c8f0c8", 1: "#ffe9a8", 2: "#ffc58a", 3: "#c6d8ff"}
+
+        def states(cv, m):
+            for k, r in rects.items():
+                on = m["prot_on"] and m["prot_state"] == k
+                cv.itemconfigure(r, fill=colors[k] if on else ("white" if m["prot_on"] else "#e4e4e4"))
+            cv.itemconfigure(off, text="" if m["prot_on"] else "ЗАЩИТА ВЫКЛЮЧЕНА")
+        self._dyn(cv, states)
+
+        # выходы автомата
+        A(cv, 560, 85, 640, 85)
+        cv.create_text(600, 74, text="θ_ref*", font=FONT_B, fill=C_REF)
+        V(cv, 600, 98, lambda m: f"{m['theta_ref']:+.1f}°", C_REF)
+        self._box(cv, 640, 55, 770, 120, "ПИД тангажа")
+        cv.create_text(705, 100, text="(вкладка «Тангаж»)", font=FONT_S)
+        A(cv, 770, 85, 820, 85)
+        self._box(cv, 640, 140, 770, 195, "САУ скорости")
+        cv.create_text(705, 177, text="(вкладка «Скорость»)", font=FONT_S)
+        A(cv, 770, 165, 820, 165)
+        A(cv, 560, 222, 820, 222)
+        cv.create_text(690, 211, text="δt_восст — только КРИТ / ВОССТ", font=FONT_S)
+        V(cv, 795, 152, lambda m: f"δt {m['thr']:.2f}", C_CTRL)
+        self._box(cv, 820, 55, 890, 245, "ЛА")
+        cv.create_text(855, 150, text="6DOF", font=FONT)
+        A(cv, 890, 150, 912, 150, 912, 268, 345, 268, 345, 246)        # α (истинный)
+        cv.create_text(895, 142, text="α", font=FONT_B, fill=C_MEAS, anchor="w")
+        V(cv, 620, 280, lambda m: f"α = {m['alpha']:+.1f}° (истинный)", C_MEAS)
+
+        # настройки
+        self._box(cv, 925, 40, 1095, 300, "Настройки")
+
+        # шкала α
+        g0, g1, gy = 130, 890, 312
+        a_lo, a_hi = -5.0, 35.0
+        gx = lambda a: g0 + (min(max(a, a_lo), a_hi) - a_lo) / (a_hi - a_lo) * (g1 - g0)
+        cv.create_text(70, gy + 8, text="шкала α", font=FONT_B)
+        zones = [cv.create_rectangle(0, gy, 0, gy + 16, width=0) for _ in range(4)]
+        cv.create_rectangle(g0, gy, g1, gy + 16, outline=C_LINE)
+        for a in range(-5, 36, 5):
+            cv.create_line(gx(a), gy + 16, gx(a), gy + 21, fill=C_LINE)
+            cv.create_text(gx(a), gy + 29, text=f"{a}°", font=FONT_S)
+        needle = cv.create_polygon(0, 0, 0, 0, 0, 0, fill="black")
+        ny = cv.create_text(1010, gy + 10, text="", font=("Consolas", 11, "bold"))
+
+        def gauge(cv, m):
+            edges = [a_lo, m["a_warn"], m["a_crit"], m["a_stall"], a_hi]
+            for z, c, a, b in zip(zones, ("#c8f0c8", "#ffe9a8", "#ffc58a", "#ff9c9c"), edges, edges[1:]):
+                cv.coords(z, gx(a), gy, gx(b), gy + 16)
+                cv.itemconfigure(z, fill=c)
+            x = gx(m["alpha"])
+            cv.coords(needle, x, gy + 15, x - 6, gy - 6, x + 6, gy - 6)
+            cv.itemconfigure(ny, text=f"n_y = {m['ny']:+.2f}")
+        self._dyn(cv, gauge)
+        self._footer(cv, "Зоны шкалы: норма / предупреждение (α_пред) / критический (α_крит) / срыв "
+                         "(α_срыв из параметров ЛА).  «Срыв» без защиты — сваливание; R в 3D-окне — сброс.")
+
     # --- ползунки и кнопки ----------------------------------------------------
     def _controls(self, tab, cv):
         for t, key, label, lo, hi, res, default in self.spec:
@@ -339,9 +440,9 @@ class Panel:
                 tk.Button(bar, text=f"{d:+g}{unit}", font=FONT, width=5,
                           command=lambda d=d: self._put((kind, d))).pack(side="left", padx=2, pady=4)
 
-        def kick(name, text):
+        def kick(name, text, kind="kick"):
             tk.Button(bar, text=text, font=FONT,
-                      command=lambda: self._put(("kick", name))).pack(side="left", padx=(14, 2))
+                      command=lambda: self._put((kind, name))).pack(side="left", padx=(14, 2))
 
         if tab in ("roll", "yaw"):
             group("Ступенька χ_ref", "chi", (-90, -30, -10, 10, 30, 90), "°")
@@ -354,6 +455,9 @@ class Panel:
             group("Ступенька Va_ref", "va", (-5, -1, 1, 5), "")
         if tab == "yaw":
             kick("dr", "Толчок δr 1 с")
+        if tab == "prot":
+            kick(None, "Срыв: δt = 0, θ_ref = +15°", "stall")
+            kick(None, "Отмена срыва", "stall_off")
         tk.Button(bar, text="Параметры по умолчанию", font=FONT,
                   command=lambda: self._defaults(tab)).pack(side="right", padx=8)
 
@@ -393,7 +497,10 @@ class Panel:
         cv, sc, vals = self.tabs[tab]
         if self.last:
             for item, fmt in vals:
-                cv.itemconfigure(item, text=fmt(self.last))
+                if item is None:
+                    fmt(cv, self.last)
+                else:
+                    cv.itemconfigure(item, text=fmt(self.last))
         self._scope(sc, SCOPES[tab])
         self.root.after(TICK_MS, self._tick)
 

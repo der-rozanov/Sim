@@ -44,7 +44,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from sim.config import AircraftParams, WindParams, SimConfig
 from sim.integrators import step_rk4
 from sim.wind import wind as _wind
-from sim.state import (air_data, earth_velocity, total_energy, full_controls,
+from sim.state import (air_data, earth_velocity, total_energy, full_controls, canonical_euler,
                        U, W, Q, THETA, X, H, P, PHI, PSI, Y, N_STATES, N_CONTROLS)
 from runner import Log, compute_trim, trim_state
 from flight_logger import FlightLogger
@@ -189,7 +189,8 @@ class Game(Entity):
             self.chi_ref = wrap_angle(self.chi_ref + sgn * CHI_STEP)
         elif not self.ap and base in ("up arrow", "down arrow"):
             sgn = 1 if base == "up arrow" else -1           # ↑ — нос вниз (δe > 0)
-            self.de_trim_man += sgn * TRIM_STEP
+            self.de_trim_man = float(np.clip(self.de_trim_man + sgn * TRIM_STEP,
+                                             self.ac.delta_e_min, self.ac.delta_e_max))
 
     # --- управление на шаг ----------------------------------------------------
     def _manual(self, dt):
@@ -198,6 +199,9 @@ class Game(Entity):
             DA_DEFL * (held_keys["d"] - held_keys["a"]),
             DR_DEFL * (held_keys["q"] - held_keys["e"]),
         ])
+        ac = self.ac                                    # рули не дальше упоров
+        cmd = np.clip(cmd, [ac.delta_e_min, -ac.delta_a_max, -ac.delta_r_max],
+                      [ac.delta_e_max, ac.delta_a_max, ac.delta_r_max])
         self.surf += np.clip(cmd - self.surf, -SURF_RATE * dt, SURF_RATE * dt)
         return np.array([self.surf[0], self.thr, self.surf[1], self.surf[2]])
 
@@ -253,7 +257,8 @@ class Game(Entity):
         if round(self.t / dt) % 10 == 0:
             self.trail.append(ned_to_u(s[X], s[Y], -s[H]))
             del self.trail[:-TRAIL_MAX]
-        self.state = step_rk4(s, self.controls, dt, self.t, self.ac, self.wind_call)
+        # После петель/бочек углы Эйлера копятся — приводим к канонич. виду (та же ориентация)
+        self.state = canonical_euler(step_rk4(s, self.controls, dt, self.t, self.ac, self.wind_call))
         self.t += dt
         p = ned_to_u(self.state[X], self.state[Y], -self.state[H])
         if self.state[H] < float(self.ter.height(p[0], p[2])):
