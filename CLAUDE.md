@@ -56,6 +56,8 @@ viz/                  — отображение (принимает Log, не �
     plotting.py       — plot_dynamics/trajectory/energy/integrator_check()
     animate.py        — animate_log()  [силуэт ЛА, анимация по Log]
     viewer.py         — FlightLogViewer; CLI: python viz/viewer.py [файл.flightlog]
+    viewer3d.py       — 3D-тренажёр (Ursina): рельеф, силуэт с рулями, 4 камеры;
+                        CLI: python viz/viewer3d.py [файл.flightlog] (по умолч. последний)
 
 scenarios/            — прогоны s1–s13; каждый: конфиг → run() → viz или logger.save()
     s1_steady_flight.py    — балансировка, тримовый горизонтальный полёт
@@ -141,6 +143,8 @@ from viz.plotting import plot_dynamics
   (MuJoCo, JSBSim и т.п. в код не тянуть — решение принято осознанно).
 - Интегратор пишется вручную (RK4 основной, Эйлер опционально).
 - scipy допустим только при явной необходимости и с согласования автора.
+- Исключение (РЕШ-16): `ursina` (Panda3D) — только в `viz/viewer3d.py` для
+  3D-тренажёра. В `sim/`, `control/`, `runner.py` не импортировать.
 
 ## Архитектурные правила (не нарушать)
 
