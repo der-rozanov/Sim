@@ -29,6 +29,7 @@ python viz/viewer.py results/<файл>.flightlog
 python viz/viewer3d.py                      # 3D-проигрыватель, последний лог из results/
 python scenarios/GameScenario3D.py          # пилотирование в 3D (ручной режим / САУ)
 python scenarios/GameScenario3D.py --map realmap   # то же над аэродромом [место] (спутниковый снимок)
+python scenarios/GameScenario3D.py --map realmap_osm   # [место] в стиле учебной карты (OpenStreetMap)
 ```
 
 ---
