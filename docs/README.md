@@ -9,6 +9,9 @@
 
 Симулятор решает две задачи:
 
+Диплом окончен (2026-10); тематика зонда на паузе, текущая цель — довести
+симулятор до нормы (DEV_PLAN.md, «Дорожная карта»). Исходные задачи:
+
 1. **Доказать тезис**: прямое измерение угла атаки (УА) зондом безопаснее и точнее, чем косвенная оценка `α ≈ θ − γ`. Ключевой эксперимент — парный прогон «с зондом / без зонда» в условиях сдвига ветра по высоте (сценарий С6).
 
 2. **Дать материал для приложения Б**: функция `derivatives()` — это прямая запись системы ОДУ, которую можно перенести в текст диссертации как есть.
@@ -18,50 +21,40 @@
 ## Быстрый старт
 
 ```bash
-# Демонстрационный прогон (тримовый полёт, 4 графика)
-python demo.py
-
-# Анимация
-python animate.py
-
-# Запустить все тесты
-python check.py
+python checks/check.py                      # проверки всех модулей (ALL CHECKS PASSED)
+python checks/check_lateral.py              # боковой канал в открытом контуре
+python scenarios/s1_steady_flight.py        # балансировочный полёт
+python scenarios/s12_coordinated_turn.py    # разворот с боковой САУ
+python viz/viewer.py results/<файл>.flightlog
 ```
 
 ---
 
-## Структура файлов
+## Структура файлов (актуально на 2026-10-06)
 
 ```
-Симулятор/
-│
-├── config.py          Параметры ЛА, датчиков, ветра, прогона
-├── state.py           Вектор состояния, СК, air_velocity, энергия
-├── aero.py            Модель CL / CD / Cm и аэросилы (с sigmoid-срывом)
-├── wind.py            Модель ветра: постоянный + сдвиг + порыв
-├── dynamics.py        Функция производных (ОДУ продольного канала)
-├── integrators.py     RK4 и Эйлер
-├── runner.py          Главный цикл, Log, compute_trim, trim_state
-│
-├── sensors.py         Псевдодатчики с шумом: гироскоп, барометр, СВС, зонд УА, GPS
-├── control.py         ПИД, каскадный PitchController (theta+q), PitchControlParams
-│
-├── plotting.py        Статические графики (4 функции)
-├── animate.py         Анимация тримового полёта по Log
-├── demo.py            Тримовый прогон + 4 статических графика
-├── demo_control.py    Анимация: срыв (тангаж 20°, газ=0) и вывод (−5°)
-├── alt_control_demo.py  Анимация: удержание высоты, скачки h_ref
-├── check.py           24 теста здравого смысла
-│
+Sim/
+├── CLAUDE.md            Правила проекта и текущий статус (читать первым)
+├── runner.py            Главный цикл run(), Log, compute_trim, trim_state
+├── flight_logger.py     Сохранение/загрузка .flightlog
+├── sim/                 Физика 6DOF: config, state, dynamics, aero, wind, integrators
+├── control/             САУ: controllers (ПИД тангажа/скорости, боковая), sensors,
+│                        estimators, aua (АУА), lqr (LQR)
+├── viz/                 plotting, animate, viewer (пока только продольный канал)
+├── scenarios/           s1–s13, lateral_common, GameScenario, lab6/
+├── checks/              check, check_lateral, check_polar, check_motor, check_optimal_speed
+├── rl_control/          экспериментальный RL-регулятор (вне основной линии)
 └── docs/
-    ├── README.md           (этот файл)
-    ├── physics.md          Физическая модель и уравнения движения
-    ├── aerodynamics.md     Аэродинамическая модель CL/CD/Cm
-    ├── architecture.md     Архитектура кода, зависимости, расширение
-    ├── control.md          Архитектура управления, настройка ПИД, демо-сценарии
-    ├── decisions.md        Архитектурные решения и их обоснование
-    ├── SENSORS.md          Датчики: модели, параметры, API
-    └── continuation.md     Контекст для следующего агента
+    ├── README.md           (этот файл — карта документации)
+    ├── DEV_PLAN.md         Статус этапов, интерфейсы, дорожная карта
+    ├── physics.md          Уравнения 6DOF, СК, знаки
+    ├── aerodynamics.md     CL/CD/Cm, CY/Croll/Cn, собственные движения
+    ├── architecture.md     Зависимости, Log, controls_fn, совместимость
+    ├── control.md          Продольная и боковая САУ, расчёт коэффициентов
+    ├── SENSORS.md          Псевдодатчики
+    ├── decisions.md        Журнал решений РЕШ-01…15
+    ├── scenarios_report.md Результаты С1–С13
+    └── continuation.md     Исторический (2026-06)
 ```
 
 ---
@@ -87,22 +80,6 @@ matplotlib
 
 ---
 
-## Быстрый старт
-
-```bash
-python demo.py             # тримовый полёт, 4 статических графика
-python animate.py          # анимация тримового полёта
-python demo_control.py     # анимация срыва и вывода
-python alt_control_demo.py # анимация удержания высоты
-python check.py            # 24 теста здравого смысла
-```
-
-Сохранить анимацию в GIF:
-```bash
-python demo_control.py stall.gif
-python alt_control_demo.py altitude.gif
-```
-
 ## Статус этапов
 
 | Этап | Статус | Содержание |
@@ -110,4 +87,4 @@ python alt_control_demo.py altitude.gif
 | 0 — Каркас | ✅ Готов | Структура, конфиг, вектор состояния, RK4, прогон |
 | 1 — База | ✅ Готов | Физика, аэро, датчики, каскадный ПИД тангажа, удержание высоты |
 | 2 — Слой доказательства | ✅ Готов | estimators.py, парный прогон "с зондом / без" (s9) |
-| 3 — Фичи | 🔄 В работе | LQR (s11) ✅; модель 6DOF — физика бокового канала ✅ (docs/physics.md); боковая САУ ✅ (s12, s13); наблюдатель УА ⬜ |
+| 3 — Фичи | 🔄 В работе (фаза «довести до нормы», см. DEV_PLAN) | LQR (s11) ✅; модель 6DOF — физика бокового канала ✅ (docs/physics.md); боковая САУ ✅ (s12, s13); наблюдатель УА ⬜ |

@@ -40,25 +40,18 @@ class SensorParams:
 
 ### Использование
 
-1. **Включить/отключить датчики:**
-   ```python
-   cfg = SimConfig(enable_sensors=True)  # или False
-   ```
+Датчики — чистые функции; сценарий вызывает их сам внутри `controls_fn`
+(в `run()` датчиков нет — физика получает истинное состояние):
 
-2. **Задать свои параметры шума:**
-   ```python
-   sensors = SensorParams(
-       gyro_noise=0.005,      # увеличить шум гироскопа
-       probe_noise=0.02,      # шум зонда УА
-       baro_noise=0.0,        # отключить шум барометра
-   )
-   log = run(..., sensor_params=sensors)
-   ```
+```python
+sp  = SensorParams(gyro_noise=0.005, baro_noise=0.0)   # свои параметры шума
+rng = np.random.default_rng(seed=42)                   # воспроизводимость — через seed rng
 
-3. **Воспроизводимость:** seed в SimConfig
-   ```python
-   cfg = SimConfig(sensor_seed=42)  # одинаковый шум между прогонами
-   ```
+def controls_fn(t, state, Va, alpha):
+    q_meas = measure_gyro(state[Q], sp.gyro_bias, sp.gyro_noise, rng)
+    h_meas = measure_altitude(state[H], sp.baro_bias, sp.baro_noise, rng)
+    ...
+```
 
 ### Физическая мотивация
 
@@ -69,11 +62,12 @@ class SensorParams:
 
 ### Log структура
 
-После прогона лог содержит:
-- `log.state`, `log.Va`, `log.alpha` — истинные значения
-- `log.q_meas`, `log.h_meas`, `log.Va_meas`, `log.alpha_meas` — измеренные
+`Log` хранит только истинные значения (`log.state`, `log.Va`, `log.alpha`,
+`log.beta`). Измерения датчиков в `Log` не попадают — сценарий собирает их в
+свои буферы и при необходимости передаёт в `FlightLogger.save(...)`
+(`alpha_probe`, `alpha_est`, ...).
 
-### Следующий этап
+### Следующий этап (исторический текст)
 
 **Управление (control.py):**
 - Каскадная САУ из 3 ПИД-контуров
