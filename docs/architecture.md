@@ -24,7 +24,7 @@ config.py            ← нет зависимостей (только dataclass
                             │
                             ├── plotting.py       ← state, config
                             ├── animate.py        ← state (только индексы)
-                            ├── viewer3d.py       ← flight_logger (только .flightlog), ursina
+                            ├── viewer3d.py       ← flight_logger (только .flightlog), world3d, ursina
                             └── scenarios/
                                 ├── s1..s5        ← runner, control, sensors, config
                                 ├── s6            ← runner, control, sensors, config

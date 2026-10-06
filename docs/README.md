@@ -28,6 +28,7 @@ python scenarios/s12_coordinated_turn.py    # разворот с боковой
 python viz/viewer.py results/<файл>.flightlog
 python viz/viewer3d.py                      # 3D-проигрыватель, последний лог из results/
 python scenarios/GameScenario3D.py          # пилотирование в 3D (ручной режим / САУ)
+python scenarios/GameScenario3D.py --map kainki   # то же над аэродромом Каинки (спутниковый снимок)
 ```
 
 ---

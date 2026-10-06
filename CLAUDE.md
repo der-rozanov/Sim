@@ -56,8 +56,12 @@ viz/                  — отображение (принимает Log, не �
     plotting.py       — plot_dynamics/trajectory/energy/integrator_check()
     animate.py        — animate_log()  [силуэт ЛА, анимация по Log]
     viewer.py         — FlightLogViewer; CLI: python viz/viewer.py [файл.flightlog]
-    viewer3d.py       — 3D-тренажёр (Ursina): рельеф, силуэт с рулями, 4 камеры;
-                        CLI: python viz/viewer3d.py [файл.flightlog] (по умолч. последний)
+    world3d.py        — мир 3D: карты default (10×10 км: ВПП, река, озеро, деревня, холм,
+                        леса) и kainki (спутниковый снимок 4×4 км на рельефе SRTM)
+                        + бесконечная равнина вокруг; make_world(имя), World.height(X, Z)
+    mapdata.py        — загрузка снимка Esri и рельефа SRTM в viz/map_cache/ (не в git)
+    viewer3d.py       — 3D-тренажёр (Ursina): мир, силуэт с рулями, 4 камеры;
+                        CLI: python viz/viewer3d.py [файл.flightlog] [--map kainki]
 
 scenarios/            — прогоны s1–s13; каждый: конфиг → run() → viz или logger.save()
     s1_steady_flight.py    — балансировка, тримовый горизонтальный полёт
@@ -146,8 +150,10 @@ from viz.plotting import plot_dynamics
   (MuJoCo, JSBSim и т.п. в код не тянуть — решение принято осознанно).
 - Интегратор пишется вручную (RK4 основной, Эйлер опционально).
 - scipy допустим только при явной необходимости и с согласования автора.
-- Исключение (РЕШ-16): `ursina` (Panda3D) — только в `viz/viewer3d.py` и
-  `scenarios/GameScenario3D.py` (3D-тренажёр). В `sim/`, `control/`, `runner.py` не импортировать.
+- Исключение (РЕШ-16): `ursina` (Panda3D, тянет pillow) — только в `viz/viewer3d.py`,
+  `viz/world3d.py`, `viz/mapdata.py` и `scenarios/GameScenario3D.py` (3D-тренажёр).
+  В `sim/`, `control/`, `runner.py` не импортировать. Спутниковые тайлы Esri — только
+  локальный кэш `viz/map_cache/` (в .gitignore), в репозиторий не класть.
 
 ## Архитектурные правила (не нарушать)
 

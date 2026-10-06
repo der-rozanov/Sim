@@ -51,7 +51,7 @@ from flight_logger import FlightLogger
 from control.controllers import (PitchController, PitchControlParams,
                                  SpeedController, SpeedControlParams,
                                  LateralController, LateralControlParams, wrap_angle)
-from viz.viewer3d import (View3D, Terrain, make_app, ned_to_u, body_axes,
+from viz.viewer3d import (View3D, make_app, MAPS, ned_to_u, body_axes,
                           screenshot_and_quit)
 from ursina import Entity, application, held_keys, time as utime
 
@@ -93,6 +93,7 @@ class Game(Entity):
         self.wind_call = lambda h, t: _wind(h, t, wind_params)
         self.alpha_trim, self.de_trim, self.thr_trim = compute_trim(aircraft, cfg.Va0)
         self.s0 = trim_state(aircraft, cfg)
+        self.s0[PSI] = terrain.start_psi          # старт вдоль ВПП карты
         self.ter = terrain
         self.view = View3D(aircraft.b, aircraft.c, terrain, self.HELP, cam=cam, hud_lines=13)
 
@@ -311,15 +312,14 @@ def main():
     ap.add_argument("--cam", type=int, default=1, choices=[1, 2, 3, 4])
     ap.add_argument("--ap", action="store_true", help="старт с включённой САУ")
     ap.add_argument("--shot", default=None, help="скриншот через ~300 кадров и выход")
+    ap.add_argument("--map", default="default", choices=list(MAPS), help="карта мира")
     a = ap.parse_args()
 
     aircraft = AircraftParams()
     wind_params = WindParams(Vw_const=a.wind_n, Vw_cross=a.wind_e)
     cfg = SimConfig(Va0=30.0, h0=a.h0, theta0=0.0, dt=0.01, t_end=1e9)
 
-    start = ned_to_u(0.0, 0.0, -a.h0)
-    app, terrain = make_app("3D: пилотирование",
-                            lambda: Terrain.endless(start, ned_to_u(1.0, 0.0, 0.0)))
+    app, terrain = make_app(f"3D: пилотирование — {MAPS[a.map].title}", a.map)
     game = Game(aircraft, wind_params, cfg, terrain, cam=a.cam, ap=a.ap, shot=a.shot)
     try:
         app.run()

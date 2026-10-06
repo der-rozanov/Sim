@@ -40,13 +40,13 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from flight_logger import load_log
+from viz.world3d import World, make_world, MAPS
 
 from ursina import (Ursina, Entity, Mesh, Text, Sky, Vec3, Color, camera, scene,
                     window, mouse, held_keys, application, time as utime,
                     DirectionalLight, AmbientLight)
 from ursina.shaders.lit_with_shadows_shader import lit_with_shadows_shader
 from ursina.shaders.unlit_shader import unlit_shader
-from ursina.shaders.unlit_with_fog_shader import unlit_with_fog_shader
 
 ALERT_LABEL = ["НОРМ", "ПРЕД", "КРИТ", "СРЫВ"]
 ALERT_CLR   = [(0.55, 0.95, 0.55), (1.0, 0.9, 0.3), (1.0, 0.6, 0.2), (1.0, 0.3, 0.3)]
@@ -118,204 +118,6 @@ class Track:
         return np.array([np.interp(t, self.t, self.pos[:, k]) for k in range(3)])
 
 
-
-
-# ===========================================================================
-# Подстилающая поверхность (процедурная, детерминированная)
-# ===========================================================================
-
-class Terrain:
-    """
-    Рельеф: поля, холмы ±12 м, лес, ВПП в точке старта. Освещение «запечено» в цвет.
-
-    Два режима:
-      for_track(track) — карта вокруг траектории лога + гряда гор по краю;
-      endless(...)     — периодическая карта (квадрат period × period) для
-                         свободного полёта: сетка 3×3 квадрата переставляется
-                         под ЛА (follow), шов незаметен — высота, поля, лес и ВПП
-                         повторяются с периодом period.
-    Высота поверхности — height(X, Z) в координатах Ursina.
-    """
-
-    TILE = 80           # клеток на квадрат в периодическом режиме
-
-    def __init__(self, cx, cz, half, start_pos, start_dir, period=None, seed=7):
-        self.cx, self.cz, self.half, self.period = cx, cz, half, period
-        self.rng = np.random.default_rng(seed)
-        self.rw_pos = np.asarray(start_pos, float).copy()
-        d = np.array([start_dir[0], 0.0, start_dir[2]])
-        self.rw_dir = d / (np.linalg.norm(d) + 1e-9)
-        self.rw_len, self.rw_w = 600.0, 30.0
-        self.root = None
-
-    @classmethod
-    def for_track(cls, track: "Track"):
-        p = track.pos
-        cx = 0.5 * (p[:, 0].min() + p[:, 0].max())
-        cz = 0.5 * (p[:, 2].min() + p[:, 2].max())
-        half = 0.5 * max(np.ptp(p[:, 0]), np.ptp(p[:, 2])) + 3000.0
-        return cls(cx, cz, half, p[0], track.nose[0])
-
-    @classmethod
-    def endless(cls, start_pos, start_dir, period=5000.0):
-        return cls(start_pos[0], start_pos[2], 1.5 * period, start_pos, start_dir,
-                   period=period)
-
-    # --- высота поверхности -------------------------------------------
-    def _wrap(self, d):
-        if self.period is None:
-            return d
-        P = self.period
-        return (d + 0.5 * P) % P - 0.5 * P
-
-    def _runway_mask(self, X, Z):
-        dx = self._wrap(X - self.rw_pos[0])
-        dz = self._wrap(Z - self.rw_pos[2])
-        along = dx * self.rw_dir[0] + dz * self.rw_dir[2]
-        across = -dx * self.rw_dir[2] + dz * self.rw_dir[0]
-        a = np.clip((np.abs(along) - 0.5 * self.rw_len) / 300.0, 0, 1)
-        c = np.clip((np.abs(across) - 3 * self.rw_w) / 300.0, 0, 1)
-        return np.maximum(a, c)                      # 0 на ВПП, 1 вдали
-
-    def height(self, X, Z):
-        X, Z = np.asarray(X, float), np.asarray(Z, float)
-        if self.period is not None:
-            # те же холмы, но с целым числом волн на период
-            w = 2 * np.pi / self.period
-            hills = (6.0 * np.sin(4 * w * X + 1.3) * np.cos(3 * w * Z)
-                     + 4.0 * np.sin(8 * w * (X + Z)) + 2.5 * np.cos(13 * w * (X - 2 * Z)))
-            return hills * self._runway_mask(X, Z)
-        hills = (6.0 * np.sin(X / 180 + 1.3) * np.cos(Z / 230)
-                 + 4.0 * np.sin((X + Z) / 97) + 2.5 * np.cos((X - 2 * Z) / 61))
-        r = np.maximum(np.abs(X - self.cx), np.abs(Z - self.cz)) / self.half
-        ang = np.arctan2(Z - self.cz, X - self.cx)
-        ridge = np.clip((r - 0.62) / 0.33, 0, 1) ** 1.5
-        mountains = ridge * (260 + 120 * np.sin(5 * ang) + 60 * np.sin(13 * ang + 1)
-                             + 25 * np.sin(X / 70) * np.cos(Z / 85))
-        return hills * self._runway_mask(X, Z) + mountains
-
-    # --- сетка ----------------------------------------------------------
-    def build(self) -> Entity:
-        if self.period is None:
-            n = int(np.clip(2 * self.half / 40.0, 80, 220))     # клетка ≈ 40 м
-            n_tile, tiles = n, 1
-        else:
-            n_tile, tiles = self.TILE, 3
-            n = n_tile * tiles
-        x0, z0 = self.cx - self.half, self.cz - self.half
-        dx = 2 * self.half / n
-        xs, zs = x0 + dx * np.arange(n + 1), z0 + dx * np.arange(n + 1)
-        X, Z = np.meshgrid(xs, zs, indexing="ij")
-        Y = self.height(X, Z)
-
-        # каждый квадрат — свои 4 вершины (чёткие границы полей)
-        v00 = np.stack([X[:-1, :-1], Y[:-1, :-1], Z[:-1, :-1]], -1)
-        v10 = np.stack([X[1:, :-1],  Y[1:, :-1],  Z[1:, :-1]], -1)
-        v11 = np.stack([X[1:, 1:],   Y[1:, 1:],   Z[1:, 1:]], -1)
-        v01 = np.stack([X[:-1, 1:],  Y[:-1, 1:],  Z[:-1, 1:]], -1)
-        nrm = np.cross(v01 - v00, v10 - v00)
-        nrm /= np.linalg.norm(nrm, axis=-1, keepdims=True)
-        nrm *= np.sign(nrm[..., 1:2])                       # нормаль вверх
-        shade = 0.55 + 0.45 * np.clip(nrm @ SUN_DIR, 0, 1)
-
-        # поля: участки 4×4 клетки, тип случайный; в периодическом режиме —
-        # раскраска одного квадрата, повторённая tiles×tiles раз
-        palette = np.array([[0.42, 0.62, 0.28], [0.52, 0.68, 0.30], [0.70, 0.68, 0.38],
-                            [0.36, 0.55, 0.25], [0.62, 0.55, 0.35], [0.20, 0.40, 0.18]])
-        nf = -(-n_tile // 4)
-        ftile = self.rng.integers(0, len(palette), (nf, nf))
-        ftile = np.repeat(np.repeat(ftile, 4, 0), 4, 1)[:n_tile, :n_tile]
-        btile = 0.92 + 0.16 * self.rng.random((n_tile, n_tile, 1))
-        ftype = np.tile(ftile, (tiles, tiles))
-        col = palette[ftype] * np.tile(btile, (tiles, tiles, 1))
-        yc = 0.25 * (v00[..., 1] + v10[..., 1] + v11[..., 1] + v01[..., 1])
-        rock = np.clip((yc - 40) / 60, 0, 1)[..., None]
-        snow = np.clip((yc - 230) / 40, 0, 1)[..., None]
-        col = col * (1 - rock) + np.array([0.50, 0.47, 0.43]) * rock
-        col = col * (1 - snow) + np.array([0.95, 0.96, 0.98]) * snow
-        col = col * shade[..., None]
-
-        verts = np.stack([v00, v10, v11, v01], axis=2).reshape(-1, 3)
-        cols = np.repeat(col.reshape(-1, 3), 4, axis=0)
-        base = np.arange(n * n) * 4
-        tris = np.stack([base, base + 1, base + 2, base, base + 2, base + 3], -1).ravel()
-
-        self.root = Entity()
-        _mesh_entity(verts, tris, cols, parent=self.root)
-        offs = [0.0] if self.period is None else [-self.period, 0.0, self.period]
-        for ox in offs:
-            for oz in offs:
-                self._build_runway(ox, oz).parent = self.root
-        forest = ftile == len(palette) - 1
-        self._build_trees(x0, z0, dx, forest, tiles, n_tile).parent = self.root
-        return self.root
-
-    def follow(self, pos):
-        """Периодический режим: сдвинуть карту на целое число периодов под ЛА."""
-        if self.period is None or self.root is None:
-            return
-        P = self.period
-        self.root.x = P * np.round((pos[0] - self.cx) / P)
-        self.root.z = P * np.round((pos[2] - self.cz) / P)
-
-    def _build_runway(self, ox=0.0, oz=0.0):
-        d, L, W = self.rw_dir, self.rw_len, self.rw_w
-        side = np.array([d[2], 0, -d[0]])
-        c = np.array([self.rw_pos[0] + ox, 0.3, self.rw_pos[2] + oz])
-        q = [c + s1 * 0.5 * L * d + s2 * 0.5 * W * side
-             for s1, s2 in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
-        verts, cols, tris = list(q), [(0.32, 0.32, 0.34)] * 4, [0, 1, 2, 0, 2, 3]
-        # осевая разметка
-        for k in np.arange(-0.45, 0.45, 0.06):
-            a = c + k * L * d + np.array([0, 0.05, 0])
-            m = [a + s1 * 7.5 * d + s2 * 0.6 * side
-                 for s1, s2 in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
-            i0 = len(verts)
-            verts += m; cols += [(0.95, 0.95, 0.95)] * 4
-            tris += [i0, i0 + 1, i0 + 2, i0, i0 + 2, i0 + 3]
-        return _mesh_entity(np.array(verts), np.array(tris), np.array(cols))
-
-    def _build_trees(self, x0, z0, dx, forest, tiles, n_tile):
-        cells = np.argwhere(forest)
-        if len(cells) == 0:
-            return Entity()
-        pick = cells[self.rng.integers(0, len(cells), 2500 if tiles == 1 else 1200)]
-        px = x0 + (pick[:, 0] + self.rng.random(len(pick))) * dx
-        pz = z0 + (pick[:, 1] + self.rng.random(len(pick))) * dx
-        hgt0 = 8 + 7 * self.rng.random(len(px))
-        if tiles > 1:                                          # копии в каждый квадрат
-            P = n_tile * dx
-            k = np.arange(tiles) * P
-            px, pz = np.broadcast_arrays(px[:, None, None] + k[None, :, None],
-                                         pz[:, None, None] + k[None, None, :])
-            px, pz = px.ravel(), pz.ravel()
-            hgt0 = np.repeat(hgt0, tiles * tiles)
-        keep = self._runway_mask(px, pz) > 0.5
-        px, pz, hgt = px[keep], pz[keep], hgt0[keep]
-        py = self.height(px, pz)
-        rad = 0.3 * hgt
-        verts, cols = [], []
-        base_c = np.array([0.13, 0.30, 0.12])
-        for k in range(4):                                    # 4 грани пирамиды
-            a0, a1 = k * np.pi / 2, (k + 1) * np.pi / 2
-            p0 = np.stack([px + rad * np.cos(a0), py, pz + rad * np.sin(a0)], -1)
-            p1 = np.stack([px + rad * np.cos(a1), py, pz + rad * np.sin(a1)], -1)
-            tp = np.stack([px, py + hgt, pz], -1)
-            mid = 0.5 * (a0 + a1)
-            sh = 0.6 + 0.4 * max(0.0, np.cos(mid) * SUN_DIR[0] + np.sin(mid) * SUN_DIR[2])
-            verts.append(np.stack([p0, p1, tp], 1))
-            cols.append(np.broadcast_to(base_c * sh, (len(px), 3, 3)))
-        verts = np.concatenate(verts).reshape(-1, 3)
-        cols = np.concatenate(cols).reshape(-1, 3)
-        return _mesh_entity(verts, np.arange(len(verts)), cols)
-
-
-def _mesh_entity(verts, tris, cols, **kw):
-    mesh = Mesh(vertices=[tuple(v) for v in verts.tolist()],
-                triangles=tris.tolist(),
-                colors=[Color(r, g, b, 1) for r, g, b in cols.tolist()],
-                static=True)
-    return Entity(model=mesh, shader=unlit_with_fog_shader, double_sided=True, **kw)
 
 
 # ===========================================================================
@@ -428,7 +230,7 @@ class View3D:
 
     CAM_NAMES = {1: "за хвостом", 2: "из кабины", 3: "облёт мышью", 4: "обзор сверху"}
 
-    def __init__(self, b: float, c: float, terrain: Terrain, help_text: str,
+    def __init__(self, b: float, c: float, terrain: World, help_text: str,
                  cam: int = 1, hud_lines: int = 11):
         self.b, self.ter = b, terrain
         self.cam_mode, self.big = cam, False
@@ -457,14 +259,15 @@ class View3D:
                               color=Color(1, 0.85, 0.4, 1))
         self.help = Text(parent=camera.ui, position=window.bottom_left + Vec3(0.02, 0.075, 0),
                          scale=0.7, font=font, color=Color(1, 1, 1, 0.75), text=help_text)
+        if terrain.attribution:                 # условие использования снимков
+            Text(parent=camera.ui, position=window.bottom_right + Vec3(-0.01, 0.012, 0),
+                 origin=(0.5, -0.5), scale=0.55, font=font, color=Color(1, 1, 1, 0.6),
+                 text=terrain.attribution)
         self.set_fog()
 
     def set_fog(self):
         # шейдер Ursina: доля тумана = расстояние / (end − start); в обзоре — реже
-        k = 4.0 if self.cam_mode == 4 else 1.6
-        if self.ter.period is not None:
-            k = 3.0 if self.cam_mode == 4 else 0.67     # край сетки ≥ 1 периода от ЛА
-        scene.fog_density = (0.0, k * self.ter.half)
+        scene.fog_density = (0.0, 25000.0 if self.cam_mode == 4 else 9000.0)
 
     def handle_key(self, key) -> bool:
         """Клавиши камеры; True — клавиша обработана."""
@@ -540,17 +343,17 @@ class View3D:
         self.event_txt.text = event
 
 
-def make_app(title: str, terrain_factory):
-    """Окно Ursina, небо, свет; terrain_factory() -> Terrain (строится после окна)."""
+def make_app(title: str, map_name: str = "default"):
+    """Окно Ursina, небо, свет, мир (viz/world3d.py). Возвращает (app, world)."""
     app = Ursina(title=title, size=(1600, 900), borderless=False, development_mode=False)
     window.color = Color(*FOG_CLR, 1)
     camera.fov = 70
-    camera.clip_plane_near = 0.1
+    camera.clip_plane_near = 0.3      # точность глубины на дальних планах
     camera.clip_plane_far = 40000
-    terrain = terrain_factory()
+    terrain = make_world(map_name)
     terrain.build()
     sky = Sky()
-    sky.scale = 4 * terrain.half
+    sky.scale = 30000
     scene.fog_color = Color(*FOG_CLR, 1)
     sun = DirectionalLight(shadows=False)
     sun.look_at(Vec3(*(-SUN_DIR)))
@@ -574,7 +377,7 @@ class Player3D(Entity):
     HELP = ("Пробел пауза  ←/→ ±5 с  ↑/↓ скорость  R начало  "
             "1-4 камера  M масштаб  T весь путь  Esc выход")
 
-    def __init__(self, track: Track, terrain: Terrain, speed=1.0, cam=1, shot=None):
+    def __init__(self, track: Track, terrain: World, speed=1.0, cam=1, shot=None):
         super().__init__()
         self.tr = track
         self.t_play, self.speed, self.paused = float(track.t[0]), speed, False
@@ -664,10 +467,9 @@ class Player3D(Entity):
 # ===========================================================================
 
 def play(path: str, speed: float = 1.0, cam: int = 1, shot: str = None,
-         t_start: float = None):
+         t_start: float = None, map_name: str = "default"):
     track = Track(load_log(path))
-    app, terrain = make_app(f"3D: {os.path.basename(path)}",
-                            lambda: Terrain.for_track(track))
+    app, terrain = make_app(f"3D: {os.path.basename(path)}", map_name)
     player = Player3D(track, terrain, speed=speed, cam=cam, shot=shot)
     if t_start is not None:
         player.t_play = float(t_start)
@@ -688,8 +490,9 @@ def main():
     ap.add_argument("--cam", type=int, default=1, choices=[1, 2, 3, 4], help="камера")
     ap.add_argument("--at", type=float, default=None, help="начать с момента t, с")
     ap.add_argument("--shot", default=None, help="сохранить скриншот и выйти (для отчётов)")
+    ap.add_argument("--map", default="default", choices=list(MAPS), help="карта мира")
     a = ap.parse_args()
-    play(a.path or _latest_log(), a.speed, a.cam, a.shot, a.at)
+    play(a.path or _latest_log(), a.speed, a.cam, a.shot, a.at, a.map)
 
 
 if __name__ == "__main__":
