@@ -4,7 +4,10 @@
 
   default — придуманная карта 10 × 10 км с ориентирами (DefaultMap);
   kainki  — аэродром Каинки: спутниковый снимок 4 × 4 км на реальном рельефе
-            (KainkiMap; данные — viz/mapdata.py, локальный кэш).
+            (KainkiMap; данные — viz/mapdata.py, локальный кэш);
+  kainki_osm — те же 4 × 4 км и рельеф, но в стиле default: вода, леса, болото,
+            посёлок, дороги и здания — из OpenStreetMap (KainkiOsmMap,
+            viz/osmdata.py), поля — случайные лоскуты.
 
 Координаты Ursina (см. viewer3d.py): X — восток, Y — вверх, Z — север, м.
 Старт всех сценариев — (0, h0, 0), над ВПП карты; курс старта игры — start_psi.
@@ -350,6 +353,7 @@ class KainkiMap(World):
 
     name, title = "kainki", "аэродром Каинки (спутниковый снимок)"
     attribution = "Снимок: Esri World Imagery (© Esri, Maxar, Earthstar Geographics); рельеф: SRTM"
+    CACHE_NAME = "kainki"             # кэш снимка/рельефа/OSM — общий для kainki и kainki_osm
     LAT0, LON0, SIZE = 55.644685, 48.507016, 4000.0
     RUNWAY_PSI_DEG = 107.7            # основная полоса; старт игры — вдоль неё
     # Аэродром, м от центра (X — восток, Z — север); по скриншотам автора, ±10 м
@@ -372,7 +376,7 @@ class KainkiMap(World):
     def __init__(self, seed: int = 7):
         super().__init__(seed)
         from viz.mapdata import prepare
-        d = prepare(self.name, self.LAT0, self.LON0, self.SIZE)
+        d = prepare(self.CACHE_NAME, self.LAT0, self.LON0, self.SIZE)
         self.cache = d
         self.dem = np.load(os.path.join(d, "dem.npy")).astype(float)
         self.meta = json.load(open(os.path.join(d, "meta.json"), encoding="utf-8"))
@@ -462,7 +466,146 @@ class KainkiMap(World):
         return _merge(parts)
 
 
-MAPS = {"default": DefaultMap, "kainki": KainkiMap}
+class KainkiOsmMap(KainkiMap):
+    """
+    Каинки в «мультяшном» стиле карты default: рельеф SRTM (как у KainkiMap),
+    раскраска — по контурам OpenStreetMap, нарисованным в текстуру
+    (TEX_PX × TEX_PX, ≈ 2 м/пикс): вода, леса, кустарник, болото, посёлок, пашня,
+    луга, реки/ручьи и дороги. Где OSM ничего не говорит — случайные поля.
+    3D: ели в лесах (по маске леса), дома по контурам зданий OSM (ориентированный
+    прямоугольник), модель аэродрома — как у KainkiMap. Освещение — гранями (20 м).
+    """
+
+    name, title = "kainki_osm", "аэродром Каинки (OpenStreetMap)"
+    attribution = "Карта: © участники OpenStreetMap (ODbL); рельеф: SRTM"
+    plain_tint = 1.0
+    TEX_PX = 2048
+    COLORS = dict(water=(0.25, 0.45, 0.62), wood=(0.19, 0.36, 0.16), scrub=(0.33, 0.48, 0.24),
+                  wetland=(0.36, 0.50, 0.40), residential=(0.52, 0.62, 0.34),
+                  meadow=(0.40, 0.60, 0.27), road=(0.40, 0.38, 0.35), track=(0.60, 0.52, 0.38))
+    # луг аэродрома (в OSM его нет): центр, полуоси, курс — по скриншотам автора
+    AIRFIELD_GRASS = ((-120.0, 15.0), 290.0, 120.0, 107.7)
+
+    def _build_map(self):
+        from viz.osmdata import load
+        self.areas, self.lines, self.buildings = load(self.CACHE_NAME, self.LAT0, self.LON0, self.SIZE)
+        img, masks = self._render()
+        S, h = self.SIZE, self.CELL
+        n = int(S / h)
+        s = -S / 2 + h * np.arange(n + 1)
+        X, Z = np.meshgrid(s, s, indexing="ij")
+        Y = self.height(X, Z)
+        root = Entity()
+        g = _grid_mesh(X, Y, Z, np.ones(X[:-1, :-1].shape + (3,)), uv_size=S)
+        tex = Texture(img)
+        tex.filtering = "bilinear"
+        tex.filtering = "mipmap"
+        g.texture = tex
+        g.parent = root
+        self._build_osm_trees(masks).parent = root
+        self._build_osm_buildings().parent = root
+        self._build_airfield().parent = root
+        return root
+
+    # --- текстура ------------------------------------------------------------
+    def _px(self, pts):
+        S, N = self.SIZE, self.TEX_PX
+        pts = np.asarray(pts, float)
+        return [((e + S / 2) / S * N, (S / 2 - nn) / S * N) for e, nn in pts]
+
+    def _render(self):
+        from PIL import Image, ImageDraw, ImageChops
+        S, N, rng = self.SIZE, self.TEX_PX, self.rng
+        to8 = lambda c: tuple(int(255 * v) for v in c)
+        img = Image.new("RGB", (N, N), to8(self.COLORS["meadow"]))
+        dr = ImageDraw.Draw(img)
+        # фон: лоскуты полей — повёрнутая сетка, узлы смещены случайно, но общие
+        # для соседних полей (без щелей); культура — случайная
+        a = np.radians(18.0)
+        R = np.array([[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]])
+        cw, ch, ni, nj = 220.0, 170.0, 17, 21
+        I, J = np.meshgrid(np.arange(-ni, ni + 1), np.arange(-nj, nj + 1), indexing="ij")
+        nodes = np.stack([I * cw, J * ch], -1) + rng.uniform(-25, 25, I.shape + (2,))
+        nodes = nodes @ R.T
+        for i in range(2 * ni):
+            for j in range(2 * nj):
+                q = [nodes[i, j], nodes[i + 1, j], nodes[i + 1, j + 1], nodes[i, j + 1]]
+                c = PALETTE["crops"][rng.integers(len(PALETTE["crops"]))] * rng.uniform(0.94, 1.06)
+                dr.polygon(self._px(q), fill=to8(np.clip(c, 0, 1)))
+        # луг аэродрома
+        (cx, cz), ra, rb, b = self.AIRFIELD_GRASS
+        t = np.linspace(0, 2 * np.pi, 48)
+        u = np.array([np.sin(np.radians(b)), np.cos(np.radians(b))])
+        v = np.array([u[1], -u[0]])
+        ell = np.array([cx, cz]) + np.outer(ra * np.cos(t), u) + np.outer(rb * np.sin(t), v)
+        dr.polygon(self._px(ell), fill=to8(self.COLORS["meadow"]))
+        # площади OSM — масками (внутренние контуры вырезаются)
+        masks = {}
+        for cls in ("farmland", "meadow", "residential", "wetland", "scrub", "wood", "water"):
+            m = Image.new("L", (N, N), 0)
+            for outer, inner in self.areas.get(cls, []):
+                tmp = Image.new("L", (N, N), 0)
+                td = ImageDraw.Draw(tmp)
+                for ring in outer:
+                    td.polygon(self._px(ring), fill=255)
+                for ring in inner:
+                    td.polygon(self._px(ring), fill=0)
+                m = ImageChops.lighter(m, tmp)
+            masks[cls] = m
+            if cls == "farmland":                 # пашня — своим цветом культуры
+                col = PALETTE["crops"][2]
+            else:
+                col = self.COLORS[cls]
+            img.paste(to8(col), mask=m)
+        # линии: ручьи (реки — уже площадями), дороги
+        for pts, w, kind in sorted(self.lines, key=lambda x: x[2] != "water"):
+            if kind == "water" and w >= 20 and self.areas.get("water"):
+                continue
+            col = self.COLORS["water" if kind == "water" else kind]
+            dr.line(self._px(pts), fill=to8(col), width=max(1, int(round(w / S * N))), joint="curve")
+        return img, masks
+
+    # --- 3D: лес и дома ---------------------------------------------------------
+    def _build_osm_trees(self, masks):
+        S, N, rng = self.SIZE, self.TEX_PX, self.rng
+        X = rng.uniform(-S / 2, S / 2, 160000)
+        Z = rng.uniform(-S / 2, S / 2, 160000)
+        col = np.clip(((X + S / 2) / S * N).astype(int), 0, N - 1)
+        row = np.clip(((S / 2 - Z) / S * N).astype(int), 0, N - 1)
+        wood = np.asarray(masks["wood"])[row, col] > 0
+        scrub = (np.asarray(masks["scrub"])[row, col] > 0) & (rng.random(X.size) < 0.3)
+        lone = (rng.random(X.size) < 0.004) & (np.asarray(masks["water"])[row, col] == 0) \
+            & (np.asarray(masks["residential"])[row, col] == 0) & (np.hypot(X + 120, Z - 15) > 320)
+        sel = np.flatnonzero(wood)[:14000].tolist() + np.flatnonzero(scrub | lone).tolist()
+        return _trees(X[sel], self.height(X[sel], Z[sel]), Z[sel], rng)
+
+    def _build_osm_buildings(self):
+        rng = self.rng
+        walls = [(0.93, 0.90, 0.82), (0.88, 0.84, 0.72), (0.95, 0.95, 0.93), (0.80, 0.72, 0.60)]
+        roofs = [(0.62, 0.22, 0.15), (0.45, 0.25, 0.18), (0.35, 0.36, 0.40), (0.70, 0.35, 0.20)]
+        parts = []
+        for pts in self.buildings:
+            p = pts[:-1]
+            c = p.mean(0)
+            w_, vec = np.linalg.eigh(np.cov((p - c).T))
+            u = vec[:, 1]                                     # длинная ось (E, N)
+            a = (p - c) @ u; b = (p - c) @ np.array([-u[1], u[0]])
+            L, W = np.ptp(a), np.ptp(b)
+            if L < 3 or L > 80:
+                continue
+            c = c + u * (a.max() + a.min()) / 2 + np.array([-u[1], u[0]]) * (b.max() + b.min()) / 2
+            yaw = np.arctan2(u[0], u[1])
+            y0 = float(self.height(c[0], c[1])) - 0.4
+            if L > 30:                                        # крупное — плоская крыша
+                parts.append(_box(c[0], c[1], max(W, 3), L, 5.0, yaw, (0.80, 0.80, 0.82), y0))
+            else:
+                parts.append(_house(c[0], c[1], max(W, 3), L, rng.uniform(3.5, 5.5),
+                                    rng.uniform(2.0, 3.5), yaw, walls[rng.integers(4)],
+                                    roofs[rng.integers(4)], y0))
+        return _merge(parts) if parts else Entity()
+
+
+MAPS = {"default": DefaultMap, "kainki": KainkiMap, "kainki_osm": KainkiOsmMap}
 
 
 def make_world(name: str = "default") -> World:
@@ -485,16 +628,20 @@ def _shade(normals):
     return 0.55 + 0.45 * np.clip(n @ SUN_DIR, 0, 1)
 
 
-def _mesh(verts, tris, cols):
+def _mesh(verts, tris, cols, uvs=None):
     m = Mesh(vertices=[tuple(v) for v in np.asarray(verts, float).tolist()],
              triangles=np.asarray(tris).ravel().tolist(),
              colors=[Color(r, g, b, 1) for r, g, b in np.asarray(cols, float).tolist()],
+             uvs=None if uvs is None else [tuple(u) for u in np.asarray(uvs, float).tolist()],
              static=True)
     return Entity(model=m, shader=unlit_with_fog_shader, double_sided=True)
 
 
-def _grid_mesh(X, Y, Z, col):
-    """Сетка: каждый квадрат — свои 4 вершины (чёткие границы), освещение по нормали."""
+def _grid_mesh(X, Y, Z, col, uv_size=None):
+    """
+    Сетка: каждый квадрат — свои 4 вершины (чёткие границы), освещение по нормали.
+    uv_size — размер карты, м: тогда UV вершин = (X, Z) / uv_size + 0.5 (для текстуры).
+    """
     v00 = np.stack([X[:-1, :-1], Y[:-1, :-1], Z[:-1, :-1]], -1)
     v10 = np.stack([X[1:, :-1],  Y[1:, :-1],  Z[1:, :-1]], -1)
     v11 = np.stack([X[1:, 1:],   Y[1:, 1:],   Z[1:, 1:]], -1)
@@ -506,7 +653,10 @@ def _grid_mesh(X, Y, Z, col):
     cols = np.repeat(col.reshape(-1, 3), 4, axis=0)
     b = np.arange(len(verts) // 4) * 4
     tris = np.stack([b, b + 1, b + 2, b, b + 2, b + 3], -1)
-    return _mesh(verts, tris, cols)
+    if uv_size is None:
+        return _mesh(verts, tris, cols)
+    uvs = verts[:, [0, 2]] / uv_size + 0.5
+    return _mesh(verts, tris, cols, uvs=uvs)
 
 
 def _ribbon(L, R):
