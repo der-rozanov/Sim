@@ -24,6 +24,7 @@ config.py            ← нет зависимостей (только dataclass
                             │
                             ├── plotting.py       ← state, config
                             ├── animate.py        ← state (только индексы)
+                            ├── viewer3d.py       ← flight_logger (только .flightlog), ursina
                             └── scenarios/
                                 ├── s1..s5        ← runner, control, sensors, config
                                 ├── s6            ← runner, control, sensors, config
@@ -235,3 +236,11 @@ wind_call = lambda h, t: (5.0 * np.sin(t), 0.0)
 
 Это означает: анимацию можно использовать в любом другом проекте,  
 передав ей любой объект с полями `t`, `state`, `Va`, `alpha`.
+
+---
+
+## 12. Изоляция `viewer3d.py` (3D-тренажёр)
+
+`viewer3d.py` не импортирует `sim/`, `control/`, `runner`: вход — только
+`.flightlog` через `flight_logger.load_log()`. Ursina (РЕШ-16) используется
+только здесь. Подробно — `docs/viewer3d.md`.

@@ -99,8 +99,9 @@ docs/                 — техническая документация (ка�
     aerodynamics.md   — CL/CD/Cm, боковые CY/Croll/Cn, собственные движения
     control.md        — продольная и боковая САУ, расчёт коэффициентов
     SENSORS.md        — псевдодатчики
+    viewer3d.md       — 3D-тренажёр: запуск, клавиши, СК и ориентация, проверки
     architecture.md   — зависимости, Log, controls_fn, совместимость 6DOF
-    decisions.md      — журнал решений РЕШ-01…15 (почему сделано так)
+    decisions.md      — журнал решений РЕШ-01…16 (почему сделано так)
     scenarios_report.md — результаты сценариев С1–С13
     continuation.md   — ИСТОРИЧЕСКИЙ (состояние на 2026-06)
 results/              — .flightlog файлы (генерируемые, в .gitignore)
