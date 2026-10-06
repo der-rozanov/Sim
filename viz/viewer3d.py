@@ -343,9 +343,9 @@ class View3D:
         self.event_txt.text = event
 
 
-def make_app(title: str, map_name: str = "default"):
+def make_app(title: str, map_name: str = "default", size=(1600, 900)):
     """Окно Ursina, небо, свет, мир (viz/world3d.py). Возвращает (app, world)."""
-    app = Ursina(title=title, size=(1600, 900), borderless=False, development_mode=False)
+    app = Ursina(title=title, size=size, borderless=False, development_mode=False)
     window.color = Color(*FOG_CLR, 1)
     camera.fov = 70
     camera.clip_plane_near = 0.3      # точность глубины на дальних планах
