@@ -13,7 +13,7 @@ import numpy as np
 
 def measure_gyro(q_true, bias, noise_std, rng):
     """
-    Гироскоп (угловая скорость тангажа).
+    Гироскоп (угловая скорость по одной оси: p, q или r).
 
     Args:
         q_true: истинная угловая скорость, рад/с
@@ -182,3 +182,65 @@ def measure_accelerometer(u_dot, w_dot, theta, g, bias, noise_std, rng):
 
     return (a_x_true + bias_x + noise_x,
             a_z_true + bias_z + noise_z)
+
+
+# ---------------------------------------------------------------------------
+# Боковой канал
+# ---------------------------------------------------------------------------
+
+def measure_attitude(angle_true, bias, noise_std, rng):
+    """
+    ИНС: угол ориентации (крен phi, тангаж theta или рыскание psi).
+
+    Args:
+        angle_true: истинный угол, рад
+        bias: смещение, рад
+        noise_std: СКО шума, рад
+        rng: numpy.random.Generator
+
+    Returns:
+        angle_meas: измеренный угол, рад
+    """
+    noise = rng.normal(0.0, noise_std) if noise_std > 0 else 0.0
+    return angle_true + bias + noise
+
+
+def measure_sideslip(beta_true, bias, noise_std, rng):
+    """
+    Зонд УС (прямое измерение угла скольжения).
+
+    Тот же зонд, что измеряет УА: оба аэродинамических угла.
+
+    Args:
+        beta_true: истинный УС, рад
+        bias: смещение, рад
+        noise_std: СКО шума, рад
+        rng: numpy.random.Generator
+
+    Returns:
+        beta_meas: измеренный УС, рад
+    """
+    noise = rng.normal(0.0, noise_std) if noise_std > 0 else 0.0
+    return beta_true + bias + noise
+
+
+def measure_gps_course(Vx_true, Vy_true, noise_std, rng):
+    """
+    GPS: путевой угол chi = arctan(Vy / Vx) по земной скорости.
+
+    Шум добавляется к составляющим скорости (как у приёмника), затем
+    вычисляется угол. При ветре путевой угол chi ≠ курсу psi (угол сноса).
+
+    Args:
+        Vx_true: земная скорость на север, м/с
+        Vy_true: земная скорость на восток, м/с
+        noise_std: СКО шума скорости, м/с
+        rng: numpy.random.Generator
+
+    Returns:
+        chi_meas: путевой угол, рад (0 — север, > 0 — к востоку)
+    """
+    if noise_std > 0:
+        Vx_true = Vx_true + rng.normal(0.0, noise_std)
+        Vy_true = Vy_true + rng.normal(0.0, noise_std)
+    return np.arctan2(Vy_true, Vx_true)
