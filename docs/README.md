@@ -26,7 +26,8 @@ python checks/check_lateral.py              # боковой канал в от�
 python scenarios/s1_steady_flight.py        # балансировочный полёт
 python scenarios/s12_coordinated_turn.py    # разворот с боковой САУ
 python viz/viewer.py results/<файл>.flightlog
-python viz/viewer3d.py                      # 3D-тренажёр, последний лог из results/
+python viz/viewer3d.py                      # 3D-проигрыватель, последний лог из results/
+python scenarios/GameScenario3D.py          # пилотирование в 3D (ручной режим / САУ)
 ```
 
 ---
