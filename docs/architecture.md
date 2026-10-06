@@ -11,7 +11,9 @@ config.py            ← нет зависимостей (только dataclass
     ├── aero.py      ← config
     ├── wind.py      ← config
     ├── sensors.py   ← numpy only, параметры из config
-    ├── control.py   ← config (ограничения рулей и тяги)
+    ├── control/controllers.py ← config (ограничения рулей и тяги);
+    │                            PitchController, SpeedController, LateralController
+    ├── control/lqr.py, aua.py ← config, state, dynamics (LQR линеаризует модель)
     ├── estimators.py ← numpy only (НЕ зависит от sensors или control)
     │
     └── dynamics.py  ← config, state, aero
@@ -25,7 +27,9 @@ config.py            ← нет зависимостей (только dataclass
                             └── scenarios/
                                 ├── s1..s5        ← runner, control, sensors, config
                                 ├── s6            ← runner, control, sensors, config
-                                └── s7            ← runner, control, sensors, estimators, config
+                                ├── s7–s10        ← runner, control, sensors, estimators, config
+                                ├── s11           ← runner, control/lqr
+                                └── s12, s13      ← lateral_common (FullSAU) ← runner, control
 ```
 
 `check.py` — импортирует все модули, зависимость только в одну сторону.
