@@ -101,6 +101,29 @@ def _rotation(state: np.ndarray) -> np.ndarray:
     return rotation_body_to_earth(state[PHI], state[THETA], state[PSI])
 
 
+def canonical_euler(state: np.ndarray) -> np.ndarray:
+    """
+    Та же ориентация ЛА, но углы в каноническом диапазоне:
+    φ, ψ ∈ [−π, π),  θ ∈ [−π/2, π/2].
+
+    Кинематика углов Эйлера диапазон не ограничивает: в петле θ проходит 90°
+    и копится, в бочке копится φ. Для САУ это ошибка в целые обороты
+    (θ = 3580° против θ_ref = 20° → «отматывание» петель). Используется
+    тождество поворота  (φ, θ, ψ) ≡ (φ + π, π − θ, ψ + π);  скорости u, v, w
+    и угловые скорости p, q, r заданы в связанной СК и не меняются.
+    """
+    s = state.copy()
+    th = (s[THETA] + np.pi) % (2.0 * np.pi) - np.pi          # [−π, π)
+    if abs(th) > np.pi / 2:
+        th = np.copysign(np.pi, th) - th                     # π − θ  или  −π − θ
+        s[PHI] += np.pi
+        s[PSI] += np.pi
+    s[THETA] = th
+    s[PHI] = (s[PHI] + np.pi) % (2.0 * np.pi) - np.pi
+    s[PSI] = (s[PSI] + np.pi) % (2.0 * np.pi) - np.pi
+    return s
+
+
 def earth_velocity(state: np.ndarray) -> tuple:
     """
     Земная (путевая) скорость ЛА.
