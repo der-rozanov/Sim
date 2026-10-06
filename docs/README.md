@@ -44,10 +44,11 @@ Sim/
 ├── flight_logger.py     Сохранение/загрузка .flightlog
 ├── sim/                 Физика 6DOF: config, state, dynamics, aero, wind, integrators
 ├── control/             САУ: controllers (ПИД тангажа/скорости, боковая), sensors,
-│                        estimators, aua (АУА), lqr (LQR)
+│                        estimators, aua (АУА), lqr (LQR), navigation (полёт по точкам)
 ├── viz/                 plotting, animate, viewer (продольный канал);
-│                        viewer3d — 3D-тренажёр на Ursina (6DOF)
-├── scenarios/           s1–s13, lateral_common, GameScenario, lab6/
+│                        viewer3d — 3D-тренажёр на Ursina (6DOF); bench_panel,
+│                        map_panel — окна стенда и карты (tkinter)
+├── scenarios/           s1–s14, lateral_common, GameScenario, GameScenario3D, Bench3D, lab6/
 ├── checks/              check, check_lateral, check_polar, check_motor, check_optimal_speed
 ├── rl_control/          экспериментальный RL-регулятор (вне основной линии)
 └── docs/
@@ -59,8 +60,8 @@ Sim/
     ├── control.md          Продольная и боковая САУ, расчёт коэффициентов
     ├── SENSORS.md          Псевдодатчики
     ├── viewer3d.md         3D-тренажёр: запуск, клавиши, СК, проверки
-    ├── decisions.md        Журнал решений РЕШ-01…16
-    ├── scenarios_report.md Результаты С1–С13
+    ├── decisions.md        Журнал решений РЕШ-01…17
+    ├── scenarios_report.md Результаты С1–С14
     └── continuation.md     Исторический (2026-06)
 ```
 
