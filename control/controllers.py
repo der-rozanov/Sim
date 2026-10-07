@@ -406,7 +406,7 @@ class LateralControlParams:
     # Контур крена: delta_a = Kp·e_phi + Ki·∫e_phi − Kd·p
     phi_Kp: float = 0.6746   # ωn_φ = 20 рад/с; ζ = 1.4 — своё демпфирование
     phi_Ki: float = 0.2698   # нуль ПИ на 0.02·ωn_φ — только против момента винта
-    phi_Kd: float = 0.0   # a_φ1 велико — демпфирование не нужно
+    phi_Kd: float = 0.2   # a_φ1 велико — демпфирование не нужно
     phi_integral_limit: float = 0.2   # рад·с
 
     # Контур курса: phi_ref = Kp·e_chi + Ki·∫e_chi
