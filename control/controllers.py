@@ -20,6 +20,8 @@
 import numpy as np
 from dataclasses import dataclass
 
+from sim.state import PHI, P
+
 
 @dataclass
 class PIDParams:
@@ -479,3 +481,70 @@ class LateralController:
             delta_r = 0.0
 
         return delta_a, delta_r
+
+
+# ---------------------------------------------------------------------------
+# САУ по крену для продольных сценариев
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RollHoldParams:
+    """
+    Удержание крена φ_ref = 0 (крылья горизонтально).
+
+    Kp, Kd — как в контуре крена LateralController. Интеграл больше: он
+    парирует постоянный реактивный момент винта (на малой скорости и полном
+    газе нужно до ~2° δa).
+    """
+    Kp: float = 0.83
+    Ki: float = 0.3
+    Kd: float = 0.10
+    integral_limit: float = 0.2   # рад·с → вклад интеграла ≤ 0.06 рад ≈ 3.4° δa
+
+
+class RollHold:
+    """
+    САУ по крену продольных сценариев: δa = PI(0 − φ) − Kd·p,  δr = 0.
+
+    Зачем: реактивный момент винта кренит ЛА, спиральная мода неустойчива —
+    без управления элеронами ЛА уходит в спираль за ~25 с (РЕШ-19).
+    Датчики — ИНС (φ) и гироскоп (p) со своим генератором шума rng, чтобы не
+    сдвигать последовательности шума продольных датчиков сценария.
+    """
+
+    def __init__(self, aircraft, sensor_params, rng,
+                 params: RollHoldParams = None):
+        self.aircraft = aircraft
+        self.sp = sensor_params
+        self.rng = rng
+        self.params = params or RollHoldParams()
+        pr = self.params
+        self.pid_phi = PID(PIDParams(Kp=pr.Kp, Ki=pr.Ki,
+                                     integral_limit=pr.integral_limit), name="phi_hold")
+
+    def step(self, phi: float, p: float, dt: float) -> float:
+        """Истинные φ, p → измерения → δa, рад."""
+        sp, rng = self.sp, self.rng
+        phi_meas = phi + rng.normal(0.0, sp.ins_angle_noise)
+        p_meas   = p + sp.gyro_bias + rng.normal(0.0, sp.gyro_noise)
+        delta_a = self.pid_phi.step(0.0 - phi_meas, dt) - self.params.Kd * p_meas
+        return saturation(delta_a, -self.aircraft.delta_a_max, self.aircraft.delta_a_max)
+
+
+def with_roll_hold(controls_fn, aircraft, sensor_params, dt: float, seed: int = 7):
+    """
+    Обернуть продольный controls_fn(t, state, Va, alpha) -> [δe, δt]
+    удержанием крена: результат — [δe, δt, δa, 0].
+
+    Для парных прогонов создавайте обёртку заново на каждый run() — тогда
+    у обоих прогонов одинаковый шум ИНС/гироскопа крена (тот же seed).
+    """
+    hold = RollHold(aircraft, sensor_params, np.random.default_rng(seed))
+
+    def fn(t, state, Va, alpha):
+        c = np.asarray(controls_fn(t, state, Va, alpha), dtype=float)
+        delta_a = hold.step(state[PHI], state[P], dt)
+        return np.array([c[0], c[1], delta_a, 0.0])
+
+    fn.roll_hold = hold
+    return fn

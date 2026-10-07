@@ -33,6 +33,7 @@ from sim.wind import wind as _wind_base
 from control.lqr import LQRController, LQRParams
 from control.sensors import measure_gyro, measure_altitude, measure_airspeed
 from runner import run, compute_trim, trim_state, print_summary
+from control.controllers import with_roll_hold   # САУ по крену (РЕШ-19)
 from flight_logger import FlightLogger
 
 plt.rcParams["font.family"] = "DejaVu Sans"
@@ -141,7 +142,7 @@ def controls_fn(t, state, Va, alpha):  # noqa: ARG001 — alpha required by runn
 # ------------------------------------------------------------------
 # Прогон
 # ------------------------------------------------------------------
-log = run(controls_fn, aircraft, wind_params, cfg, state0=s0)
+log = run(with_roll_hold(controls_fn, aircraft, sp, cfg.dt), aircraft, wind_params, cfg, state0=s0)
 print_summary(log, aircraft, label="С11  LQR набор/горизонт/снижение")
 logger.save(log, h_ref=h_ref_buf, theta_ref=theta_ref_buf)
 

@@ -72,6 +72,8 @@ from lab6_common import (AircraftParams, WindParams, SimConfig, get_variant, tri
                          check_close, check_summary, check_flight_safe, save_fig,
                          PitchLoopReady, AltitudeLoopReady)
 from runner import run
+from sim.config import SensorParams
+from control.controllers import with_roll_hold   # САУ по крену (РЕШ-19)
 from sim.aero import coef_CD
 from sim.dynamics import thrust
 from sim.state import H
@@ -149,7 +151,7 @@ def simulate(gains, t_end, ff_scale=1.0, controller="student"):
                 dt_cmd = tr["throttle"]
         return np.array([pitch(theta_c, m["theta"], m["q"]), dt_cmd])
 
-    return run(controls_fn, aircraft, WindParams(), SimConfig(dt=0.01, t_end=t_end), state0=tr["state"])
+    return run(with_roll_hold(controls_fn, aircraft, SensorParams(), 0.01), aircraft, WindParams(), SimConfig(dt=0.01, t_end=t_end), state0=tr["state"])
 
 
 def theory_Va(t, coeffs, gains):

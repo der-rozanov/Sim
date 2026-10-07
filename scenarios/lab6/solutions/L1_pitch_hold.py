@@ -65,6 +65,8 @@ from lab6_common import (AircraftParams, WindParams, SimConfig, get_variant, tri
                          make_sensors, numeric_pitch_coeffs, lti2_step, check, check_close,
                          check_summary, check_flight_safe, save_fig)
 from runner import run
+from sim.config import SensorParams
+from control.controllers import with_roll_hold   # САУ по крену (РЕШ-19)
 from sim.state import THETA, H
 
 # ------------------------------------------------------------------
@@ -132,7 +134,7 @@ def simulate(aircraft, tr, v, gains, t_end):
         de = np.clip(de, aircraft.delta_e_min, aircraft.delta_e_max)
         return np.array([de, tr["throttle"]])
 
-    return run(controls_fn, aircraft, WindParams(), SimConfig(dt=0.01, t_end=t_end),
+    return run(with_roll_hold(controls_fn, aircraft, SensorParams(), 0.01), aircraft, WindParams(), SimConfig(dt=0.01, t_end=t_end),
                state0=tr["state"])
 
 

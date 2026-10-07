@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
 from runner import run, compute_trim, trim_state, print_summary
+from control.controllers import with_roll_hold   # САУ по крену (РЕШ-19)
 from control.controllers import (PitchController, PitchControlParams,
                                   SpeedController, SpeedControlParams)
 from control.sensors import (measure_gyro, measure_altitude, measure_airspeed,
@@ -223,11 +224,11 @@ fn_probe, buf_probe = _make_controller("probe")
 fn_est,   buf_est   = _make_controller("est")
 
 print("Прогон 1/2: с зондом…",  flush=True)
-log_probe = run(fn_probe, aircraft, wind_params, cfg, state0=s0)
+log_probe = run(with_roll_hold(fn_probe, aircraft, sp, cfg.dt), aircraft, wind_params, cfg, state0=s0)
 print_summary(log_probe, aircraft, label="С9 | С ЗОНДОМ")
 
 print("Прогон 2/2: без зонда…", flush=True)
-log_est = run(fn_est, aircraft, wind_params, cfg, state0=s0)
+log_est = run(with_roll_hold(fn_est, aircraft, sp, cfg.dt), aircraft, wind_params, cfg, state0=s0)
 print_summary(log_est, aircraft, label="С9 | БЕЗ ЗОНДА")
 
 # ══════════════════════════════════════════════════════════════════════════════

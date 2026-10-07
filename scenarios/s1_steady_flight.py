@@ -29,8 +29,9 @@ if hasattr(sys.stdout, "reconfigure"):
 # Добавить корень проекта в путь поиска модулей
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from sim.config import AircraftParams, WindParams, SimConfig
+from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
 from runner import run, compute_trim, trim_state, print_summary
+from control.controllers import with_roll_hold   # САУ по крену (РЕШ-19)
 from sim.state import THETA, Q, H, X, U, W
 from flight_logger import FlightLogger
 
@@ -72,7 +73,8 @@ print()
 ctrl_arr = np.array([de_trim, thr_trim])
 
 s0  = trim_state(aircraft, cfg)
-log = run(lambda t, s, Va, alpha: ctrl_arr,
+# Продольный канал — фиксированный трим; крен держит САУ (парирует момент винта)
+log = run(with_roll_hold(lambda t, s, Va, alpha: ctrl_arr, aircraft, SensorParams(), cfg.dt),
           aircraft, wind_params, cfg, state0=s0)
 
 print_summary(log, aircraft, label="С1  Установившийся полёт")

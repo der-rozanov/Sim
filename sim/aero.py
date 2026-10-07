@@ -54,20 +54,26 @@ def coef_CL(alpha: float, q: float, delta_e: float,
 def coef_CD(alpha: float, params: AircraftParams,
             q: float = 0.0, delta_e: float = 0.0, Va: float = 1.0) -> float:
     """
-    Коэффициент лобового сопротивления CD (B&M 2-е изд., слайды 20, 43).
+    Коэффициент лобового сопротивления CD (B&M 2-е изд., слайды 20, 43 + поправки).
 
-    CD = CDp + CL_linear² / (π·e·AR) + CDq·q̂ + CDde·δe
-      CDp  — вредное (вязкостное) сопротивление
-      AR   — удлинение крыла b²/S
-      q̂   = c·q/(2Va)
-    Член CDde·δe — со знаком, как в источнике (при δe < 0 немного уменьшает CD).
-    Без q, δe — поляра крыла (используется в балансировке и проверках).
+    CD_polar = CDp + CL_linear² / (π·e·AR)       — докритическая поляра
+    CD_flat  = CDp + 2·|sin α|³                  — плоская пластина (та же ньютоновская
+                                                   модель, что CL_flat = 2·sin²α·cos α)
+    CD = (1−σ)·CD_polar + σ·CD_flat + CDq·q̂ + CDde·|δe|
+      AR = b²/S,  q̂ = c·q/(2Va)
+
+    ПОПРАВКИ к канону: смешение по σ(α) (в каноне поляра без срыва) и |δe|
+    (в каноне CDde·δe со знаком — отрицательный δe уменьшал бы сопротивление).
+    Без q, δe — сопротивление крыла (используется в балансировке и проверках).
     """
     AR        = params.b**2 / params.S
+    sigma     = _sigmoid(alpha, params)
     CL_linear = params.CL0 + params.CLa * alpha
+    CD_polar  = params.CDp + CL_linear**2 / (np.pi * params.e_oswald * AR)
+    CD_flat   = params.CDp + 2.0 * abs(np.sin(alpha))**3
     q_hat     = params.c * q / (2.0 * max(Va, 1.0))
-    return (params.CDp + CL_linear**2 / (np.pi * params.e_oswald * AR)
-            + params.CDq * q_hat + params.CDde * delta_e)
+    return ((1.0 - sigma) * CD_polar + sigma * CD_flat
+            + params.CDq * q_hat + params.CDde * abs(delta_e))
 
 
 def coef_Cm(alpha: float, q: float, delta_e: float,

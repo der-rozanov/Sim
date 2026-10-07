@@ -58,6 +58,14 @@ def propeller(throttle: float, Va: float, params: AircraftParams) -> tuple:
       T = ρ·(Ω/2π)²·D⁴·CT,   Q = ρ·(Ω/2π)²·D⁵·CQ
 
     K_V = K_Q = 60/(2π·KV_rpm) [В·с/рад = Н·м/А].
+
+    ПОПРАВКА (свободное вращение): регулятор оборотов (ESC) не рекуперирует —
+    ток мотора i = (V_in − K_V·Ω)/R не бывает отрицательным. Если по уравнению
+    выше i < 0 (малый газ на скорости: противо-ЭДС больше V_in), мотор
+    отключён, винт авторотирует, на валу только трение K_Q·i0:
+        (ρD⁵/(2π)²·C_Q0)·Ω² + (ρD⁴/(2π)·C_Q1·Va)·Ω + (ρD³·C_Q2·Va² + K_Q·i0) = 0
+    Без поправки V_in = 0 означало бы короткое замыкание обмотки (торможение
+    винта) и сопротивление ~ −33 Н при 30 м/с вместо ~ −4 Н.
     Если Ω ≤ 0 (мотор стоит, Va ≈ 0) — T = Q = 0.
 
     Возвращает: (T, Q) — тяга вдоль x_body, Н; момент на валу винта, Н·м.
@@ -72,6 +80,11 @@ def propeller(throttle: float, Va: float, params: AircraftParams) -> tuple:
     b = pr.rho * D**4 / (2.0 * np.pi) * pr.C_Q1 * Va + KQ * KV / pr.R_motor
     c = pr.rho * D**3 * pr.C_Q2 * Va**2 - KQ * V_in / pr.R_motor + KQ * pr.i0
     Omega = (-b + np.sqrt(b**2 - 4.0 * a * c)) / (2.0 * a)
+    if KV * Omega > V_in:                       # i < 0 — свободное вращение
+        b = pr.rho * D**4 / (2.0 * np.pi) * pr.C_Q1 * Va
+        c = pr.rho * D**3 * pr.C_Q2 * Va**2 + KQ * pr.i0
+        disc = b**2 - 4.0 * a * c
+        Omega = (-b + np.sqrt(disc)) / (2.0 * a) if disc > 0.0 else 0.0
     if Omega <= 0.0:
         return 0.0, 0.0
 

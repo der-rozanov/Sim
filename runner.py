@@ -118,7 +118,7 @@ def compute_trim(aircraft: AircraftParams, Va: float) -> tuple:
     AR     = aircraft.b**2 / S
     CL_lin = aircraft.CL0 + aircraft.CLa * alpha_tr
     CD_tr  = (aircraft.CDp + CL_lin**2 / (np.pi * aircraft.e_oswald * AR)
-              + aircraft.CDde * de_tr)
+              + aircraft.CDde * abs(de_tr))
     D_tr   = 0.5 * rho * Va**2 * S * CD_tr
     lo, hi = 0.0, 1.0
     for _ in range(50):

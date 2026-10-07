@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
 from sim.state import U, W, Q, THETA, H, N_STATES, air_velocity
 from sim.dynamics import derivatives
+from runner import compute_trim
 from control.sensors import measure_gyro, measure_altitude, measure_airspeed
 
 
@@ -82,7 +83,9 @@ def trim(aircraft: AircraftParams, Va: float, h0: float = 100.0) -> dict:
         d = derivatives(make_state(a), np.array([de, dt]), 0.0, aircraft, _no_wind)
         return np.array([d[U], d[W], d[Q]])
 
-    z = np.array([0.05, -0.05, 0.4])
+    # Начальное приближение — линейный трим: при малом газе винт вращается
+    # свободно и ∂T/∂δt = 0 (РЕШ-19) — Ньютон из δt = 0.4 упирался в вырожденный якобиан
+    z = np.array(compute_trim(aircraft, Va))
     for _ in range(50):
         r = resid(z)
         if np.max(np.abs(r)) < 1e-10:
