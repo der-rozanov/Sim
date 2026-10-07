@@ -35,11 +35,11 @@ try:
     from sim.config import AircraftParams, WindParams, SensorParams, SimConfig, default_params
     ap, wp, sp, cfg = default_params()
     all_ok &= check("импорт",          True)
-    all_ok &= check("mass = 10 кг",    ap.mass == 10,    f"mass={ap.mass}")
-    all_ok &= check("Jy   = 1.135",    ap.Jy == 1.135,   f"Jy={ap.Jy}")
+    all_ok &= check("mass = 2 кг",     ap.mass == 2.0,   f"mass={ap.mass}")
+    all_ok &= check("Jy   = 0.104",    ap.Jy == 0.1040,  f"Jy={ap.Jy}")
     all_ok &= check("Jx*Jz > Jxz^2 (тензор инерции положительно определён)",
                     ap.Jx * ap.Jz > ap.Jxz**2)
-    all_ok &= check("CL0  = 0.1",      ap.CL0 == 0.1,    f"CL0={ap.CL0}")
+    all_ok &= check("CL0  = 0.2636",   ap.CL0 == 0.2636, f"CL0={ap.CL0}")
     all_ok &= check("dt   = 0.01 с",   cfg.dt == 0.01,   f"dt={cfg.dt}")
 except Exception as e:
     check("импорт", False, str(e)); all_ok = False
@@ -86,17 +86,21 @@ section("3. sim/aero.py")
 try:
     from sim.aero import coef_CL, coef_CD, coef_Cm, aero_forces_moments
 
-    # CL растёт с alpha в доступном диапазоне
-    CLs = [coef_CL(np.radians(a), 0, 0, 30.0, ap) for a in [0, 5, 10, 20, 25]]
-    all_ok &= check("CL(0) ~ CL0",      abs(CLs[0] - ap.CL0) < 1e-6, f"CL0={CLs[0]:.6f}")
-    all_ok &= check("CL растёт 0->25 deg", CLs[4] > CLs[0],
-                    f"CL(25)={CLs[4]:.3f} > CL(0)={CLs[0]:.3f}")
+    # CL растёт с alpha до критического УА (максимум CL)
+    a_cr = ap.alpha_crit
+    CLs = [coef_CL(a, 0, 0, 30.0, ap) for a in [0.0, a_cr]]
+    all_ok &= check("CL(0) ~ CL0",      abs(CLs[0] - ap.CL0) < 1e-4, f"CL0={CLs[0]:.6f}")
+    all_ok &= check("CL растёт 0 -> alpha_crit", CLs[1] > CLs[0],
+                    f"CL({np.degrees(a_cr):.0f})={CLs[1]:.3f} > CL(0)={CLs[0]:.3f}")
 
-    # Срыв: CL на 30° меньше чем на 25°
-    CL_25 = coef_CL(np.radians(25), 0, 0, 30.0, ap)
-    CL_30 = coef_CL(np.radians(30), 0, 0, 30.0, ap)
-    all_ok &= check("CL падает после срыва (25->30 deg)",
-                    CL_30 < CL_25, f"CL(25)={CL_25:.3f}  CL(30)={CL_30:.3f}")
+    # Срыв: за alpha_crit CL падает; alpha_crit — максимум CL (±0.5°)
+    CL_post = coef_CL(a_cr + np.radians(5), 0, 0, 30.0, ap)
+    all_ok &= check("CL падает после срыва (alpha_crit -> +5 deg)",
+                    CL_post < CLs[1], f"CL={CLs[1]:.3f} -> {CL_post:.3f}")
+    a_grid = np.radians(np.linspace(0, 30, 3001))
+    a_max = a_grid[np.argmax([coef_CL(a, 0, 0, 30.0, ap) for a in a_grid])]
+    all_ok &= check("alpha_crit = УА максимума CL", abs(a_max - a_cr) < np.radians(0.5),
+                    f"max CL при {np.degrees(a_max):.2f}°, alpha_crit={np.degrees(a_cr):.2f}°")
 
     # CD > 0 всегда
     CDs = [coef_CD(np.radians(a), ap) for a in [-10, 0, 10, 20]]
@@ -230,7 +234,7 @@ section("7. Модель 6DOF: боковой канал")
 try:
     from dataclasses import replace
     from sim.state import (V, P, R, PHI, PSI, Y, air_data, rotation_body_to_earth)
-    from sim.dynamics import derivatives, thrust, _gammas
+    from sim.dynamics import derivatives, thrust, propeller, _gammas
     from sim.aero import aero_forces_moments
     from sim.integrators import step_rk4
     from runner import compute_trim, trim_state
@@ -247,12 +251,18 @@ try:
                     np.allclose(Rm @ Rm.T, np.eye(3)) and abs(np.linalg.det(Rm) - 1) < 1e-12)
 
     # 7.2 Симметричный полёт (в т.ч. с продольным и вертикальным ветром):
-    #     производные боковых состояний строго нулевые
+    #     боковой канал возбуждает только реактивный момент винта −Q:
+    #     p_dot = −Г3·Q, r_dot = −Г4·Q, остальные производные строго нулевые
     wind_long = lambda h, t: (-4.0, 1.5, 0.0)
     s_test = s_tr.copy(); s_test[Q] = 0.1; s_test[THETA] += 0.1
     ds = derivatives(s_test, c_tr, 0.0, ap, wind_long)
-    all_ok &= check("симметричный полёт: d(v,p,r,phi,psi)/dt = 0",
-                    np.all(ds[LAT] == 0.0), f"max={np.max(np.abs(ds[LAT])):.1e}")
+    Q_pr = propeller(thr_tr, air_data(s_test, wind_long(0.0, 0.0))[0], ap)[1]
+    G = _gammas(ap)
+    all_ok &= check("симметричный полёт: d(v,phi,psi)/dt = 0",
+                    np.all(ds[[V, PHI, PSI]] == 0.0))
+    all_ok &= check("симметричный полёт: p_dot, r_dot — только от момента винта",
+                    np.isclose(ds[P], -G[2] * Q_pr) and np.isclose(ds[R], -G[3] * Q_pr),
+                    f"Q={Q_pr:.3f} Н·м  p_dot={ds[P]:.3f}  r_dot={ds[R]:.4f}")
 
     # 7.3 Вырождение в продольные уравнения (docs/physics.md, раздел 3.5)
     Va_t, al_t, _ = air_data(s_test, wind_long(0.0, 0.0))
@@ -299,16 +309,20 @@ try:
 
     # 7.7 Связь крен-рыскание через Jxz (B&M упр. 3.4)
     G_0  = _gammas(replace(ap, Jxz=0.0))
-    G_xz = _gammas(ap)
+    G_xz = _gammas(replace(ap, Jxz=0.05))
     all_ok &= check("Jxz=0: момент крена не даёт r_dot (Г4=0)", G_0[3] == 0.0)
     all_ok &= check("Jxz≠0: момент крена даёт r_dot (Г4≠0)",   G_xz[3] != 0.0,
                     f"Г4={G_xz[3]:.4f}")
 
-    # 7.8 Прогон 20 с из трима без боковых возмущений: боковые состояния = 0
-    s = s_tr.copy(); t = 0.0
-    for _ in range(2000):
-        s = step_rk4(s, c_tr, cfg.dt, t, ap, calm); t += cfg.dt
-    all_ok &= check("20 с трима: боковые состояния = 0", np.all(s[LAT + [Y]] == 0.0))
+    # 7.8 Прогон 20 с из трима: момент винта парирует САУ по крену (РЕШ-19)
+    from control.controllers import with_roll_hold
+    from sim.config import SensorParams
+    from runner import run
+    log_rh = run(with_roll_hold(lambda t_, s_, V_, a_: c_tr[:2], ap, SensorParams(), cfg.dt),
+                 ap, WindParams(), replace(cfg, t_end=20.0), state0=s_tr)
+    phi_max = np.degrees(np.max(np.abs(log_rh.state[:, PHI])))
+    all_ok &= check("20 с трима с САУ по крену: |phi| < 1°", phi_max < 1.0,
+                    f"max|phi|={phi_max:.2f}°  δa={np.degrees(log_rh.controls[-1, 2]):.2f}°")
 
     # 7.9 Собственные движения бокового канала (линеаризация в триме)
     eps = 1e-6

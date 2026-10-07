@@ -36,6 +36,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
 from runner import run, compute_trim, trim_state
+from control.controllers import with_roll_hold   # САУ по крену (РЕШ-19)
 from control.controllers import PitchController, PitchControlParams
 from control.sensors import (measure_gyro, measure_altitude,
                               measure_airspeed, measure_angle_of_attack)
@@ -159,11 +160,11 @@ def _make_run(aua_enabled: bool):
 # ══════════════════════════════════════════════════════════════════════════════
 print("Запуск прогона А (с АУА) ...")
 fn_a, aua_st_a, tref_a, thr_a_log = _make_run(aua_enabled=True)
-log_a = run(fn_a, aircraft, wind_params, cfg, state0=s0)
+log_a = run(with_roll_hold(fn_a, aircraft, sp, cfg.dt), aircraft, wind_params, cfg, state0=s0)
 
 print("Запуск прогона Б (без АУА) ...")
 fn_b, aua_st_b, tref_b, thr_b_log = _make_run(aua_enabled=False)
-log_b = run(fn_b, aircraft, wind_params, cfg, state0=s0)
+log_b = run(with_roll_hold(fn_b, aircraft, sp, cfg.dt), aircraft, wind_params, cfg, state0=s0)
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  МЕТРИКИ

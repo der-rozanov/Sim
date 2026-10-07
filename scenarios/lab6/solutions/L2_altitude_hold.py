@@ -68,6 +68,8 @@ from lab6_common import (AircraftParams, WindParams, SimConfig, get_variant, tri
                          make_sensors, lti2_step, step_metrics, check, check_close,
                          check_summary, check_flight_safe, save_fig, PitchLoopReady)
 from runner import run
+from sim.config import SensorParams
+from control.controllers import with_roll_hold   # САУ по крену (РЕШ-19)
 from sim.state import THETA, H
 from control.controllers import SpeedController, SpeedControlParams
 
@@ -145,7 +147,7 @@ def simulate(gains, dh, t_end, h_hold=H_HOLD, anti_windup=True):
         theta_c_buf.append(theta_c)
         return np.array([pitch(theta_c, m["theta"], m["q"]), speed.step(m["Va"], 0.01)])
 
-    log = run(controls_fn, aircraft, WindParams(), SimConfig(dt=0.01, t_end=t_end), state0=tr["state"])
+    log = run(with_roll_hold(controls_fn, aircraft, SensorParams(), 0.01), aircraft, WindParams(), SimConfig(dt=0.01, t_end=t_end), state0=tr["state"])
     return log, np.array(theta_c_buf[:len(log.t)])
 
 

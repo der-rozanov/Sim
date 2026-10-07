@@ -34,6 +34,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
 from sim.dynamics import thrust as motor_thrust
 from runner import run, compute_trim, trim_state, print_summary
+from control.controllers import with_roll_hold   # САУ по крену (РЕШ-19)
 from control.controllers import PitchController, PitchControlParams, SpeedController, SpeedControlParams
 from control.sensors import (measure_gyro, measure_altitude, measure_airspeed,
                               measure_angle_of_attack, measure_gps_velocity_earth)
@@ -144,7 +145,7 @@ logger = FlightLogger(
     ],
 )
 
-log = run(controls_fn, aircraft, wind_params, cfg, state0=s0)
+log = run(with_roll_hold(controls_fn, aircraft, sp, cfg.dt), aircraft, wind_params, cfg, state0=s0)
 print_summary(log, aircraft, label="С8б  Работа мотора")
 
 try:

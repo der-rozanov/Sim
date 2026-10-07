@@ -2,7 +2,7 @@
 """
 Проверка адекватности бокового канала модели 6DOF в открытом контуре (без САУ).
 
-Четыре опыта из балансировочного горизонтального полёта Va=30 м/с:
+Четыре опыта из балансировочного горизонтального полёта Va=20 м/с:
   1. Импульс элеронами δa=+5° на 1 с     — апериодика крена, разворот, спираль
   2. Дублет рулём направления ±5° по 0.3 с — голландский шаг (период, затухание)
   3. Связь крена и угловой скорости курса — ψ̇ ≈ g·tg φ / Va при β ≈ 0
@@ -26,7 +26,7 @@ from sim.dynamics import derivatives
 from runner import run, compute_trim, trim_state
 
 ap  = AircraftParams()
-cfg = SimConfig(Va0=30.0, h0=300.0, dt=0.01, t_end=30.0)
+cfg = SimConfig(Va0=20.0, h0=300.0, dt=0.01, t_end=30.0)
 alpha_tr, de_tr, thr_tr = compute_trim(ap, cfg.Va0)
 s0 = trim_state(ap, cfg)
 D5 = np.radians(5.0)
@@ -49,7 +49,15 @@ def table(log, times, title):
 # Линейная теория: собственные значения бокового канала [v, p, r, phi]
 # ------------------------------------------------------------------
 calm = lambda h, t: (0.0, 0.0, 0.0)
-c_tr = np.array([de_tr, thr_tr, 0.0, 0.0])
+
+# Боковой трим: δa, δr, при которых p_dot = r_dot = 0 — парируют реактивный
+# момент винта (РЕШ-19). Без них опыты в открытом контуре дрейфуют по крену.
+c0 = np.array([de_tr, thr_tr, 0.0, 0.0])
+d0 = derivatives(s0, c0, 0.0, ap, calm)[[P, R]]
+B = np.column_stack([(derivatives(s0, c0 + e, 0.0, ap, calm)[[P, R]] - d0) / 1e-6
+                     for e in (np.array([0, 0, 1e-6, 0]), np.array([0, 0, 0, 1e-6]))])
+da_tr, dr_tr = np.linalg.solve(B, -d0)
+c_tr = np.array([de_tr, thr_tr, da_tr, dr_tr])
 idx = [V, P, R, PHI]
 f0 = derivatives(s0, c_tr, 0.0, ap, calm)
 A = np.zeros((4, 4))
@@ -63,19 +71,20 @@ wn_lin, zeta_lin = abs(dr), -dr.real / abs(dr)
 T_lin = 2 * np.pi / dr.imag
 
 print("=" * 72)
-print("Линейная модель бокового движения (трим Va=30 м/с, параметры-аналог Aerosonde)")
+print(f"Линейная модель бокового движения (трим Va={cfg.Va0:.0f} м/с, FPV-самолёт)")
 print("=" * 72)
 print(f"  Апериодика крена : λ = {real[0]:+.3f} 1/с   τ = {-1/real[0]:.3f} с")
 print(f"  Голландский шаг  : λ = {dr.real:+.3f} ± {dr.imag:.3f}j   "
       f"ωn = {wn_lin:.2f} рад/с  ζ = {zeta_lin:.3f}  T = {T_lin:.3f} с")
 sp_txt = "устойчива" if real[1] < 0 else f"неустойчива, T2 = {np.log(2)/real[1]:.1f} с"
 print(f"  Спиральная мода  : λ = {real[1]:+.4f} 1/с   ({sp_txt})")
+print(f"  Боковой трим (момент винта): δa = {deg(da_tr):+.3f}°,  δr = {deg(dr_tr):+.3f}°")
 
 # ------------------------------------------------------------------
 # 1. Импульс элеронами
 # ------------------------------------------------------------------
 def ctl_aileron(t, s, Va, al):
-    return np.array([de_tr, thr_tr, D5 if t < 1.0 else 0.0, 0.0])
+    return c_tr + [0.0, 0.0, D5 if t < 1.0 else 0.0, 0.0]
 
 log1 = run(ctl_aileron, ap, WindParams(), cfg, state0=s0)
 table(log1, [0, 0.25, 0.5, 1.0, 1.5, 2, 5, 10, 20, 30], "1. Импульс элеронами +5° на 1 с")
@@ -91,9 +100,9 @@ print(f"  меняется по спиральной моде; ψ нараста
 # ------------------------------------------------------------------
 def ctl_rudder(t, s, Va, al):
     dr_ = D5 if t < 0.3 else (-D5 if t < 0.6 else 0.0)
-    return np.array([de_tr, thr_tr, 0.0, dr_])
+    return c_tr + [0.0, 0.0, 0.0, dr_]
 
-cfg2 = SimConfig(Va0=30.0, h0=300.0, dt=0.002, t_end=6.0)
+cfg2 = SimConfig(Va0=20.0, h0=300.0, dt=0.002, t_end=6.0)
 log2 = run(ctl_rudder, ap, WindParams(), cfg2, state0=s0)
 t2, b2 = log2.t, log2.beta
 mask = t2 > 0.8
@@ -131,11 +140,11 @@ print("  Ожидание: значения близки (разворот по�
 # ------------------------------------------------------------------
 VW = 5.0
 def ctl_trim(t, s, Va, al):
-    return np.array([de_tr, thr_tr, 0.0, 0.0])
+    return c_tr
 
 wp4 = WindParams(Vw_cross=VW)
 log4 = run(ctl_trim, ap, wp4, cfg, state0=s0)
 table(log4, [0, 0.2, 0.5, 1, 2, 5, 10, 20, 30], f"4. Боковой ветер {VW:.0f} м/с на восток с t=0")
-print(f"  Ожидание: в начальный момент β = −arctg({VW:.0f}/30) = {deg(-np.arctan(VW/30)):.1f}°;")
+print(f"  Ожидание: в начальный момент β = −arctg({VW:.0f}/{cfg.Va0:.0f}) = {deg(-np.arctan(VW/cfg.Va0)):.1f}°;")
 print(f"  флюгерный эффект разворачивает нос навстречу ветру (ψ < 0, влево),")
 print(f"  β → 0, ЛА сносится ветром на восток (y растёт).")

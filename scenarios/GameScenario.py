@@ -42,10 +42,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from sim.config import AircraftParams, WindParams, SimConfig
 from sim.integrators import step_rk4
 from sim.wind import wind as _wind
-from sim.state import air_velocity, U, W, Q, THETA, H, X, N_STATES
+from sim.state import air_velocity, U, W, Q, THETA, H, X, P, PHI, N_STATES
+from sim.config import SensorParams
 from runner import compute_trim, trim_state
 from control.controllers import (PitchController, PitchControlParams,
-                                  SpeedController, SpeedControlParams)
+                                  SpeedController, SpeedControlParams, RollHold)
 
 plt.rcParams["keymap.save"] = ["ctrl+s"]
 plt.rcParams["keymap.quit"] = ["ctrl+q"]
@@ -105,6 +106,8 @@ ctrl_params = PitchControlParams(Va_ref=cfg.Va0)
 ap_pitch    = PitchController(aircraft, ctrl_params)
 ap_pitch.set_trim_throttle(thr_trim)
 ap_pitch.reset({"theta": s0[THETA], "q": 0.0, "h": cfg.h0})
+# САУ по крену: держит крылья горизонтально (парирует момент винта, РЕШ-19)
+roll_hold   = RollHold(aircraft, SensorParams(), np.random.default_rng(7))
 
 spd_params = SpeedControlParams()
 ap_speed   = SpeedController(aircraft, spd_params)
@@ -264,6 +267,7 @@ def _reset():
     sim["h_hold"]    = False
     sim["h_ref"]     = cfg.h0
     ap_pitch.reset({"theta": s0[THETA], "q": 0.0, "h": cfg.h0})
+    roll_hold.pid_phi.reset()
     ap_pitch.set_pitch_setpoint(alpha_trim)
     ap_speed.set_Va_ref(cfg.Va0)
     ap_speed.reset()
@@ -401,7 +405,8 @@ def update(_frame):
                 delta_e  = sim["delta_e"]
                 throttle = sim["throttle"]
 
-            controls = np.array([delta_e, throttle])
+            delta_a  = roll_hold.step(state[PHI], state[P], cfg.dt)
+            controls = np.array([delta_e, throttle, delta_a, 0.0])
 
             t_buf.append(t)
             h_buf.append(h)

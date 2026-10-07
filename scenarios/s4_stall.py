@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
 from runner import run, compute_trim, trim_state, print_summary
+from control.controllers import with_roll_hold   # САУ по крену (РЕШ-19)
 from control.controllers import PitchController, PitchControlParams
 from control.sensors import measure_gyro, measure_altitude, measure_airspeed
 from sim.state import THETA, Q, H, X
@@ -118,7 +119,7 @@ def controls_fn(t, state, Va, alpha):
 # ------------------------------------------------------------------
 # Прогон
 # ------------------------------------------------------------------
-log = run(controls_fn, aircraft, wind_params, cfg, state0=s0)
+log = run(with_roll_hold(controls_fn, aircraft, sp, cfg.dt), aircraft, wind_params, cfg, state0=s0)
 print_summary(log, aircraft, label="Pitch control demo  (+5° / -5°)")
 logger.save(log, theta_ref=theta_ref_buf)
 
