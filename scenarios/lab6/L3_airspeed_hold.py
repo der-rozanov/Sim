@@ -27,9 +27,11 @@ L3. Удержание воздушной скорости через газ (Л
   * Вдоль скорости:  m·V̇a = T − D − m·g·sin γ.
     Сопротивление:  D = ½ρVa²·S·CD(α*),   CD(α*) = coef_CD(alpha_trim, aircraft)
                     (уже импортирована, модель CD квадратичная).
-    Тяга (модель винта проекта):  T = ½ρ·S_prop·C_prop·((k_motor·δt)² − Va²).
+    Тяга (модель «мотор + винт» проекта): T = thrust(δt, Va, aircraft) —
+                    уже импортирована (sim/dynamics.py, функция propeller).
     Продифференцируйте правую часть по Va и по δt в точке трима (α, γ = const).
-  * Параметры: aircraft.rho, S, mass, S_prop, C_prop, k_motor.
+    Производные тяги ∂T/∂Va, ∂T/∂δt найдите численно (центральной разностью).
+  * Параметры: aircraft.rho, S, mass.
   * Интегратор — в mem["I"]; анти-виндап — как в L2 (не копить при насыщении).
 
 ИССЛЕДОВАНИЕ (ответы — в отчёт)
@@ -42,7 +44,7 @@ L3. Удержание воздушной скорости через газ (Л
   3. EXPERIMENT = "omega". Как меняется перерегулирование с ростом ω_nV в
      симуляции и в теории? Почему при больших ω_nV симуляция расходится с
      теорией сильнее, хотя δt ещё не упёрся в 1? (Подсказка: sim/dynamics.py,
-     функция thrust.) Почему анти-виндап этого не замечает?
+     функция propeller — тяга нелинейна по δt и Va.) Почему анти-виндап этого не замечает?
   4. EXPERIMENT = "feedforward". Слайд 24: «если δt* известно неточно,
      интегратор это скомпенсирует». Проверьте для δt*, занижённого на 30%,
      и для δt* = 0. Чем платим за неточную прямую связь?
@@ -190,7 +192,7 @@ if EXPERIMENT == "base":
         ax[0].plot(t, theory_Va(t, coeffs, gains), ":", lw=2, label="теория")
     ax[0].set_ylabel("м/с"); ax[0].legend(); ax[0].set_title(f"L3: ступенька по скорости, вариант {VARIANT}")
     ax[1].plot(t, log.controls[:, 1], label="δt"); ax[1].set_ylabel("газ"); ax[1].legend()
-    ax[2].plot(t, T, label="тяга T"); ax[2].axhline(aircraft.T_max, color="r", ls="--", lw=0.8, label="T_max")
+    ax[2].plot(t, T, label="тяга T"); ax[2].plot(t, [thrust(1.0, Va, aircraft) for Va in log.Va], "r--", lw=0.8, label="T(δt=1)")
     ax[2].set_ylabel("Н"); ax[2].legend()
     ax[3].plot(t, log.state[:, H] - h0, label="Δh"); ax[3].set_ylabel("м"); ax[3].set_xlabel("t, с"); ax[3].legend()
     for a in ax:
@@ -253,7 +255,7 @@ elif EXPERIMENT == "omega":
     ax[0].plot(log.t, np.where(log.t >= T_STEP, Va_c1, v["Va"]), "k--", lw=0.8)
     ax[0].set_ylabel("Va, м/с"); ax[0].legend(); ax[0].set_title("L3: влияние ω_nV")
     ax[1].set_ylabel("δt"); ax[1].legend()
-    ax[2].axhline(aircraft.T_max, color="r", ls="--", lw=0.8)
+    ax[2].plot(log.t, [thrust(1.0, Va, aircraft) for Va in log.Va], "r--", lw=0.8, label="T(δt=1)")
     ax[2].set_ylabel("T, Н"); ax[2].set_xlabel("t, с"); ax[2].legend()
     for a in ax:
         a.grid(alpha=0.3)

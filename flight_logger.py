@@ -224,7 +224,7 @@ class FlightLogger:
                 "alpha_stall_deg":   float(np.degrees(ac.alpha_stall)),
                 "alpha_crit_deg":    float(np.degrees(ac.alpha_crit)),
                 "alpha_warning_deg": float(np.degrees(ac.alpha_warning)),
-                "k_motor": ac.k_motor, "T_max": ac.T_max,
+                "D_prop": ac.D_prop, "KV_rpm": ac.KV_rpm, "V_max": ac.V_max,
             },
             "wind": {
                 "Vw_const":   self._wind.Vw_const,

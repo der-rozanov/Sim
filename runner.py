@@ -10,6 +10,7 @@ from sim.state import (initial_state, air_data, total_energy, full_controls,
                        U, W, Q, THETA, H, N_STATES, N_CONTROLS)
 from sim.wind import wind as _wind
 from sim.integrators import step_rk4
+from sim.dynamics import thrust
 
 
 @dataclass
@@ -113,14 +114,20 @@ def compute_trim(aircraft: AircraftParams, Va: float) -> tuple:
     b = np.array([CL_req - aircraft.CL0, -aircraft.Cm0])
     alpha_tr, de_tr = np.linalg.solve(A, b)
 
-    # Тяга = сопротивление
+    # Тяга = сопротивление; газ — бисекцией (тяга монотонно растёт с δt)
     AR     = aircraft.b**2 / S
     CL_lin = aircraft.CL0 + aircraft.CLa * alpha_tr
-    CD_tr  = aircraft.CDp + CL_lin**2 / (np.pi * aircraft.e_oswald * AR)
+    CD_tr  = (aircraft.CDp + CL_lin**2 / (np.pi * aircraft.e_oswald * AR)
+              + aircraft.CDde * de_tr)
     D_tr   = 0.5 * rho * Va**2 * S * CD_tr
-    k      = aircraft.k_motor
-    rhs    = D_tr / (0.5 * rho * aircraft.S_prop * aircraft.C_prop) + Va**2
-    thr_tr = np.sqrt(max(rhs, 0.0)) / k
+    lo, hi = 0.0, 1.0
+    for _ in range(50):
+        mid = 0.5 * (lo + hi)
+        if thrust(mid, Va, aircraft) < D_tr:
+            lo = mid
+        else:
+            hi = mid
+    thr_tr = 0.5 * (lo + hi)
 
     return alpha_tr, de_tr, thr_tr
 
