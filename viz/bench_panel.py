@@ -124,6 +124,7 @@ class Panel:
             self.tabs[name] = (cv, None, [])
             draw[name](cv)
             self._val(cv, W - 10, 16, self._status, anchor="e")
+            self._val(cv, W - 10, 32, self._status_speed, "#444", anchor="e")
             self._controls(name, cv)
             bar = tk.Frame(f, bg="white")
             bar.pack(fill="x")
@@ -183,6 +184,12 @@ class Panel:
     def _status(m):
         return f"t = {m['t']:6.1f} с   " + ("САУ ВКЛ" if m["ap"] else
                                            "САУ ВЫКЛ (P в 3D-окне) — контуры разомкнуты")
+
+    @staticmethod
+    def _status_speed(m):
+        """Скорость и газ — на всех вкладках (тяга иначе видна только на «скорости»)."""
+        ref = f"Va_ref {m['Va_ref']:4.1f}   " if m["ap"] else ""
+        return f"{ref}Va {m['Va']:4.1f} м/с   газ δt {m['thr']:.2f} ({100 * m['thr']:3.0f} %)"
 
     # --- схемы вкладок ------------------------------------------------------
     def _draw_roll(self, cv):
