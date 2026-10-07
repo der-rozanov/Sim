@@ -51,17 +51,23 @@ def coef_CL(alpha: float, q: float, delta_e: float,
             + params.CLde * delta_e)
 
 
-def coef_CD(alpha: float, params: AircraftParams) -> float:
+def coef_CD(alpha: float, params: AircraftParams,
+            q: float = 0.0, delta_e: float = 0.0, Va: float = 1.0) -> float:
     """
-    Коэффициент лобового сопротивления CD (квадратичная модель).
+    Коэффициент лобового сопротивления CD (B&M 2-е изд., слайды 20, 43).
 
-    CD = CDp + CL_linear² / (π·e·AR)
+    CD = CDp + CL_linear² / (π·e·AR) + CDq·q̂ + CDde·δe
       CDp  — вредное (вязкостное) сопротивление
       AR   — удлинение крыла b²/S
+      q̂   = c·q/(2Va)
+    Член CDde·δe — со знаком, как в источнике (при δe < 0 немного уменьшает CD).
+    Без q, δe — поляра крыла (используется в балансировке и проверках).
     """
     AR        = params.b**2 / params.S
     CL_linear = params.CL0 + params.CLa * alpha
-    return params.CDp + CL_linear**2 / (np.pi * params.e_oswald * AR)
+    q_hat     = params.c * q / (2.0 * max(Va, 1.0))
+    return (params.CDp + CL_linear**2 / (np.pi * params.e_oswald * AR)
+            + params.CDq * q_hat + params.CDde * delta_e)
 
 
 def coef_Cm(alpha: float, q: float, delta_e: float,
@@ -108,7 +114,7 @@ def aero_forces_moments(Va: float, alpha: float, q: float,
     q_dyn = 0.5 * params.rho * Va**2
 
     CL = coef_CL(alpha, q, delta_e, Va, params)
-    CD = coef_CD(alpha, params)
+    CD = coef_CD(alpha, params, q, delta_e, Va)
     Cm = coef_Cm(alpha, q, delta_e, Va, params)
 
     L = q_dyn * params.S * CL

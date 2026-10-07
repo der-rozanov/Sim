@@ -31,7 +31,8 @@ derivatives(state, controls, t, params, wind_fn) -> dstate
     fy_grav = +m·g·cos θ·sin φ
     fz_grav = +m·g·cos θ·cos φ
 
-Тяга: только вдоль x_body (тянущий винт, вдоль оси фюзеляжа).
+Тяга: только вдоль x_body (тянущий винт, вдоль оси фюзеляжа); реактивный
+момент винта −Q_prop добавляется к моменту крена.
 
 При v = p = r = phi = psi = 0 и delta_a = delta_r = 0 уравнения в точности
 совпадают с прежней продольной моделью (docs/physics.md, раздел 3.5).
@@ -44,17 +45,46 @@ from .state import (U, W, Q, THETA, X, H, V, P, R, PHI, PSI, Y, N_STATES,
 from .aero import aero_forces_moments, aero_lateral
 
 
+def propeller(throttle: float, Va: float, params: AircraftParams) -> tuple:
+    """
+    Тяга и момент винта с электромотором (B&M 2-е изд., разд. 4.3, слайды 36–37).
+
+      V_in = V_max·δt                       — напряжение на моторе
+      Ω — положительный корень баланса моментов мотора и винта:
+        (ρD⁵/(2π)²·C_Q0)·Ω² + (ρD⁴/(2π)·C_Q1·Va + K_Q·K_V/R)·Ω
+          + (ρD³·C_Q2·Va² − K_Q·V_in/R + K_Q·i0) = 0
+      J = 2π·Va/(Ω·D)                       — относительная поступь
+      CT, CQ = C₂·J² + C₁·J + C₀            — аппроксимации продувки
+      T = ρ·(Ω/2π)²·D⁴·CT,   Q = ρ·(Ω/2π)²·D⁵·CQ
+
+    K_V = K_Q = 60/(2π·KV_rpm) [В·с/рад = Н·м/А].
+    Если Ω ≤ 0 (мотор стоит, Va ≈ 0) — T = Q = 0.
+
+    Возвращает: (T, Q) — тяга вдоль x_body, Н; момент на валу винта, Н·м.
+    """
+    pr = params
+    D  = pr.D_prop
+    KV = 60.0 / (2.0 * np.pi * pr.KV_rpm)
+    KQ = KV
+    V_in = pr.V_max * throttle
+
+    a = pr.rho * D**5 / (2.0 * np.pi)**2 * pr.C_Q0
+    b = pr.rho * D**4 / (2.0 * np.pi) * pr.C_Q1 * Va + KQ * KV / pr.R_motor
+    c = pr.rho * D**3 * pr.C_Q2 * Va**2 - KQ * V_in / pr.R_motor + KQ * pr.i0
+    Omega = (-b + np.sqrt(b**2 - 4.0 * a * c)) / (2.0 * a)
+    if Omega <= 0.0:
+        return 0.0, 0.0
+
+    J  = 2.0 * np.pi * Va / (Omega * D)
+    CT = pr.C_T2 * J**2 + pr.C_T1 * J + pr.C_T0
+    CQ = pr.C_Q2 * J**2 + pr.C_Q1 * J + pr.C_Q0
+    n2 = (Omega / (2.0 * np.pi))**2
+    return pr.rho * n2 * D**4 * CT, pr.rho * n2 * D**5 * CQ
+
+
 def thrust(throttle: float, Va: float, params: AircraftParams) -> float:
-    """
-    Тяговое усилие винта, Н.
-    Модель Beard & McLain (упрощённая):
-      T = 0.5 · ρ · S_prop · C_prop · ((k_motor·δt)² − Va²)
-    Зажим сверху T_max (физический предел мотора).
-    Авторотация (T < 0 при Va > k_motor·δt) сохраняется.
-    """
-    Vmotor = params.k_motor * throttle
-    T = 0.5 * params.rho * params.S_prop * params.C_prop * (Vmotor**2 - Va**2)
-    return min(T, params.T_max)
+    """Тяга винта, Н (см. propeller)."""
+    return propeller(throttle, Va, params)[0]
 
 
 def _gammas(params: AircraftParams) -> tuple:
@@ -103,8 +133,10 @@ def derivatives(state: np.ndarray,
     fx_a, fz_a, M_pitch = aero_forces_moments(Va, alpha, q, c[DE], params)
     fy_a, L_roll, N_yaw = aero_lateral(Va, beta, p, r, c[DA], c[DR], params)
 
-    # Тяга (вдоль x_body)
-    fx_t = thrust(c[DT], Va, params)
+    # Винт: тяга вдоль x_body, реактивный момент — против вращения винта
+    # (крен, B&M слайд 37: Mx −= Q)
+    fx_t, Q_prop = propeller(c[DT], Va, params)
+    L_roll -= Q_prop
 
     # Сила тяжести в связанной СК
     mg = params.mass * params.g

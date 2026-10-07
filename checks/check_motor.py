@@ -1,8 +1,8 @@
 """
 Проверка 02: Силовая установка — тяговооружённость и диапазон скоростей.
 
-Модель тяги (Beard & McLain, упрощённая):
-  T = 0.5 · ρ · S_prop · C_prop · ((k_motor · δt)² − Va²)
+Модель тяги — электромотор + винт (B&M 2-е изд., разд. 4.3), sim.dynamics.propeller:
+  V_in = V_max·δt → обороты Ω из баланса моментов → J → CT(J) → T = ρ(Ω/2π)²D⁴CT
 
 Что считаем:
   1. T(δt) при фиксированных Va — полные тяговые характеристики.
@@ -21,16 +21,22 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from sim.config import AircraftParams
 from sim.aero import coef_CL, coef_CD
+from sim.dynamics import thrust as _thrust
 
 params = AircraftParams()
 
-# ---------------------------------------------------------------------------
-# Формула тяги
-# ---------------------------------------------------------------------------
 
 def thrust(throttle: float, Va: float) -> float:
-    Vmotor = params.k_motor * throttle
-    return 0.5 * params.rho * params.S_prop * params.C_prop * (Vmotor**2 - Va**2)
+    return _thrust(throttle, Va, params)
+
+
+def throttle_for(T_req: float, Va: float) -> float:
+    """Газ, дающий тягу T_req на скорости Va (бисекция; 1.0 — если не хватает)."""
+    lo, hi = 0.0, 1.0
+    for _ in range(50):
+        mid = 0.5 * (lo + hi)
+        lo, hi = (mid, hi) if thrust(mid, Va) < T_req else (lo, mid)
+    return 0.5 * (lo + hi)
 
 
 # ---------------------------------------------------------------------------
@@ -71,8 +77,9 @@ def level_flight_required_thrust(Va: float) -> tuple:
 # Числовые характеристики
 # ---------------------------------------------------------------------------
 
-# --- Максимальная скорость: T=0 при δt=1  →  Va_max = k_motor
-Va_max_thrust = params.k_motor  # м/с
+# --- Скорость, при которой тяга на полном газе обращается в 0
+_Va_grid = np.linspace(0, 80, 1601)
+Va_max_thrust = _Va_grid[np.argmax([thrust(1.0, v) <= 0 for v in _Va_grid])]  # м/с
 
 # --- Скорость сваливания: CL_max из модели
 alpha_arr = np.linspace(np.deg2rad(-5), np.deg2rad(35), 5000)
@@ -105,19 +112,15 @@ valid_mask = T_available > T_req_arr
 Va_min_motor = Va_sweep[valid_mask][0]  if valid_mask.any() else np.nan
 Va_max_motor = Va_sweep[valid_mask][-1] if valid_mask.any() else np.nan
 
-# Балансировочный газ δt_trim(Va)
-# T_req = 0.5·ρ·S_prop·C_prop·((k_motor·δt)² − Va²)  →  δt = sqrt(Va² + T_req/(0.5·ρ·S_prop·C_prop)) / k_motor
-coeff = 0.5 * params.rho * params.S_prop * params.C_prop
-delta_t_trim = np.sqrt(np.clip(Va_sweep**2 + T_req_arr / coeff, 0, None)) / params.k_motor
-delta_t_trim = np.clip(delta_t_trim, 0.0, 1.0)
+# Балансировочный газ δt_trim(Va): T(δt, Va) = T_req
+delta_t_trim = np.array([throttle_for(Tr, Va) for Tr, Va in zip(T_req_arr, Va_sweep)])
 
 print("=" * 58)
-print("  Силовая установка (параметры-аналог Aerosonde)")
+print("  Силовая установка (Aerosonde, B&M 2-е изд.)")
 print("=" * 58)
-print(f"  k_motor              = {params.k_motor:.1f} м/с")
-d_prop = np.sqrt(4 * params.S_prop / np.pi) * 100
-print(f"  S_prop               = {params.S_prop:.4f} m^2  (d~{d_prop:.0f} cm)")
-print(f"  C_prop               = {params.C_prop:.2f}")
+print(f"  Винт D               = {params.D_prop:.3f} м")
+print(f"  Мотор KV             = {params.KV_rpm:.0f} об/мин/В,  R = {params.R_motor} Ом")
+print(f"  Батарея V_max        = {params.V_max:.1f} В")
 print()
 print(f"  Статическая тяга (dt=1, Va=0)  = {T_static_max:.1f} N")
 print(f"  Масса ЛА                       = {params.mass:.1f} кг  (вес {weight:.1f} N)")
@@ -134,7 +137,7 @@ print()
 # Тяга и трим на Va=30
 T30_max   = thrust(1.0, 30.0)
 T30_req, a30, _, _ = level_flight_required_thrust(30.0)
-dt30_trim = np.sqrt(30.0**2 + T30_req / coeff) / params.k_motor
+dt30_trim = throttle_for(T30_req, 30.0)
 print(f"  Рабочая точка Va = 30 м/с:")
 print(f"    T_max (dt=1) = {T30_max:.1f} N")
 print(f"    T_req (L=W)  = {T30_req:.1f} N")
@@ -147,7 +150,7 @@ print("=" * 58)
 # ---------------------------------------------------------------------------
 
 fig, axes = plt.subplots(2, 2, figsize=(13, 9))
-fig.suptitle("Силовая установка ЛА (параметры-аналог Aerosonde)", fontsize=13)
+fig.suptitle("Силовая установка ЛА (Aerosonde, B&M 2-е изд.)", fontsize=13)
 
 # --- 1. T(δt) при фиксированных Va ---
 ax = axes[0, 0]
@@ -165,7 +168,7 @@ ax.grid(True, alpha=0.4)
 
 # --- 2. T(Va) при фиксированных δt ---
 ax = axes[0, 1]
-Va_range = np.linspace(0, params.k_motor, 300)
+Va_range = np.linspace(0, Va_max_thrust + 5, 300)
 for dt_fix in [0.25, 0.5, 0.75, 1.0]:
     T_arr = np.array([thrust(dt_fix, Va) for Va in Va_range])
     ax.plot(Va_range, T_arr, label=f"δt={dt_fix:.2f}")
@@ -173,7 +176,7 @@ ax.axhline(0, color="k", linewidth=0.8, linestyle="--")
 ax.plot(Va_sweep, T_req_arr, "k--", linewidth=2, label="T_req (L=W)")
 ax.axvline(Va_stall,        color="orange", linestyle=":", linewidth=1.5, label=f"Va_stall={Va_stall:.0f}")
 ax.axvline(Va_max_thrust,   color="red",    linestyle=":", linewidth=1.5, label=f"Va_max={Va_max_thrust:.0f}")
-ax.set_xlim(0, params.k_motor + 5)
+ax.set_xlim(0, Va_max_thrust + 5)
 ax.set_xlabel("Воздушная скорость Va, м/с")
 ax.set_ylabel("Тяга T, Н")
 ax.set_title("Тяга vs Va при фиксированных δt")
