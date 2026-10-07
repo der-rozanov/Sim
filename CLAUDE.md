@@ -60,10 +60,13 @@ viz/                  — отображение (принимает Log, не �
     viewer.py         — FlightLogViewer; CLI: python viz/viewer.py [файл.flightlog]
     world3d.py        — мир 3D: карты default (10×10 км: ВПП, река, озеро, деревня, холм,
                         леса), kainki (спутниковый снимок 4×4 км на рельефе SRTM) и
-                        kainki_osm (те же 4×4 км в стиле default по контурам OSM)
+                        kainki_osm (те же 4×4 км в стиле default по контурам OSM),
+                        kainki_large / kainki_large_osm — то же на 10×10 км (мультяшная
+                        раскраска — по снимку через landcover.py + OSM)
                         + бесконечная равнина вокруг; make_world(имя), World.height(X, Z)
     mapdata.py        — загрузка снимка Esri и рельефа SRTM в viz/map_cache/ (не в git)
     osmdata.py        — загрузка/разбор OpenStreetMap (Overpass) для карты kainki_osm
+    landcover.py      — классы поверхности по снимку (лес/пашня/луг/вода) для kainki_large_osm
     viewer3d.py       — 3D-тренажёр (Ursina): мир, силуэт с рулями, 4 камеры;
                         CLI: python viz/viewer3d.py [файл.flightlog] [--map kainki]
     bench_panel.py    — окно стенда САУ (tkinter): блок-схема, ползунки, осциллограф;
@@ -165,7 +168,7 @@ from viz.plotting import plot_dynamics
 - Интегратор пишется вручную (RK4 основной, Эйлер опционально).
 - scipy допустим только при явной необходимости и с согласования автора.
 - Исключение (РЕШ-16): `ursina` (Panda3D, тянет pillow) — только в `viz/viewer3d.py`,
-  `viz/world3d.py`, `viz/mapdata.py`, `viz/osmdata.py`, `scenarios/GameScenario3D.py`
+  `viz/world3d.py`, `viz/mapdata.py`, `viz/osmdata.py`, `viz/landcover.py`, `scenarios/GameScenario3D.py`
   и `scenarios/Bench3D.py`.
   В `sim/`, `control/`, `runner.py` не импортировать. Спутниковые тайлы Esri — только
   локальный кэш `viz/map_cache/` (в .gitignore), в репозиторий не класть.

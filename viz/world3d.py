@@ -7,7 +7,10 @@
             (KainkiMap; данные — viz/mapdata.py, локальный кэш);
   kainki_osm — те же 4 × 4 км и рельеф, но в стиле default: вода, леса, болото,
             посёлок, дороги и здания — из OpenStreetMap (KainkiOsmMap,
-            viz/osmdata.py), поля — случайные лоскуты.
+            viz/osmdata.py), поля — случайные лоскуты;
+  kainki_large / kainki_large_osm — Каинки 10 × 10 км (тот же центр): снимок на
+            рельефе и «мультяшная» карта, раскрашенная по самому снимку
+            (viz/landcover.py) + вода, посёлки, дороги, здания OSM.
 
 Координаты Ursina (см. viewer3d.py): X — восток, Y — вверх, Z — север, м.
 Старт всех сценариев — (0, h0, 0), над ВПП карты; курс старта игры — start_psi.
@@ -418,11 +421,12 @@ class KainkiMap(World):
     plain_p, fade = 2000.0, 500.0
     plain_tint = 0.68                 # равнина темнее — ближе к тонам снимка
     CELL = 20.0                       # клетка сетки рельефа, м
+    PREP = {}                         # параметры загрузки снимка/рельефа (mapdata.prepare)
 
     def __init__(self, seed: int = 7):
         super().__init__(seed)
         from viz.mapdata import prepare
-        d = prepare(self.CACHE_NAME, self.LAT0, self.LON0, self.SIZE)
+        d = prepare(self.CACHE_NAME, self.LAT0, self.LON0, self.SIZE, **self.PREP)
         self.cache = d
         self.dem = np.load(os.path.join(d, "dem.npy")).astype(float)
         self.meta = json.load(open(os.path.join(d, "meta.json"), encoding="utf-8"))
@@ -447,6 +451,16 @@ class KainkiMap(World):
 
     def _build_map(self):
         from PIL import Image
+        root = Entity()
+        self._terrain(Image.open(os.path.join(self.cache, "ortho.jpg")), 0.18).parent = root
+        self._build_airfield().parent = root
+        return root
+
+    def _terrain(self, img, amp):
+        """
+        Сетка рельефа (общие вершины, CELL м) с текстурой img на весь квадрат карты.
+        amp — глубина отмывки рельефа цветом вершин (0 — без отмывки).
+        """
         S, h = self.SIZE, self.CELL
         n = int(S / h)
         s = -S / 2 + h * np.arange(n + 1)
@@ -455,7 +469,7 @@ class KainkiMap(World):
         # мягкая отмывка рельефа поверх снимка (на снимке своя светотень)
         gx = np.gradient(Y, h, axis=0); gz = np.gradient(Y, h, axis=1)
         nrm = np.stack([-gx, np.ones_like(Y), -gz], -1)
-        shade = 0.82 + 0.18 * np.clip(_shade(nrm) * 2 - 1.1, 0, 1)
+        shade = 1 - amp + amp * np.clip(_shade(nrm) * 2 - 1.1, 0, 1)
         verts = np.stack([X, Y, Z], -1).reshape(-1, 3)
         uvs = np.stack([(X + S / 2) / S, (Z + S / 2) / S], -1).reshape(-1, 2)
         idx = np.arange((n + 1) ** 2).reshape(n + 1, n + 1)
@@ -465,13 +479,10 @@ class KainkiMap(World):
         m = Mesh(vertices=[tuple(v) for v in verts.tolist()], triangles=tris.tolist(),
                  uvs=[tuple(u) for u in uvs.tolist()],
                  colors=[Color(g, g, g, 1) for g in cols[:, 0].tolist()], static=True)
-        tex = Texture(Image.open(os.path.join(self.cache, "ortho.jpg")))
+        tex = Texture(img)
         tex.filtering = "bilinear"        # вблизи — сглаживание (увеличение)
         tex.filtering = "mipmap"          # вдали — мипмапы (уменьшение), без ряби
-        root = Entity()
-        Entity(model=m, texture=tex, shader=unlit_with_fog_shader, double_sided=True, parent=root)
-        self._build_airfield().parent = root
-        return root
+        return Entity(model=m, texture=tex, shader=unlit_with_fog_shader, double_sided=True)
 
     def _top_base(self):
         from PIL import Image
@@ -665,7 +676,161 @@ class KainkiOsmMap(KainkiMap):
         return _merge(parts) if parts else Entity()
 
 
-MAPS = {"default": DefaultMap, "kainki": KainkiMap, "kainki_osm": KainkiOsmMap}
+class KainkiLargeMap(KainkiMap):
+    """
+    Каинки 10 × 10 км (тот же центр — стык полос «Т»): снимок Esri уровня 16
+    (8192 пикс, ≈ 1.2 м/пикс) на рельефе SRTM (сетка 10 м). Аэродром — как у
+    KainkiMap. Кэш — viz/map_cache/kainki_large/.
+    """
+
+    name, title = "kainki_large", "Каинки 10×10 км (спутниковый снимок)"
+    CACHE_NAME = "kainki_large"
+    SIZE = 10000.0
+    PREP = dict(ortho_px=8192, img_zoom=16, dem_px=1001)
+    map_x = map_z = (-SIZE / 2, SIZE / 2)
+
+
+class KainkiLargeOsmMap(KainkiOsmMap):
+    """
+    Каинки 10 × 10 км в «мультяшном» стиле. В отличие от KainkiOsmMap основа
+    раскраски — сам снимок (viz/landcover.py: лес, кустарник, пашня, луг,
+    трава, старицы), т. к. в OSM здесь мало площадей. Поверх:
+      пашня — 4 оттенка по яркости снимка (видны настоящие границы полей);
+      мелкая фактура — яркость снимка (±8 %), отмывка рельефа SRTM — в текстуре;
+      вода — OSM ∩ «тёмное гладкое» на снимке (русла OSM местами нарисованы по
+             разливу) ∪ старицы со снимка;
+      посёлки, болота — площади OSM полупрозрачно; ручьи, дороги, здания — OSM.
+    3D: ели по маске леса со снимка, дома OSM, аэродром KainkiMap.
+    """
+
+    name, title = "kainki_large_osm", "Каинки 10×10 км (мультяшная)"
+    CACHE_NAME = "kainki_large"
+    SIZE = 10000.0
+    PREP = KainkiLargeMap.PREP
+    map_x = map_z = (-SIZE / 2, SIZE / 2)
+    TEX_PX = 4096                     # ≈ 2.4 м/пикс
+    LC_PX = 2048                      # классификация снимка, ≈ 4.9 м/пикс
+    RELIEF_GAIN = 1.5                 # усиление уклонов в отмывке текстуры
+    LC_COLORS = dict(forest=(0.19, 0.36, 0.16), scrub=(0.30, 0.47, 0.22),
+                     meadow=(0.52, 0.68, 0.32), grass=(0.40, 0.58, 0.26))
+    FIELD_SHADES = np.array([[0.63, 0.52, 0.33], [0.72, 0.62, 0.40],
+                             [0.80, 0.74, 0.47], [0.80, 0.74, 0.47]])
+
+    def _build_map(self):
+        from viz.osmdata import load
+        from viz import landcover
+        self.areas, self.lines, self.buildings = load(self.CACHE_NAME, self.LAT0, self.LON0, self.SIZE)
+        self.lc, self.wet = landcover.load(self.cache, self.LC_PX)
+        img = self._render()
+        self._top_img = img
+        root = Entity()
+        self._terrain(img, 0.0).parent = root               # светотень — в текстуре
+        self._build_osm_trees(None).parent = root
+        self._build_osm_buildings().parent = root
+        self._build_airfield().parent = root
+        return root
+
+    def _hillshade(self, n):
+        """Отмывка рельефа на сетке n × n (строка 0 — север): множитель яркости."""
+        S = self.SIZE
+        s = (np.arange(n) + 0.5) / n * S - S / 2
+        E, N = np.meshgrid(s, -s)
+        from viz.landcover import _box
+        Y = _box(_box(self._dem_at(E, N), 2), 2) * self.RELIEF_GAIN   # сгладить ступени SRTM 30 м
+        h = S / n
+        dE = np.gradient(Y, h, axis=1); dN = -np.gradient(Y, h, axis=0)
+        nrm = np.stack([-dE, np.ones_like(Y), -dN], -1)
+        nrm /= np.linalg.norm(nrm, axis=-1, keepdims=True)
+        lit = nrm @ SUN_DIR                                 # X — восток, Y — вверх, Z — север
+        return np.clip(1 + 1.6 * (lit - SUN_DIR[1]), 0.6, 1.2)
+
+    def _render(self):
+        from PIL import Image, ImageDraw, ImageChops, ImageFilter
+        from viz import landcover as lcm
+        S, N, n = self.SIZE, self.TEX_PX, self.LC_PX
+        to8 = lambda c: tuple(int(255 * v) for v in c)
+        ortho = Image.open(os.path.join(self.cache, "ortho.jpg"))
+        # 1. классы → цвета (на сетке классификации)
+        lc = self.lc
+        blur = np.asarray(ortho.resize((n, n), Image.BOX).filter(ImageFilter.GaussianBlur(4)), float).mean(2)
+        col = np.zeros((n, n, 3))
+        for name in ("forest", "scrub", "meadow", "grass"):
+            col[lc == getattr(lcm, name.upper())] = self.LC_COLORS[name]
+        f = lc == lcm.FIELD
+        col[f] = self.FIELD_SHADES[np.clip(((blur[f] - 80) / 12).astype(int), 0, 3)]
+        col[lc == lcm.WATER] = self.LC_COLORS["grass"]      # вода — ниже, маской
+        col *= self._hillshade(n)[..., None]
+        img = Image.fromarray(np.clip(col * 255, 0, 255).astype(np.uint8)).resize((N, N), Image.BILINEAR)
+        # 2. мелкая фактура снимка (±8 %)
+        lum = np.asarray(ortho.convert("L").resize((N, N), Image.BOX), float)
+        k = 0.92 + 0.16 * np.clip((lum - lum.mean()) / 40 + 0.5, 0, 1)
+        img = Image.fromarray(np.clip(np.asarray(img) * k[..., None], 0, 255).astype(np.uint8))
+        dr = ImageDraw.Draw(img)
+        # 3. луг аэродрома
+        (cx, cz), ra, rb, b = self.AIRFIELD_GRASS
+        t = np.linspace(0, 2 * np.pi, 48)
+        u = np.array([np.sin(np.radians(b)), np.cos(np.radians(b))])
+        v = np.array([u[1], -u[0]])
+        m = Image.new("L", (N, N), 0)
+        ImageDraw.Draw(m).polygon(self._px(np.array([cx, cz]) + np.outer(ra * np.cos(t), u)
+                                           + np.outer(rb * np.sin(t), v)), fill=140)
+        img.paste(to8(self.LC_COLORS["meadow"]), mask=m.filter(ImageFilter.GaussianBlur(6)))
+        # 4. площади OSM: посёлки и болота — полупрозрачно
+        for cls, alpha in (("residential", 120), ("wetland", 110)):
+            m = Image.new("L", (N, N), 0)
+            md = ImageDraw.Draw(m)
+            for outer, inner in self.areas.get(cls, []):
+                for ring in outer:
+                    md.polygon(self._px(ring), fill=alpha)
+                for ring in inner:
+                    md.polygon(self._px(ring), fill=0)
+            img.paste(to8(self.COLORS[cls]), mask=m)
+        # 5. вода
+        wm = Image.new("L", (N, N), 0)
+        for outer, inner in self.areas.get("water", []):
+            tmp = Image.new("L", (N, N), 0)
+            td = ImageDraw.Draw(tmp)
+            for ring in outer:
+                td.polygon(self._px(ring), fill=255)
+            for ring in inner:
+                td.polygon(self._px(ring), fill=0)
+            wm = ImageChops.lighter(wm, tmp)
+        up = lambda a: np.asarray(Image.fromarray(a.astype(np.uint8) * 255).resize((N, N), Image.NEAREST)) > 0
+        water = ((np.asarray(wm) > 0) & up(self.wet)) | up(lc == lcm.WATER)
+        water = np.asarray(Image.fromarray(water.astype(np.uint8) * 255)
+                           .filter(ImageFilter.GaussianBlur(2))) > 127
+        self.water_mask = water
+        img.paste(to8(self.COLORS["water"]), mask=Image.fromarray(water.astype(np.uint8) * 255))
+        # 6. ручьи, дороги, здания (вид сверху)
+        for pts, w, kind in sorted(self.lines, key=lambda x: x[2] != "water"):
+            if kind == "water" and w >= 20:
+                continue                                    # реки — площадями
+            c = self.COLORS["water" if kind == "water" else kind]
+            dr.line(self._px(pts), fill=to8(c), width=max(1, int(round(w / S * N))), joint="curve")
+        for pts in self.buildings:
+            dr.polygon(self._px(pts), fill=(150, 120, 105))
+        return img
+
+    def _build_osm_trees(self, masks):
+        S, n, rng = self.SIZE, self.LC_PX, self.rng
+        from viz import landcover as lcm
+        X = rng.uniform(-S / 2, S / 2, 500000)
+        Z = rng.uniform(-S / 2, S / 2, 500000)
+        col = np.clip(((X + S / 2) / S * n).astype(int), 0, n - 1)
+        row = np.clip(((S / 2 - Z) / S * n).astype(int), 0, n - 1)
+        N = self.TEX_PX
+        dry = ~self.water_mask[np.clip((row * N) // n, 0, N - 1), np.clip((col * N) // n, 0, N - 1)]
+        c = self.lc[row, col]
+        far = np.hypot(X + 120, Z - 15) > 320                # аэродром свободен
+        r = rng.random(X.size)
+        forest = dry & far & (c == lcm.FOREST)
+        bush = dry & far & (((c == lcm.SCRUB) & (r < 0.25)) | ((c == lcm.MEADOW) & (r < 0.004)))
+        sel = np.flatnonzero(forest)[:45000].tolist() + np.flatnonzero(bush)[:15000].tolist()
+        return _trees(X[sel], self.height(X[sel], Z[sel]), Z[sel], rng)
+
+
+MAPS = {"default": DefaultMap, "kainki": KainkiMap, "kainki_osm": KainkiOsmMap,
+        "kainki_large": KainkiLargeMap, "kainki_large_osm": KainkiLargeOsmMap}
 
 
 def make_world(name: str = "default") -> World:

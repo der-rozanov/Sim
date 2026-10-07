@@ -26,7 +26,8 @@ import numpy as np
 
 from viz.mapdata import CACHE, R_EARTH
 
-OVERPASS = "https://overpass-api.de/api/interpreter"
+OVERPASS = ("https://overpass-api.de/api/interpreter",         # основной и зеркало
+            "https://overpass.kumi.systems/api/interpreter")
 UA = {"User-Agent": "UAV-sim-diploma/1.0 (local cache)"}
 
 # дороги: ширина на карте, м, и цвет (тип грунт/асфальт)
@@ -52,8 +53,15 @@ def fetch(name, lat0, lon0, size=4000.0, force=False):
          f"way({bb})[waterway];way({bb})[water];relation({bb})[water];"
          f"way({bb})[highway];way({bb})[building];);out geom;")
     print(f"[osm] {name}: загрузка OpenStreetMap…")
-    req = urllib.request.Request(OVERPASS, data=urllib.parse.urlencode({"data": q}).encode(), headers=UA)
-    raw = urllib.request.urlopen(req, timeout=180).read()
+    for url in OVERPASS:
+        try:
+            req = urllib.request.Request(url, data=urllib.parse.urlencode({"data": q}).encode(), headers=UA)
+            raw = urllib.request.urlopen(req, timeout=180).read()
+            break
+        except OSError as e:                  # таймаут/504 — пробуем зеркало
+            print(f"[osm] {url}: {e}")
+    else:
+        raise RuntimeError("Overpass недоступен")
     open(path, "wb").write(raw)
     data = json.loads(raw)
     print(f"[osm] готово: {len(data['elements'])} объектов → {path}")

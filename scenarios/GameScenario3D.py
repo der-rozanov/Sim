@@ -381,13 +381,14 @@ class Game(Entity):
         text = (
             f"{mode}\n"
             f"t   {self.t:7.2f} с   {state}\n"
-            f"Va  {Va:7.2f} м/с\n"
+            f"Va  {Va:7.2f} м/с" + (f"   уставка {self.Va_ref:4.1f}\n" if self.ap else "\n") +
+            f"газ δt {c[1]:5.2f}  ({100 * c[1]:3.0f} %)\n"
             f"h   {s[H]:7.1f} м\n"
             f"α   {deg(alpha):7.2f}°    β  {deg(beta):6.2f}°\n"
             f"φ   {_wrap180(deg(s[PHI])):7.2f}°    θ  {deg(s[THETA]):6.2f}°\n"
             f"ψ   {deg(s[PSI]) % 360:7.1f}°    χ  {deg(np.arctan2(Vy, Vx)) % 360:6.1f}°\n"
             f"δe  {deg(c[0]):7.2f}°    δa {deg(c[2]):6.2f}°\n"
-            f"δr  {deg(c[3]):7.2f}°    δt {c[1]:6.2f}\n"
+            f"δr  {deg(c[3]):7.2f}°\n"
             f"ветер С {w_vec[0]:5.1f}  В {w_vec[2]:5.1f}  верт {w_vec[1]:5.1f} м/с"
         )
         al = [self.ac.alpha_warning, self.ac.alpha_crit, self.ac.alpha_stall]
