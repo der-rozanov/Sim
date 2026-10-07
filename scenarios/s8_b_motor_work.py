@@ -51,7 +51,7 @@ aircraft    = AircraftParams()
 wind_params = WindParams(Vw_const=5.0)
 sp          = SensorParams()
 
-VA_REF = 25.0   # целевая скорость полёта (точка замера)
+VA_REF = 16.0   # целевая скорость полёта (точка замера) — крейсер FPV
 cfg    = SimConfig(Va0=VA_REF, h0=100.0, theta0=0.0, dt=0.01, t_end=60.0)
 
 H_TRIM = 100.0
@@ -59,7 +59,7 @@ H_HIGH = 150.0
 VW        = wind_params.Vw_const
 T_CLIMB   = 10.0
 T_DESCEND = 40.0
-KH        = 0.006
+KH        = PitchControlParams().KH   # рад/м, расчёт control/tuning.py
 
 ANIM_SPEED = 2.0
 ANIM_FPS   = 25
@@ -82,9 +82,10 @@ print(f"Trim:  T={T_trim:.2f} Н  P_mot={P_trim:.1f} Вт")
 # ------------------------------------------------------------------
 # Регуляторы
 # ------------------------------------------------------------------
-ctrl_params = PitchControlParams(Va_ref=30.0, gain_scheduling=True)  # 30.0 = скорость настройки ПИД
+ctrl_params = PitchControlParams(gain_scheduling=True)  # Va_ref = 16 — точка настройки (control/tuning.py)
 controller  = PitchController(aircraft, ctrl_params)
 controller.set_trim_throttle(thr_trim)
+controller.set_trim_elevator(de_trim)   # упреждающий балансировочный δe
 controller.reset({'theta': s0[THETA], 'q': 0.0, 'h': H_TRIM})
 
 spd_params = SpeedControlParams()

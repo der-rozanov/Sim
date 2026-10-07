@@ -41,7 +41,7 @@ from lateral_common import FullSAU, course_of
 # ------------------------------------------------------------------
 aircraft = AircraftParams()
 sp       = SensorParams()
-cfg      = SimConfig(Va0=30.0, h0=100.0, dt=0.01, t_end=80.0)
+cfg      = SimConfig(Va0=16.0, h0=100.0, dt=0.01, t_end=80.0)
 
 VW     = 5.0     # м/с, боковой ветер на восток  [МОДЕЛЬ: значение условное]
 T_WIND = 20.0    # с, ступенька ветра

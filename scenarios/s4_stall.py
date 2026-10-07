@@ -43,7 +43,7 @@ plt.rcParams["font.family"] = "DejaVu Sans"
 aircraft    = AircraftParams()
 wind_params = WindParams()
 sp          = SensorParams()
-cfg         = SimConfig(Va0=30.0, h0=300.0, theta0=0.0, dt=0.01, t_end=55.0)
+cfg         = SimConfig(Va0=16.0, h0=300.0, theta0=0.0, dt=0.01, t_end=55.0)
 
 THETA_POS     = np.radians(1.9)    # тримовый полёт (фаза 1)
 THETA_NEG     = np.radians(20.0)   # тангаж + газ=0 → срыв (фаза 2)
@@ -84,6 +84,7 @@ print(f"Trim:  alpha={np.degrees(alpha_trim):.2f} deg  "
 ctrl_params = PitchControlParams(Va_ref=cfg.Va0)
 controller  = PitchController(aircraft, ctrl_params)
 controller.set_trim_throttle(thr_trim)
+controller.set_trim_elevator(de_trim)   # упреждающий балансировочный δe
 controller.reset({'theta': s0[THETA], 'q': 0.0, 'h': cfg.h0})
 
 rng = np.random.default_rng(seed=7)

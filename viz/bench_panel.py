@@ -45,7 +45,7 @@ SLIDER_POS = {
     "da_max": (800, 122, 90, C_SAT),
     "phi_Kd": (800, 245, 90, C_BOX),
     # тангаж / высота
-    "KH": (155, 98, 85, C_BOX),
+    "KH": (155, 92, 85, C_BOX), "h_Ki": (155, 140, 85, C_BOX),
     "theta_Kp": (350, 55, 100, C_BOX), "theta_Ki": (350, 112, 100, C_BOX),
     "theta_Kd": (350, 169, 100, C_BOX),
     "q_max": (477, 127, 70, C_SAT),
@@ -244,8 +244,8 @@ class Panel:
         S(cv, 70, Y)
         V(cv, 70, Y - 30, lambda m: f"{m['e_h']:+.1f}")
         A(cv, 81, Y, 105, Y)
-        self._box(cv, 105, 75, 205, 195, "П высоты")
-        cv.create_text(155, 172, text="+ α_трим\nогр. ±20°", font=FONT_S, justify="center")
+        self._box(cv, 105, 65, 205, 215, "ПИ высоты")
+        cv.create_text(155, 196, text="+ α_трим, огр. ±15°", font=FONT_S, justify="center")
         A(cv, 205, Y, 245, Y)
         V(cv, 225, Y - 15, lambda m: f"{m['theta_ref']:+.1f}", C_REF)
         S(cv, 256, Y)
@@ -281,8 +281,8 @@ class Panel:
         A(cv, 1040, 105, 1090, 105, 1090, 322, 70, 322, 70, 146)         # h (баровысотомер)
         cv.create_text(1043, 97, text="h", font=FONT_B, fill=C_MEAS, anchor="w")
         V(cv, 450, 310, lambda m: f"h = {m['h']:.1f} м", C_MEAS)
-        self._footer(cv, "θ_ref = α_трим + KH·(h_ref − h);   q_ref = ПИД(θ_ref − θ);   "
-                         "δe = −k·ПИД(q_ref − q),  k = (Va₀/Va)² при GS (Va₀ = 30 м/с), иначе k = 1.")
+        self._footer(cv, "θ_ref = α_трим + Kp·e_h + Ki·∫e_h;   q_ref = ПИД(θ_ref − θ);   "
+                         "δe = δe_трим − k·ПИД(q_ref − q),  k = (Va₀/Va)² при GS (Va₀ = 16 м/с), иначе k = 1.")
 
     def _draw_speed(self, cv):
         Y, A, S, V = 150, self._arrow, self._sum, self._val

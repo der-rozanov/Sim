@@ -71,7 +71,7 @@ PRESET_NAME = "Встречный ветер, рамп-снижение"
 aircraft    = AircraftParams()
 wind_params = WindParams(Vw_const=-15.0)   # м/с, встречный ветер (минус = встречный)
 sp  = SensorParams()
-cfg = SimConfig(Va0=30.0, h0=150.0, dt=0.01, t_end=90.0)
+cfg = SimConfig(Va0=16.0, h0=150.0, dt=0.01, t_end=90.0)
 
 # ─── ПРЕСЕТ 2 (закомментирован): Встречный сдвиг ветра по высоте ─────────────
 # То же, что Пресет 1, но встречный ветер УСИЛИВАЕТСЯ с высотой.
@@ -84,28 +84,28 @@ cfg = SimConfig(Va0=30.0, h0=150.0, dt=0.01, t_end=90.0)
 #     h_shear_hi = 150.0,
 #     dV_shear   = -6.0,   # → на H_HIGH=150м: Vwx = −8 м/с
 # )
-# cfg = SimConfig(Va0=30.0, h0=150.0, dt=0.01, t_end=90.0)
+# cfg = SimConfig(Va0=16.0, h0=150.0, dt=0.01, t_end=90.0)
 
 # ─── ПРЕСЕТ 3 (закомментирован): Резкий порыв в середине снижения ────────────
 # Прямоугольный порыв 7 м/с на 15 с — ступенчатый сюрприз.
 # До/после порыва обе CAУ работают одинаково; в момент порыва без-зонд теряет высоту.
 # PRESET_NAME = "Порыв при снижении"
 # wind_params = WindParams(gust_amp=-7.0, gust_t0=35.0, gust_dur=15.0)
-# cfg = SimConfig(Va0=30.0, h0=150.0, dt=0.01, t_end=90.0)
+# cfg = SimConfig(Va0=16.0, h0=150.0, dt=0.01, t_end=90.0)
 
 # ─── ПРЕСЕТ 4 (закомментирован): Штиль — контрольный прогон ─────────────────
 # Без ветра: alpha_est ≈ alpha_true → обе CAУ должны дать J_E ≈ J_E, J_h ≈ J_h.
 # Разница — только шум зонда. Используй для проверки честности сравнения.
 # PRESET_NAME = "Штиль (контрольный)"
 # wind_params = WindParams()
-# cfg = SimConfig(Va0=30.0, h0=150.0, dt=0.01, t_end=90.0)
+# cfg = SimConfig(Va0=16.0, h0=150.0, dt=0.01, t_end=90.0)
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  ПАРАМЕТРЫ СЦЕНАРИЯ (общие для всех прогонов)
 # ══════════════════════════════════════════════════════════════════════════════
 H_HIGH    = 150.0   # м, стартовая высота
 H_LOW     = 100.0   # м, целевая высота
-VA_REF    = 30.0    # м/с
+VA_REF    = 16.0    # м/с
 
 # Расписание уставки высоты:
 #   0 … T_HOLD_HI  — удержание H_HIGH      (уровень, ветер, alpha_est ≈ alpha_true)
@@ -117,7 +117,7 @@ VA_REF    = 30.0    # м/с
 T_HOLD_HI  = 10.0   # с
 T_RAMP_END = 70.0   # с  (рамп длится 60 с, скорость снижения ≈ 0.83 м/с)
 
-KH        = 0.006   # рад/м, усиление контура высоты
+KH        = PitchControlParams().KH   # рад/м, расчёт control/tuning.py
 THETA_CLIP = 0.349  # рад = 20°, клип theta_ref (расширен vs стандартных 15°,
                     # чтобы клип не маскировал разницу alpha_src при малом h_err)
 
@@ -163,6 +163,7 @@ def _h_ref_schedule(t: float) -> float:
 def _make_controller(alpha_mode: str):
     ctrl = PitchController(aircraft, PitchControlParams(Va_ref=cfg.Va0))
     ctrl.set_trim_throttle(thr_trim)
+    ctrl.set_trim_elevator(de_trim)   # упреждающий балансировочный δe
     ctrl.reset({"theta": s0[THETA], "q": 0.0, "h": H_HIGH})
 
     spd = SpeedController(aircraft, SpeedControlParams())

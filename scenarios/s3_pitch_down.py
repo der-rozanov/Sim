@@ -47,7 +47,7 @@ plt.rcParams["font.family"] = "DejaVu Sans"
 aircraft    = AircraftParams()
 wind_params = WindParams()
 sp          = SensorParams()
-cfg = SimConfig(Va0=30.0, h0=500.0, theta0=0.0, dt=0.01, t_end=40.0)
+cfg = SimConfig(Va0=16.0, h0=500.0, theta0=0.0, dt=0.01, t_end=40.0)
 
 T_TRIM       = 10.0             # с, длительность тримового участка
 T_RETURN     = 20.0             # с, момент возврата на тримовый тангаж
@@ -87,6 +87,7 @@ print(f"Возврат на трим:      t = {T_RETURN:.0f} с")
 ctrl_params = PitchControlParams(Va_ref=cfg.Va0)
 controller  = PitchController(aircraft, ctrl_params)
 controller.set_trim_throttle(thr_trim)
+controller.set_trim_elevator(de_trim)   # упреждающий балансировочный δe
 controller.reset({"theta": s0[THETA], "q": 0.0, "h": cfg.h0})
 
 rng            = np.random.default_rng(seed=42)

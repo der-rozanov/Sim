@@ -4,7 +4,7 @@
 
 Структура управления:
   h_ref → [P_h] → theta_ref → [каскадный ПИД theta+q] → delta_e
-  throttle = trim (фиксированный)
+  Va_ref → [ПИ Va] → throttle            (SpeedController, удержание крейсерской скорости)
 
 Сценарий:
    0 .. T_CLIMB   с → h_ref = H_TRIM  (горизонтальный трим)
@@ -30,7 +30,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
 from runner import run, compute_trim, trim_state, print_summary
 from control.controllers import with_roll_hold   # САУ по крену (РЕШ-19)
-from control.controllers import PitchController, PitchControlParams
+from control.controllers import (PitchController, PitchControlParams,
+                                 SpeedController, SpeedControlParams)
 from control.sensors import measure_gyro, measure_altitude, measure_airspeed
 from sim.state import THETA, Q, H, X
 from flight_logger import FlightLogger
@@ -43,7 +44,7 @@ plt.rcParams["font.family"] = "DejaVu Sans"
 aircraft    = AircraftParams()
 wind_params = WindParams()
 sp          = SensorParams()
-cfg         = SimConfig(Va0=30.0, h0=100.0, theta0=0.0, dt=0.01, t_end=60.0)
+cfg         = SimConfig(Va0=16.0, h0=100.0, theta0=0.0, dt=0.01, t_end=60.0)
 
 H_TRIM    = 100.0   # начальная высота, м
 H_HIGH    = 200.0   # уставка набора, м
@@ -52,7 +53,7 @@ T_DESCEND = 40.0    # с, команда снижения
 
 # P-коэффициент внешнего контура: ошибка высоты → поправка тангажа
 # 50 м ошибки → theta_ref = alpha_trim + 50*KH (ограничено ±15°)
-KH = 0.006          # рад/м
+KH = PitchControlParams().KH   # рад/м, расчёт control/tuning.py
 
 ANIM_SPEED = 2.0
 ANIM_FPS   = 25
@@ -87,7 +88,13 @@ print(f"Trim:  alpha={np.degrees(alpha_trim):.2f} deg  "
 ctrl_params = PitchControlParams(Va_ref=cfg.Va0)
 controller  = PitchController(aircraft, ctrl_params)
 controller.set_trim_throttle(thr_trim)
+controller.set_trim_elevator(de_trim)   # упреждающий балансировочный δe
 controller.reset({'theta': s0[THETA], 'q': 0.0, 'h': H_TRIM})
+
+# Скорость — газом (без этого набор на балансировочном газе ведёт к сваливанию)
+spd_ctrl = SpeedController(aircraft, SpeedControlParams())
+spd_ctrl.set_trim_throttle(thr_trim)
+spd_ctrl.set_Va_ref(cfg.Va0)
 
 rng = np.random.default_rng(seed=42)
 h_ref_buf     = []
@@ -121,7 +128,8 @@ def controls_fn(t, state, Va, alpha):
     Va_meas    = measure_airspeed(Va, sp.airspeed_bias, sp.airspeed_noise, rng)
 
     meas = {'q': q_meas, 'theta': theta_meas, 'h': h_meas, 'Va': Va_meas}
-    return controller.step(t, meas, cfg.dt)
+    delta_e = controller.step(t, meas, cfg.dt)[0]
+    return np.array([delta_e, spd_ctrl.step(Va_meas, cfg.dt)])
 
 # ------------------------------------------------------------------
 # Прогон
