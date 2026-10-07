@@ -46,7 +46,7 @@ wind_params = WindParams()
 sp          = SensorParams()
 cfg = SimConfig(dt=0.01, t_end=145.0, Va0=30.0, h0=100.0)
 
-VA_REF    = 30.0
+VA_REF    = 16.0
 H_INIT    = 100.0
 H_CRUISE  = 150.0
 T_CRUISE  = 50.0    # с, начало горизонтального полёта

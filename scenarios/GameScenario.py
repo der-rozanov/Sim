@@ -8,7 +8,7 @@ GameScenario — Ручное и автоматическое управлени
 
 Режим АВТОПИЛОТ (клавиша A):
   W / S  — уставка тангажа θ_ref  ±1°  (диапазон −20…+20°)
-  X / Z  — уставка скорости Va_ref ±1 м/с  (диапазон 25…50 м/с)
+  X / Z  — уставка скорости Va_ref ±1 м/с  (диапазон 10…30 м/с)
   Автопилот управляет рулём и тягой через ПИД-контуры.
 
 Режим УДЕРЖАНИЕ ВЫСОТЫ (клавиша H, только при включённом АП):
@@ -57,7 +57,7 @@ plt.rcParams["font.family"] = "DejaVu Sans"
 # ------------------------------------------------------------------
 aircraft    = AircraftParams()
 wind_params = WindParams(Vw_const=0.0)
-cfg         = SimConfig(Va0=30.0, h0=100.0, theta0=0.0, dt=0.01, t_end=9999.0)
+cfg         = SimConfig(Va0=16.0, h0=100.0, theta0=0.0, dt=0.01, t_end=9999.0)
 
 DE_STEP    = np.radians(0.3)
 DE_MAX     = np.radians(30.0)
@@ -68,13 +68,13 @@ THETA_STEP = np.radians(1.0)
 THETA_MAX  = np.radians(20.0)
 THETA_MIN  = np.radians(-20.0)
 VA_STEP    = 1.0
-VA_MAX     = 50.0
-VA_MIN     = 25.0
+VA_MAX     = 30.0
+VA_MIN     = 10.0
 
 H_STEP = 10.0           # шаг высоты в режиме удержания, м
 H_MAX  = 500.0
 H_MIN  = 10.0
-KH     = 0.006          # коэффициент h→θ_ref, рад/м (из ТЗ)
+KH     = PitchControlParams().KH   # рад/м, расчёт control/tuning.py
 
 SIM_STEPS_PER_FRAME = 4       # dt=0.01, fps=50  →  1× реальное время
 ANIM_FPS   = 50
@@ -105,6 +105,7 @@ ALPHA_CRIT_DEG = np.degrees(aircraft.alpha_crit)
 ctrl_params = PitchControlParams(Va_ref=cfg.Va0)
 ap_pitch    = PitchController(aircraft, ctrl_params)
 ap_pitch.set_trim_throttle(thr_trim)
+ap_pitch.set_trim_elevator(de_trim)   # упреждающий балансировочный δe
 ap_pitch.reset({"theta": s0[THETA], "q": 0.0, "h": cfg.h0})
 # САУ по крену: держит крылья горизонтально (парирует момент винта, РЕШ-19)
 roll_hold   = RollHold(aircraft, SensorParams(), np.random.default_rng(7))

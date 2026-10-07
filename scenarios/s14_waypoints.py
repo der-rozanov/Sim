@@ -37,7 +37,7 @@ from lateral_common import FullSAU
 # ------------------------------------------------------------------
 aircraft = AircraftParams()
 sp       = SensorParams()
-cfg      = SimConfig(Va0=30.0, h0=100.0, dt=0.01, t_end=260.0)
+cfg      = SimConfig(Va0=16.0, h0=100.0, dt=0.01, t_end=260.0)
 
 # (N, E, h), м — квадрат 1 км с острым углом в конце  [МОДЕЛЬ: маршрут условный]
 WAYPOINTS = [(1000, 0, 100), (1000, 1000, 130), (0, 1000, 130), (600, 300, 100)]

@@ -44,15 +44,15 @@ plt.rcParams["font.family"] = "DejaVu Sans"
 aircraft    = AircraftParams()
 wind_params = WindParams(Vw_const=5.0)
 sp          = SensorParams()
-cfg         = SimConfig(Va0=30.0, h0=100.0, theta0=0.0, dt=0.01, t_end=60.0)
+cfg         = SimConfig(Va0=16.0, h0=100.0, theta0=0.0, dt=0.01, t_end=60.0)
 
 H_TRIM    = 100.0
 H_HIGH    = 200.0
-VA_REF    = 30.0
+VA_REF    = 16.0
 VW        = wind_params.Vw_const
 T_CLIMB   = 10.0
 T_DESCEND = 40.0
-KH        = 0.006
+KH        = PitchControlParams().KH   # рад/м, расчёт control/tuning.py
 
 ANIM_SPEED = 2.0
 ANIM_FPS   = 25
@@ -73,6 +73,7 @@ print(f"Ветер: Vwx={VW:+.1f} м/с")
 ctrl_params = PitchControlParams(Va_ref=cfg.Va0)
 controller  = PitchController(aircraft, ctrl_params)
 controller.set_trim_throttle(thr_trim)
+controller.set_trim_elevator(de_trim)   # упреждающий балансировочный δe
 controller.reset({'theta': s0[THETA], 'q': 0.0, 'h': H_TRIM})
 
 spd_params = SpeedControlParams()

@@ -3,7 +3,7 @@
 Общая часть сценариев бокового канала (s12, s13): полная САУ 6DOF.
 
 Продольный канал — как в С6:
-  h_ref → [P_h] → theta_ref → [ПИД theta + q] → delta_e
+  h_ref → [ПИ h] → theta_ref → [ПИД theta + q] → delta_e
   Va_ref → [ПИД Va] → throttle
 Боковой канал — LateralController:
   chi_ref → [ПИ chi] → phi_ref → [ПИ phi − Kd·p] → delta_a
@@ -22,11 +22,11 @@ from sim.state import THETA, Q, H, P, PHI, PSI, X, Y, air_data, earth_velocity
 from runner import compute_trim
 from control.controllers import (PitchController, PitchControlParams,
                                  SpeedController, SpeedControlParams,
-                                 LateralController, LateralControlParams)
+                                 LateralController, LateralControlParams,
+                                 AltitudeHold, AltitudeHoldParams)
 from control.sensors import (measure_gyro, measure_altitude, measure_airspeed,
                              measure_attitude, measure_sideslip, measure_gps_course)
 
-KH = 0.006   # рад/м, P-коэффициент контура высоты (как в С5/С6)
 
 
 class FullSAU:
@@ -47,10 +47,11 @@ class FullSAU:
         self.h_ref  = cfg.h0  if h_ref  is None else h_ref
         self.Va_ref = cfg.Va0 if Va_ref is None else Va_ref
 
-        self.alpha_trim, _, thr_trim = compute_trim(aircraft, cfg.Va0)
+        self.alpha_trim, de_trim, thr_trim = compute_trim(aircraft, cfg.Va0)
 
         self.pitch = PitchController(aircraft, PitchControlParams(Va_ref=cfg.Va0))
         self.pitch.set_trim_throttle(thr_trim)
+        self.pitch.set_trim_elevator(de_trim)   # упреждающий балансировочный δe
         self.pitch.reset({'theta': self.alpha_trim, 'q': 0.0, 'h': self.h_ref})
 
         self.speed = SpeedController(aircraft, SpeedControlParams())
@@ -59,6 +60,7 @@ class FullSAU:
         self.speed.reset()
 
         self.lat = LateralController(aircraft, lat_params or LateralControlParams())
+        self.alt = AltitudeHold(AltitudeHoldParams(), self.alpha_trim)   # ПИ h → θ_ref
         self.lat.reset()
 
         self.chi_ref_buf, self.phi_ref_buf, self.chi_meas_buf = [], [], []
@@ -94,8 +96,7 @@ class FullSAU:
             chi_ref = self.chi_ref_fn(t)
 
         # ---- Продольный канал (как С6) ---------------------------------
-        theta_ref = np.clip(self.alpha_trim + KH * (self.h_ref - h_meas),
-                            np.radians(-15.0), np.radians(15.0))
+        theta_ref = self.alt.step(self.h_ref, h_meas, self.cfg.dt)
         self.pitch.set_pitch_setpoint(theta_ref)
         delta_e = self.pitch.step(t, {'q': q_meas, 'theta': theta_meas,
                                       'h': h_meas, 'Va': Va_meas}, self.cfg.dt)[0]

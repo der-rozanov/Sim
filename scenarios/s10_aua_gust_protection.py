@@ -50,10 +50,10 @@ plt.rcParams["font.family"] = "DejaVu Sans"
 # ══════════════════════════════════════════════════════════════════════════════
 aircraft = AircraftParams()   # стандартный ЛА, Cma=-0.38
 sp       = SensorParams()
-cfg      = SimConfig(Va0=30.0, h0=200.0, dt=0.01, t_end=80.0)
+cfg      = SimConfig(Va0=16.0, h0=200.0, dt=0.01, t_end=80.0)
 
 H_REF = cfg.h0          # м, уставка высоты
-KH    = 0.06            # рад/м, усиление P-контура по высоте
+KH    = PitchControlParams().KH   # рад/м, расчёт control/tuning.py
 
 # Попутный порыв: снижает Va и убирает лобовой поток на винт
 GUST_VWX = 15.0         # м/с, амплитуда
@@ -96,6 +96,7 @@ def _make_run(aua_enabled: bool):
     cp = PitchControlParams(Va_ref=cfg.Va0, gain_scheduling=True, h_Kp=0.0)
     controller = PitchController(aircraft, cp)
     controller.set_trim_throttle(thr_trim)
+    controller.set_trim_elevator(de_trim)   # упреждающий балансировочный δe
     controller.reset({"theta": s0[THETA], "q": 0.0, "h": H_REF})
 
     ap = AUAParams(

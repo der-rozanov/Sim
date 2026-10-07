@@ -59,7 +59,8 @@ from runner import Log, compute_trim, trim_state
 from flight_logger import FlightLogger
 from control.controllers import (PitchController, PitchControlParams,
                                  SpeedController, SpeedControlParams,
-                                 LateralController, LateralControlParams, wrap_angle)
+                                 LateralController, LateralControlParams, wrap_angle,
+                                 AltitudeHold, AltitudeHoldParams)
 from control.navigation import WaypointNavigator, NavParams
 from viz import map_panel
 from viz.viewer3d import (View3D, make_app, MAPS, ned_to_u, body_axes,
@@ -80,9 +81,9 @@ THR_STEP  = 0.05
 
 THETA_STEP, THETA_LIM = np.radians(1.0), np.radians(20.0)
 CHI_STEP  = np.radians(10.0)
-VA_STEP, VA_MIN, VA_MAX = 1.0, 20.0, 50.0
+VA_STEP, VA_MIN, VA_MAX = 1.0, 10.0, 30.0   # FPV: сваливание 7.5, максимум ≈31.5 м/с
 H_STEP, H_MIN, H_MAX = 10.0, 20.0, 1000.0
-KH        = 0.006               # рад/м, высота → θ_ref (как в GameScenario, С5/С6)
+KH        = PitchControlParams().KH   # рад/м, расчёт control/tuning.py
 
 MAX_STEPS_PER_FRAME = 10        # при просадке кадров — замедление, а не «рывок»
 TRAIL_MAX = 3000                # точек следа (0.1 с) — последние 5 мин
@@ -115,10 +116,12 @@ class Game(Entity):
 
         self.pitch = PitchController(aircraft, PitchControlParams(Va_ref=cfg.Va0))
         self.pitch.set_trim_throttle(self.thr_trim)
+        self.pitch.set_trim_elevator(self.de_trim)   # упреждающий балансировочный δe
         self.speed = SpeedController(aircraft, SpeedControlParams())
         self.speed.set_trim_throttle(self.thr_trim)
         self.lat = LateralController(aircraft, LateralControlParams())
-        self.KH = KH                   # высота → θ_ref (стенд Bench3D меняет на лету)
+        # высота → θ_ref: ПИ (control/tuning.py); стенд Bench3D меняет Kp/Ki на лету
+        self.alt = AltitudeHold(AltitudeHoldParams(), self.alpha_trim)
 
         self.rec = []                  # (t, state, controls, Va, alpha, beta, wind)
         self.events = []
@@ -181,6 +184,7 @@ class Game(Entity):
         s = self.state
         self.nav.set_route(self.route, start=(s[X], s[Y], s[H]))
         self.nav_on, self.h_hold = True, True
+        self.alt.reset()
         self._event("маршрут: старт", "dodgerblue")
 
     def _nav_off(self, why="маршрут: стоп"):
@@ -191,6 +195,7 @@ class Game(Entity):
         Vx, Vy, _ = earth_velocity(self.state)
         self.chi_ref = float(np.arctan2(Vy, Vx))
         self.h_hold, self.h_ref = True, float(np.clip(self.state[H], H_MIN, H_MAX))
+        self.alt.reset()
         self._event(why, "gray")
 
     def _nav_ref(self, s):
@@ -259,6 +264,7 @@ class Game(Entity):
         elif key == "h" and self.ap:
             self.h_hold = not self.h_hold
             self.h_ref = float(self.state[H])
+            self.alt.reset()
             self._event("удержание h" if self.h_hold else "θ_ref", "dodgerblue")
         elif base in ("x", "z"):
             sgn = 1 if base == "x" else -1
@@ -300,8 +306,7 @@ class Game(Entity):
     def _sau(self, s, Va, beta, dt):
         self._nav_ref(s)
         if self.h_hold:
-            self.theta_ref = float(np.clip(self.alpha_trim + self.KH * (self.h_ref - s[H]),
-                                           -THETA_LIM, THETA_LIM))
+            self.theta_ref = float(self.alt.step(self.h_ref, s[H], dt))
         self.pitch.set_pitch_setpoint(self.theta_ref)
         de = self.pitch.step(self.t, {"q": s[Q], "theta": s[THETA], "h": s[H], "Va": Va}, dt)[0]
         thr = self.speed.step(Va, dt)
@@ -434,7 +439,7 @@ def main():
 
     aircraft = AircraftParams()
     wind_params = WindParams(Vw_const=a.wind_n, Vw_cross=a.wind_e)
-    cfg = SimConfig(Va0=30.0, h0=a.h0, theta0=0.0, dt=0.01, t_end=1e9)
+    cfg = SimConfig(Va0=16.0, h0=a.h0, theta0=0.0, dt=0.01, t_end=1e9)
 
     app, terrain = make_app(f"3D: пилотирование — {MAPS[a.map].title}", a.map)
     q_map = None if (a.no_map or a.shot) else start_map_window(terrain, a.h0, "-0+0")

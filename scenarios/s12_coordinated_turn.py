@@ -42,7 +42,7 @@ from lateral_common import FullSAU, course_of, settle_time
 aircraft    = AircraftParams()
 wind_params = WindParams()
 sp          = SensorParams()
-cfg         = SimConfig(Va0=30.0, h0=100.0, dt=0.01, t_end=75.0)
+cfg         = SimConfig(Va0=16.0, h0=100.0, dt=0.01, t_end=75.0)
 
 T_TURN1 = 20.0                  # с, команда разворота вправо
 T_TURN2 = 45.0                  # с, команда разворота влево

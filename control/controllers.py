@@ -91,6 +91,14 @@ class PID:
         self.prev_error = error
         return p_term + i_term + d_term
 
+    def unwind(self, error: float, dt: float):
+        """
+        Анти-виндап (условное интегрирование): отменить последнее накопление
+        интеграла. Вызывается, когда выход регулятора упёрся в ограничение и
+        ошибка тянет дальше в ту же сторону.
+        """
+        self.integral -= error * dt
+
 
 def saturation(value: float, min_val: float, max_val: float) -> float:
     """Ограничение значения диапазоном [min_val, max_val]."""
@@ -102,28 +110,35 @@ class PitchControlParams:
     """Параметры каскадного регулятора тангажа."""
 
     # Theta-контур (внешний)
-    theta_Kp: float = 1.5      # пропорциональный
-    theta_Ki: float = 0.1      # интегральный
-    theta_Kd: float = 0.3      # дифференциальный
+    theta_Kp: float = 16.20   # Kθ = kp_θ/kd_θ, 1/с (control/tuning.py)
+    theta_Ki: float = 0.0      # интегральный
+    theta_Kd: float = 0.0      # дифференциальный
     theta_tau: float = 0.1     # фильтр производной, сек
 
     # Q-контур (внутренний, стабилизация угловой скорости)
-    q_Kp: float = 0.5
-    q_Ki: float = 0.05
-    q_Kd: float = 0.1
+    q_Kp: float = 0.0381   # Kq = −kd_θ, с
+    q_Ki: float = 0.0
+    q_Kd: float = 0.0
     q_tau: float = 0.05
 
     # H-контур (управление высотой через скорость)
-    h_Kp: float = 1.0        # управление тягой по высоте
-    Va_ref: float = 30.0     # расчётная скорость (точка настройки ПИД), м/с
+    # Газ по высоте: throttle = trim + h_Kp·(h_ref − h). По умолчанию выключен (0):
+    # скорость держит SpeedController; при 1.0 газ дёргался от шума барометра
+    # и обнулялся при наборе (h_ref контроллера не следует за заданием сценария)
+    h_Kp: float = 0.0
+    Va_ref: float = 16.0   # точка настройки — крейсер FPV, м/с
+    # П-контур высоты для сценариев: theta_ref = alpha_trim + KH·(h_ref − h), рад/м
+    KH: float = 0.0312   # ω_h = 0.5 рад/с: KH = ω_h / Va
 
     # Gain scheduling: масштабирование усиления q-контура по Va
     # delta_e *= (Va_ref / Va_meas)^2  — компенсирует падение эффективности руля
     gain_scheduling: bool = True
 
     # Ограничения
-    q_max: float = np.radians(60.0)    # макс желаемая угловая скорость, рад/с
-    q_min: float = np.radians(-60.0)
+    # Предел q_ref = Kθ·40° (control/tuning.py): не отрезает руль — каскад ≡ ПД-закону.
+    # При 60°/с давал δe не больше Kq·q_max ≈ 2° и ЛА не мог опустить нос.
+    q_max: float = np.radians(648.0)   # макс желаемая угловая скорость, рад/с
+    q_min: float = np.radians(-648.0)
     # Диапазон масштабирования: не позволяем уйти слишком далеко от расчётной точки
     gs_scale_min: float = 0.25   # нижний предел scale (Va_meas >> Va_ref)
     gs_scale_max: float = 9.0    # верхний предел scale (Va_meas << Va_ref)
@@ -189,6 +204,7 @@ class PitchController:
         self.q_ref = 0.0    # последняя уставка угловой скорости (для логирования)
         self.h_ref = 100.0  # высота удержания
         self.trim_throttle = 0.5  # дефолт, обновляется при инициализации
+        self.trim_elevator = 0.0  # упреждающий балансировочный δe (set_trim_elevator)
 
     def reset(self, state_measured: dict):
         """
@@ -210,6 +226,13 @@ class PitchController:
         self.theta_ref = np.clip(theta_ref,
                                   np.radians(-30.0),
                                   np.radians(30.0))
+
+    def set_trim_elevator(self, delta_e: float):
+        """
+        Упреждающий балансировочный δe (из compute_trim): регулятор работает
+        с отклонением от трима, как в линеаризации B&M — без просадки на старте.
+        """
+        self.trim_elevator = delta_e
 
     def set_trim_throttle(self, throttle: float):
         """Установить базовую тягу для режима уровня (поддержание высоты)."""
@@ -258,6 +281,7 @@ class PitchController:
             scale = np.clip((self.Va_ref / Va_safe) ** 2,
                             self.gs_scale_min, self.gs_scale_max)
             delta_e_cmd *= scale
+        delta_e_cmd += self.trim_elevator
 
         # Насыщение рулевой команды
         delta_e = saturation(delta_e_cmd,
@@ -288,11 +312,11 @@ class PitchController:
 @dataclass
 class SpeedControlParams:
     """Параметры ПИД-регулятора воздушной скорости."""
-    Va_Kp: float = 0.25    # пропорциональный
-    Va_Ki: float = 0.05    # интегральный
-    Va_Kd: float = 0.01     # дифференциальный
+    Va_Kp: float = 0.106   # ωn_V = 1 рад/с, ζ = 0.8
+    Va_Ki: float = 0.0868    # интегральный
+    Va_Kd: float = 0.0     # дифференциальный
     Va_tau: float = 0.5    # фильтр производной, сек
-    Va_integral_limit: float = 0.5  # ограничение интеграла
+    Va_integral_limit: float = 11.52  # = 1/Va_Ki — интеграл покрывает весь диапазон газа
 
 
 class SpeedController:
@@ -324,7 +348,7 @@ class SpeedController:
         )
         self.pid_Va = PID(pid_p, name="Va")
 
-        self.Va_ref = 30.0
+        self.Va_ref = 16.0
         self.trim_throttle = 0.5
 
     def reset(self):
@@ -376,18 +400,18 @@ class LateralControlParams:
     """
     Параметры боковой САУ (B&M гл. 6, последовательное замыкание контуров).
 
-    Коэффициенты рассчитаны для параметров-аналога Aerosonde при Va = 30 м/с
-    (расчёт — docs/control.md, раздел «Боковой канал»).
+    Коэффициенты рассчитаны для FPV-самолёта при Va = 16 м/с
+    (control/tuning.py, docs/control.md раздел 11).
     """
     # Контур крена: delta_a = Kp·e_phi + Ki·∫e_phi − Kd·p
-    phi_Kp: float = 0.83      # δa_max / e_phi_max = 25° / 30°
-    phi_Ki: float = 0.05      # малый интеграл — снимает статическую ошибку крена
-    phi_Kd: float = 0.10      # демпфирование по угловой скорости крена p (гироскоп)
+    phi_Kp: float = 0.6746   # ωn_φ = 20 рад/с; ζ = 1.4 — своё демпфирование
+    phi_Ki: float = 0.2698   # нуль ПИ на 0.02·ωn_φ — только против момента винта
+    phi_Kd: float = 0.0   # a_φ1 велико — демпфирование не нужно
     phi_integral_limit: float = 0.2   # рад·с
 
     # Контур курса: phi_ref = Kp·e_chi + Ki·∫e_chi
-    chi_Kp: float = 4.5
-    chi_Ki: float = 1.65
+    chi_Kp: float = 2.744   # ωn_χ = 1.05 рад/с (полюс крена 8.4 / 8)
+    chi_Ki: float = 1.804
     chi_integral_limit: float = 0.1   # рад·с → вклад интеграла ≤ ~9.5° крена
     phi_ref_max: float = np.radians(30.0)  # ограничение уставки крена
 
@@ -395,7 +419,7 @@ class LateralControlParams:
     beta_hold: bool = True    # False — руль направления в нейтрали (δr = 0)
     # Ограничено шумом зонда: Kp=2 даёт дрожание руля ~1.6°/шаг при шуме β 0.6°
     beta_Kp: float = 0.5
-    beta_Ki: float = 1.0
+    beta_Ki: float = 0.550   # ζ_β = 0.7
     beta_integral_limit: float = 0.2  # рад·с
 
 
@@ -465,13 +489,17 @@ class LateralController:
 
         # Контур курса -> уставка крена (рассогласование по кратчайшему пути)
         e_chi = wrap_angle(self.chi_ref - meas['chi'])
-        self.phi_ref = saturation(self.pid_chi.step(e_chi, dt),
-                                  -pr.phi_ref_max, pr.phi_ref_max)
+        phi_raw = self.pid_chi.step(e_chi, dt)
+        self.phi_ref = saturation(phi_raw, -pr.phi_ref_max, pr.phi_ref_max)
+        if phi_raw != self.phi_ref and e_chi * phi_raw > 0:
+            self.pid_chi.unwind(e_chi, dt)      # крен в упоре — интеграл курса не копим
 
         # Контур крена -> элероны (демпфирование по измеренной p, а не по производной ошибки)
         e_phi = self.phi_ref - meas['phi']
-        delta_a = saturation(self.pid_phi.step(e_phi, dt) - pr.phi_Kd * meas['p'],
-                             -ac.delta_a_max, ac.delta_a_max)
+        da_raw = self.pid_phi.step(e_phi, dt) - pr.phi_Kd * meas['p']
+        delta_a = saturation(da_raw, -ac.delta_a_max, ac.delta_a_max)
+        if da_raw != delta_a and e_phi * da_raw > 0:
+            self.pid_phi.unwind(e_phi, dt)
 
         # Контур скольжения -> руль направления
         if pr.beta_hold:
@@ -481,6 +509,47 @@ class LateralController:
             delta_r = 0.0
 
         return delta_a, delta_r
+
+
+# ---------------------------------------------------------------------------
+# Контур высоты: ПИ h → θ_ref (B&M 6.4.3)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AltitudeHoldParams:
+    """
+    θ_ref = α* + Kp·(h_ref − h) + Ki·∫(h_ref − h),  |θ_ref| ≤ theta_max.
+    Интеграл убирает статическую ошибку высоты на скорости, отличной от точки
+    балансировки (иной α*, иной δe*). Расчёт — control/tuning.py.
+    """
+    Kp: float = 0.09375    # рад/м, 2ζ_h·ω_h/Va, ω_h = 0.5 рад/с, ζ_h = 1.5
+    Ki: float = 0.0156     # рад/(м·с), ω_h²/Va
+    theta_max: float = np.radians(15.0)
+    integral_limit: float = 16.76  # м·с = theta_max/Ki
+
+
+class AltitudeHold:
+    """ПИ-регулятор высоты с анти-виндапом (не копит интеграл, пока θ_ref в упоре)."""
+
+    def __init__(self, params: AltitudeHoldParams = None, alpha_trim: float = 0.0):
+        self.params = params or AltitudeHoldParams()
+        pr = self.params
+        self.pid = PID(PIDParams(Kp=pr.Kp, Ki=pr.Ki, integral_limit=pr.integral_limit),
+                       name="h")
+        self.alpha_trim = alpha_trim
+
+    def reset(self):
+        self.pid.reset()
+
+    def step(self, h_ref: float, h_meas: float, dt: float) -> float:
+        """→ θ_ref, рад."""
+        e_h = h_ref - h_meas
+        raw = self.alpha_trim + self.pid.step(e_h, dt)
+        th_max = self.params.theta_max
+        theta_ref = saturation(raw, -th_max, th_max)
+        if raw != theta_ref and e_h * (raw - self.alpha_trim) > 0:
+            self.pid.unwind(e_h, dt)
+        return theta_ref
 
 
 # ---------------------------------------------------------------------------
@@ -496,9 +565,9 @@ class RollHoldParams:
     парирует постоянный реактивный момент винта (на малой скорости и полном
     газе нужно до ~2° δa).
     """
-    Kp: float = 0.83
-    Ki: float = 0.3
-    Kd: float = 0.10
+    Kp: float = 0.6746   # как контур крена LateralController
+    Ki: float = 0.2698
+    Kd: float = 0.0
     integral_limit: float = 0.2   # рад·с → вклад интеграла ≤ 0.06 рад ≈ 3.4° δa
 
 
@@ -527,8 +596,12 @@ class RollHold:
         sp, rng = self.sp, self.rng
         phi_meas = phi + rng.normal(0.0, sp.ins_angle_noise)
         p_meas   = p + sp.gyro_bias + rng.normal(0.0, sp.gyro_noise)
-        delta_a = self.pid_phi.step(0.0 - phi_meas, dt) - self.params.Kd * p_meas
-        return saturation(delta_a, -self.aircraft.delta_a_max, self.aircraft.delta_a_max)
+        e_phi = 0.0 - phi_meas
+        da_raw = self.pid_phi.step(e_phi, dt) - self.params.Kd * p_meas
+        delta_a = saturation(da_raw, -self.aircraft.delta_a_max, self.aircraft.delta_a_max)
+        if da_raw != delta_a and e_phi * da_raw > 0:
+            self.pid_phi.unwind(e_phi, dt)
+        return delta_a
 
 
 def with_roll_hold(controls_fn, aircraft, sensor_params, dt: float, seed: int = 7):

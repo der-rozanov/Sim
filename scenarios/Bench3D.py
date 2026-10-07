@@ -5,7 +5,7 @@ Bench3D — испытательный стенд САУ для студенто
 
 Вкладки окна схемы (viz/bench_panel.py):
   Крен            χ_ref → [ПИ курса] → [огр. φ_ref] → [ПИ крена − Kd·p] → [огр. δa]
-  Тангаж / высота h_ref → [П высоты KH] → θ_ref → [ПИД θ] → [огр. q_ref] → [ПИД q]
+  Тангаж / высота h_ref → [ПИ высоты] → θ_ref → [ПИД θ] → [огр. q_ref] → [ПИД q]
                   → [× −(Va₀/Va)²] → [огр. δe]
   Скорость        Va_ref → [ПИД Va] + δt_трим → [огр. 0…1]
   Рыскание (β)    β = 0 → [ПИ β] → [× −1] → [огр. δr]
@@ -50,6 +50,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from sim.config import AircraftParams, WindParams, SimConfig
 from sim.state import H, P, Q, PHI, THETA, X, Y, air_data, earth_velocity
 from sim.aero import aero_forces_moments
+from control.controllers import AltitudeHoldParams
 from control.controllers import (LateralControlParams, PitchControlParams,
                                  SpeedControlParams, wrap_angle)
 from control.aua import AngleOfAttackProtector, AUAParams, AUAState
@@ -76,6 +77,7 @@ STALL_THETA = np.radians(15.0)
 def param_spec(aircraft):
     """Параметры на схемах: (вкладка, ключ, подпись, мин, макс, шаг, по умолчанию).
     Углы — в градусах; шаг None — флажок вкл/выкл."""
+    alt = AltitudeHoldParams()
     lat, pit, spd, nav = (LateralControlParams(), PitchControlParams(), SpeedControlParams(),
                           NavParams())
     aua = default_aua(aircraft)
@@ -85,18 +87,19 @@ def param_spec(aircraft):
         ("roll", "chi_Ki", "Ki", 0.0, 5.0, 0.05, lat.chi_Ki),
         ("roll", "phi_ref_max", "±φ_max, °", 5.0, 60.0, 1.0, deg(lat.phi_ref_max)),
         ("roll", "phi_Kp", "Kp", 0.0, 3.0, 0.01, lat.phi_Kp),
-        ("roll", "phi_Ki", "Ki", 0.0, 1.0, 0.01, lat.phi_Ki),
+        ("roll", "phi_Ki", "Ki", 0.0, 4.0, 0.01, lat.phi_Ki),
         ("roll", "phi_Kd", "Kd", 0.0, 0.5, 0.005, lat.phi_Kd),
         ("roll", "da_max", "±δa_max, °", 2.0, 25.0, 1.0, deg(aircraft.delta_a_max)),
 
-        ("pitch", "KH", "KH, рад/м", 0.0, 0.03, 0.0005, KH),
-        ("pitch", "theta_Kp", "Kp", 0.0, 5.0, 0.05, pit.theta_Kp),
+        ("pitch", "KH", "Kp, рад/м", 0.0, 0.3, 0.001, alt.Kp),
+        ("pitch", "h_Ki", "Ki, рад/(м·с)", 0.0, 0.1, 0.0005, alt.Ki),
+        ("pitch", "theta_Kp", "Kp", 0.0, 40.0, 0.1, pit.theta_Kp),
         ("pitch", "theta_Ki", "Ki", 0.0, 1.0, 0.01, pit.theta_Ki),
         ("pitch", "theta_Kd", "Kd", 0.0, 1.0, 0.01, pit.theta_Kd),
         ("pitch", "q_max", "±q_max, °/с", 5.0, 90.0, 1.0, deg(pit.q_max)),
-        ("pitch", "q_Kp", "Kp", 0.0, 2.0, 0.01, pit.q_Kp),
-        ("pitch", "q_Ki", "Ki", 0.0, 0.5, 0.005, pit.q_Ki),
-        ("pitch", "q_Kd", "Kd", 0.0, 0.5, 0.005, pit.q_Kd),
+        ("pitch", "q_Kp", "Kp", 0.0, 0.2, 0.001, pit.q_Kp),
+        ("pitch", "q_Ki", "Ki", 0.0, 0.2, 0.001, pit.q_Ki),
+        ("pitch", "q_Kd", "Kd", 0.0, 0.05, 0.0005, pit.q_Kd),
         ("pitch", "gs", "GS", None, None, None, pit.gain_scheduling),
         ("pitch", "de_max", "±δe_max, °", 2.0, 25.0, 1.0, deg(aircraft.delta_e_max)),
 
@@ -133,7 +136,7 @@ def default_aua(aircraft):
 
 
 def apply_params(g, v):
-    """Параметры из окна схемы → регуляторы стенда g (.lat, .pitch, .speed, .KH).
+    """Параметры из окна схемы → регуляторы стенда g (.lat, .pitch, .speed, .alt).
     На лету, интегралы не сбрасываются. Ограничения рулей меняются в копиях
     параметров ЛА у регуляторов — модель ЛА не трогается."""
     lat, pit, spd, r = g.lat, g.pitch, g.speed, np.radians
@@ -143,7 +146,7 @@ def apply_params(g, v):
     lat.params.phi_Kd = v["phi_Kd"]
     lat.aircraft.delta_a_max = r(v["da_max"])
 
-    g.KH = v["KH"]
+    g.alt.pid.Kp, g.alt.pid.Ki = v["KH"], v["h_Ki"]
     pit.pid_theta.Kp, pit.pid_theta.Ki, pit.pid_theta.Kd = v["theta_Kp"], v["theta_Ki"], v["theta_Kd"]
     pit.q_max, pit.q_min = r(v["q_max"]), -r(v["q_max"])
     pit.pid_q.Kp, pit.pid_q.Ki, pit.pid_q.Kd = v["q_Kp"], v["q_Ki"], v["q_Kd"]
@@ -208,8 +211,7 @@ class Bench(Game):
             theta_cmd = STALL_THETA
         else:
             if self.h_hold:
-                self.theta_ref = float(np.clip(self.alpha_trim + self.KH * (self.h_ref - s[H]),
-                                               -THETA_LIM, THETA_LIM))
+                self.theta_ref = float(self.alt.step(self.h_ref, s[H], dt))
             theta_cmd = self.theta_ref
         alpha = air_data(s, self.wind_call(s[H], self.t))[1]
         out = self.prot.step(alpha, theta_cmd, self.speed.trim_throttle, dt)
@@ -340,7 +342,7 @@ def main():
 
     aircraft = AircraftParams()
     wind_params = WindParams(Vw_const=a.wind_n, Vw_cross=a.wind_e)
-    cfg = SimConfig(Va0=30.0, h0=a.h0, theta0=0.0, dt=0.01, t_end=1e9)
+    cfg = SimConfig(Va0=16.0, h0=a.h0, theta0=0.0, dt=0.01, t_end=1e9)
 
     q_par, q_tel = mp.Queue(maxsize=100), mp.Queue(maxsize=200)
     panel = mp.Process(target=bench_panel.run, daemon=True,

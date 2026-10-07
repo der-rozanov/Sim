@@ -47,16 +47,16 @@ plt.rcParams["font.family"] = "DejaVu Sans"
 aircraft    = AircraftParams()
 wind_params = WindParams()
 sp          = SensorParams()
-cfg         = SimConfig(Va0=30.0, h0=100.0, theta0=0.0, dt=0.01, t_end=60.0)
+cfg         = SimConfig(Va0=16.0, h0=100.0, theta0=0.0, dt=0.01, t_end=60.0)
 
 H_TRIM    = 100.0   # начальная высота, м
 H_HIGH    = 200.0   # уставка набора, м
-VA_REF    = 35.0    # уставка воздушной скорости, м/с
+VA_REF    = 20.0    # уставка воздушной скорости, м/с (разгон с крейсера 16)
 T_CLIMB   = 10.0    # с, команда набора
 T_DESCEND = 40.0    # с, команда снижения
 
 # P-коэффициент внешнего контура высоты: ошибка → поправка тангажа
-KH = 0.006          # рад/м
+KH = PitchControlParams().KH   # рад/м, расчёт control/tuning.py
 
 ANIM_SPEED = 2.0
 ANIM_FPS   = 25
@@ -92,6 +92,7 @@ print(f"Trim:  alpha={np.degrees(alpha_trim):.2f} deg  "
 ctrl_params = PitchControlParams(Va_ref=cfg.Va0)
 controller  = PitchController(aircraft, ctrl_params)
 controller.set_trim_throttle(thr_trim)
+controller.set_trim_elevator(de_trim)   # упреждающий балансировочный δe
 controller.reset({'theta': s0[THETA], 'q': 0.0, 'h': H_TRIM})
 
 # ПИД скорости (throttle)
