@@ -17,7 +17,8 @@
 
 Законы управления (как в control/controllers.py):
     p_ref = (φc − φ)/τ_φ,  δa = FF·p_ref + kp_p·(p_ref − p) + ki_p·∫   ← крен, схема PX4/ArduPilot
-    φc = atan(Vg·K_χ·(χc − χ)/g)                                       ← курс, П-контур
+    φc = atan(Vg·K_χ·(χc − χ)/g), |φ̇c| ≤ φ̇_max                         ← курс, П-контур
+    δr = −(kp_β·β + ki_β·∫β) + k_mix·δa                                 ← скольжение + микс
     δr = −(kp_β·β + ki_β·∫β)
     δe = δe* + kp_θ·(θc − θ) − kd_θ·q    ← каскад PitchController:
          q_ref = Kθ·(θc − θ),  δe = δe* − Kq·(q_ref − q),
@@ -48,6 +49,7 @@ class SAUSpecs:
     p_max: float = 120.0      # °/с, предел заданной скорости крена (p_уст(δa = 20°) ≈ 210)
     lam_p: float = 75.0       # рад/с, полюс контура скорости крена (собственный a_φ1 ≈ 56)
     zeta_chi: float = 1.0     # курс: ζ контура χ с учётом инерции крена τ_φ
+    phi_ref_rate: float = 90.0  # °/с, предел скорости уставки крена (PX4 FW_PN_R_SLEW_MAX)
     kp_beta: float = 0.5      # скольжение: ограничено шумом зонда УС (0.6°)
     zeta_beta: float = 0.7
     wn_theta: float = 15.0    # тангаж
@@ -132,6 +134,13 @@ def design_sau(aircraft, Va: float, specs: SAUSpecs = None) -> SAUDesign:
     # χ/χc = K/(τ_φ s² + s + K),  ζ = 1/(2·sqrt(K·τ_φ))  →  K = 1/(4 ζ² τ_φ)
     K_chi = 1.0 / (4.0 * sp.zeta_chi**2 * sp.tau_phi)
 
+    # --- Микс элеронов в РН (ArduPilot KFF_RDDRMIX): ṙ от δa и δr (B&M 3.17):
+    # ṙ ∝ Г4·Croll + Г8·Cn;  δr = K·δa обнуляет ṙ от элеронов → K = −N_δa / N_δr
+    G4, G8 = _gammas(aircraft)[3], _gammas(aircraft)[7]
+    N_da = G4 * aircraft.Croll_da + G8 * aircraft.Cn_da
+    N_dr = G4 * aircraft.Croll_dr + G8 * aircraft.Cn_dr
+    k_mix = -N_da / N_dr
+
     # --- Скольжение (B&M 2-е изд., ур. 6.14) ---
     kp_beta = sp.kp_beta
     ki_beta = ((k["a_beta1"] + k["a_beta2"] * kp_beta) / (2 * sp.zeta_beta))**2 / k["a_beta2"]
@@ -161,6 +170,7 @@ def design_sau(aircraft, Va: float, specs: SAUSpecs = None) -> SAUDesign:
     ki_V = sp.wn_V**2 / k["a_V2"]
 
     gains = dict(tau_phi=sp.tau_phi, FF_p=FF_p, kp_p=kp_p, ki_p=ki_p, K_chi=K_chi,
+                 k_mix=k_mix,
                  kp_beta=kp_beta, ki_beta=ki_beta,
                  kp_theta=kp_theta, kd_theta=kd_theta, K_theta_DC=K_theta_DC,
                  Kq=Kq, Ktheta=Ktheta, w_h=w_h, KH=KH, kp_h=kp_h, ki_h=ki_h,
@@ -183,7 +193,8 @@ def design_sau(aircraft, Va: float, specs: SAUSpecs = None) -> SAUDesign:
     roll = RollControlParams(tau_phi=sp.tau_phi, p_max=np.radians(sp.p_max), FF=FF_p,
                              Kp=kp_p, Ki=ki_p, integral_limit=0.06 / ki_p, Va_ref=Va)
     lateral = LateralControlParams(roll=roll, chi_K=K_chi,
-                                   beta_Kp=kp_beta, beta_Ki=ki_beta)
+                                   phi_ref_rate=np.radians(sp.phi_ref_rate),
+                                   beta_Kp=kp_beta, beta_Ki=ki_beta, da_dr_mix=k_mix)
     return SAUDesign(Va=Va, coeffs=k, gains=gains, pitch=pitch, speed=speed,
                      lateral=lateral, roll=roll, altitude=altitude, KH=KH,
                      specs=sp)

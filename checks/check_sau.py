@@ -145,6 +145,7 @@ results.append(("Крен φ, ° (из 20° к 0)", log.t, y, lin, 0.0, 20.0))
 log = closed_loop(h_ref=cfg.h0, chi_ref=np.radians(20.0), t_end=12.0)
 chi = np.degrees([np.arctan2(*earth_velocity(s)[1::-1]) for s in log.state])
 # χ̇ = (g/V)·φ,  φc = (V/g)·K·e_χ  →  χ/χc = K·Φ/(s + K·Φ),  Φ = φ/φc
+# (теория — без ограничителя скорости уставки крена: на старте модель чуть отстаёт)
 Kn = gn["K_chi"] * np.array(num_phi)
 lin = tf_step(Kn, np.polyadd(np.r_[den_phi, 0.0], Kn), log.t, 20.0)
 results.append(("Курс χ, ° (ступенька +20°)", log.t, chi, lin, 20.0, 0.0))

@@ -40,11 +40,11 @@ C_REF, C_MEAS, C_CTRL = "#d62728", "#1f77b4", "#2ca02c"
 SLIDER_POS = {
     # крен
     "chi_K": (165, 80, 90, C_BOX),
-    "phi_ref_max": (280, 122, 66, C_SAT),
+    "phi_ref_max": (280, 78, 84, C_SAT), "phi_rate": (280, 140, 84, C_SAT),
     "tau_phi": (435, 110, 76, C_BOX),
     "p_max": (540, 122, 74, C_SAT),
     "p_Kp": (720, 78, 100, C_BOX), "p_Ki": (720, 140, 100, C_BOX),
-    "p_FF": (720, 240, 100, C_BOX),
+    "p_FF": (720, 230, 100, C_BOX),
     "da_max": (875, 122, 60, C_SAT),
     # тангаж / высота
     "KH": (155, 92, 85, C_BOX), "h_Ki": (155, 140, 85, C_BOX),
@@ -59,6 +59,7 @@ SLIDER_POS = {
     # рыскание
     "beta_hold": (215, 80, 0, C_BOX),
     "beta_Kp": (215, 108, 110, C_BOX), "beta_Ki": (215, 165, 110, C_BOX),
+    "dr_mix": (340, 240, 90, C_BOX),
     "dr_max": (480, 140, 80, C_SAT),
     # защита по α
     "prot_on": (1010, 60, 0, C_BOX),
@@ -86,7 +87,8 @@ SCOPES = {
               ("тяга δt", [("thr", C_CTRL, "δt", 0)], ("fix", 0.0, 1.0)),
               ("высота h, м", [("h_ref", C_REF, "h_ref", 1), ("h", C_MEAS, "h", 0)], ("auto", 20))],
     "yaw": [("скольжение β, °", [("beta", C_MEAS, "β", 0)], ("sym", 2)),
-            ("руль направления δr, °", [("dr", C_CTRL, "δr", 0)], ("sym", 2)),
+            ("руль направления δr, °", [("dr_mix", "#999", "K·δa", 1), ("dr", C_CTRL, "δr", 0)],
+             ("sym", 2)),
             ("крен φ, °", [("phi_ref", C_REF, "φ_ref", 1), ("phi", C_MEAS, "φ", 0)], ("sym", 35))],
     "prot": [("угол атаки α, °", [("a_warn", "#e69500", "α_пред", 1), ("a_crit", "#b00000", "α_крит", 1),
                                   ("alpha", C_MEAS, "α", 0)], ("auto", 10)),
@@ -208,11 +210,10 @@ class Panel:
         V(cv, 98, 160, lambda m: f"{m['e_chi']:+.0f}°")
         self._box(cv, 110, 55, 220, 205, "П курса")
         cv.create_text(165, 175, text="χ̇ = K_χ·e_χ\nφ = atan(Vg·χ̇/g)", font=FONT_S, justify="center")
-        A(cv, 220, Y, 240, Y)
-        self._box(cv, 240, 75, 320, 185, "огр. φ_ref", C_SAT)
-        self._sat_icon(cv, 280, 103)
-        A(cv, 320, Y, 349, Y)
-        V(cv, 335, 115, lambda m: f"{m['phi_ref']:+.0f}°", C_REF)
+        A(cv, 220, Y, 234, Y)
+        self._box(cv, 234, 55, 326, 205, "огр. φ_ref", C_SAT)
+        A(cv, 326, Y, 349, Y)
+        V(cv, 342, 106, lambda m: f"{m['phi_ref']:+.0f}°", C_REF)
         S(cv, 360, Y)
         A(cv, 371, Y, 390, Y)
         V(cv, 380, 160, lambda m: f"{m['e_phi']:+.0f}°")
@@ -229,9 +230,9 @@ class Panel:
         A(cv, 780, Y, 804, Y)
         S(cv, 815, Y, marks=(("+", -15, -12), ("+", 14, 20)))
         A(cv, 826, Y, 840, Y)
-        A(cv, 600, Y, 600, 255, 660, 255)                                 # упреждение FF
-        self._box(cv, 660, 222, 780, 290, "упрежд. FF")
-        A(cv, 780, 255, 815, 255, 815, 141)
+        A(cv, 600, Y, 600, 260, 660, 260)                                 # упреждение FF
+        self._box(cv, 660, 212, 780, 305, "упрежд. FF")
+        A(cv, 780, 260, 815, 260, 815, 141)
         V(cv, 860, 270, lambda m: f"FF·p_ref = {m['da_ff']:+.1f}°")
         self._box(cv, 840, 75, 910, 185, "огр. δa", C_SAT)
         self._sat_icon(cv, 875, 103)
@@ -262,7 +263,7 @@ class Panel:
         V(cv, 70, Y - 30, lambda m: f"{m['e_h']:+.1f}")
         A(cv, 81, Y, 105, Y)
         self._box(cv, 105, 65, 205, 215, "ПИ высоты")
-        cv.create_text(155, 196, text="+ α_трим, огр. ±15°", font=FONT_S, justify="center")
+        cv.create_text(155, 230, text="+ α_трим, огр. ±15°", font=FONT_S, justify="center")
         A(cv, 205, Y, 245, Y)
         V(cv, 225, Y - 15, lambda m: f"{m['theta_ref']:+.1f}", C_REF)
         S(cv, 256, Y)
@@ -333,11 +334,11 @@ class Panel:
                             "ступенька Va_ref видна на обоих\n"
                             "графиках внизу.")
         self._footer(cv, "δt = δt_трим + ПИД(Va_ref − Va),  ограничение 0…1.   "
-                         "δt_трим — балансировочная тяга при Va = 30 м/с (упреждение).")
+                         "δt_трим — балансировочная тяга в точке настройки Va = 16 м/с (упреждение).")
 
     def _draw_yaw(self, cv):
         Y, A, S, V = 150, self._arrow, self._sum, self._val
-        self._title(cv, "САУ рыскания: скольжение β → руль направления δr (координация разворота)")
+        self._title(cv, "САУ рыскания: β → руль направления δr (координация разворота)")
         cv.create_text(40, 130, text="β_ref = 0", font=FONT_B, fill=C_REF)
         A(cv, 65, Y, 84, Y)
         S(cv, 95, Y)
@@ -346,23 +347,33 @@ class Panel:
         self._box(cv, 150, 55, 280, 230, "ПИ скольжения")
         A(cv, 280, Y, 330, Y)
         self._box(cv, 330, 125, 380, 175, "× −1")
-        A(cv, 380, Y, 430, Y)
+        A(cv, 380, Y, 394, Y)
+        S(cv, 405, Y, marks=(("+", -15, -12), ("+", 14, 20)))
+        A(cv, 416, Y, 430, Y)
+        cv.create_text(232, 262, text="δa", font=FONT_B, fill=C_CTRL)       # микс элеронов
+        V(cv, 232, 282, lambda m: f"{m['da_y']:+.1f}°", C_CTRL)
+        A(cv, 250, 262, 290, 262)
+        self._box(cv, 290, 215, 390, 330, "микс δa→δr")
+        A(cv, 390, 262, 405, 262, 405, 161)
+        V(cv, 440, 262, lambda m: f"{m['dr_mix']:+.1f}°")
         self._box(cv, 430, 100, 530, 200, "огр. δr", C_SAT)
         self._sat_icon(cv, 480, 125)
         A(cv, 530, Y, 600, Y)
         V(cv, 565, Y - 15, lambda m: f"{m['dr']:+.2f}°", C_CTRL)
         self._box(cv, 600, 110, 690, 190, "ЛА")
         cv.create_text(645, 155, text="6DOF", font=FONT)
-        A(cv, 690, Y, 740, Y, 740, 300, 95, 300, 95, 161)                # β (зонд УС)
+        A(cv, 690, Y, 740, Y, 740, 355, 95, 355, 95, 161)                # β (зонд УС)
         cv.create_text(700, 142, text="β", font=FONT_B, fill=C_MEAS, anchor="w")
-        V(cv, 400, 288, lambda m: f"β = {m['beta']:+.2f}°", C_MEAS)
-        cv.create_text(780, 110, anchor="nw", font=FONT, fill="#555", justify="left",
-                       text="β > 0 — поток справа; δr > 0 — нос влево,\n"
+        V(cv, 560, 343, lambda m: f"β = {m['beta']:+.2f}°", C_MEAS)
+        cv.create_text(760, 70, anchor="nw", font=FONT, fill="#555", justify="left",
+                       text="β > 0 — поток справа;\nδr > 0 — нос влево,\n"
                             "поэтому δr = −(Kp·β + Ki·∫β).\n\n"
-                            "β рождается в развороте: дайте ступеньку\n"
-                            "курса и сравните с выключенным контуром.\n"
+                            "Микс K·δa (K < 0) сразу гасит\n"
+                            "обратное рыскание элеронов,\nне дожидаясь роста β.\n\n"
+                            "β рождается в развороте: дайте\n"
+                            "ступеньку курса и сравните\nс выключенным контуром.\n"
                             "Толчок δr — возмущение по рысканию.")
-        self._footer(cv, "δr = −(Kp·β + Ki·∫β);  флажок выкл — руль направления в нейтрали (δr = 0). "
+        self._footer(cv, "δr = −(Kp·β + Ki·∫β) + K·δa;  флажок выкл — РН в нейтрали (δr = 0, микс тоже). "
                          "β измеряется истинный (без шума).")
 
     def _draw_prot(self, cv):
@@ -413,7 +424,7 @@ class Panel:
         A(cv, 770, 165, 820, 165)
         A(cv, 560, 222, 820, 222)
         cv.create_text(690, 211, text="δt_восст — только КРИТ / ВОССТ", font=FONT_S)
-        V(cv, 795, 152, lambda m: f"δt {m['thr']:.2f}", C_CTRL)
+        V(cv, 795, 152, lambda m: f"{m['thr']:.2f}", C_CTRL)
         self._box(cv, 820, 55, 890, 245, "ЛА")
         cv.create_text(855, 150, text="6DOF", font=FONT)
         A(cv, 890, 150, 912, 150, 912, 268, 345, 268, 345, 246)        # α (истинный)
@@ -463,8 +474,7 @@ class Panel:
         A(cv, 415, 140, 465, 140)
         cv.create_text(440, 120, text="участок\nили круг", font=FONT_S, justify="center")
         self._box(cv, 465, 35, 735, 275, "Следование по прямой / окружности")
-        V(cv, 600, 236, lambda m: f"e_py = {m['e_py']:+.1f} м", C_MEAS)
-        V(cv, 600, 256, lambda m: f"χ_q = {m['chi_q']:5.1f}°")
+        V(cv, 600, 262, lambda m: f"e_py = {m['e_py']:+.1f} м    χ_q = {m['chi_q']:5.1f}°", C_MEAS)
         A(cv, 735, 100, 800, 100)
         cv.create_text(767, 88, text="χ_ref", font=FONT_B, fill=C_REF)
         V(cv, 767, 114, lambda m: f"{m['chi_ref'] % 360:5.1f}°", C_REF)

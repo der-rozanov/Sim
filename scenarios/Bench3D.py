@@ -9,7 +9,7 @@ Bench3D — испытательный стенд САУ для студенто
   Тангаж / высота h_ref → [ПИ высоты] → θ_ref → [ПИД θ] → [огр. q_ref] → [ПИД q]
                   → [× −(Va₀/Va)²] → [огр. δe]
   Скорость        Va_ref → [ПИД Va] + δt_трим → [огр. 0…1]
-  Рыскание (β)    β = 0 → [ПИ β] → [× −1] → [огр. δr]
+  Рыскание (β)    β = 0 → [ПИ β] → [× −1] → (+ K·δa — микс элеронов) → [огр. δr]
   Защита по α     автомат защиты от выхода на закритические УА (control/aua.py,
                   отключаемый): между контуром высоты и ПИД тангажа; по истинному α
   Навигация       маршрут (окно карты) → [менеджер маршрута] → [следование по
@@ -86,6 +86,7 @@ def param_spec(aircraft):
     return [
         ("roll", "chi_K", "K_χ, 1/с", 0.0, 3.0, 0.05, lat.chi_K),
         ("roll", "phi_ref_max", "±φ_max, °", 5.0, 60.0, 1.0, deg(lat.phi_ref_max)),
+        ("roll", "phi_rate", "φ̇, °/с", 10.0, 360.0, 5.0, deg(lat.phi_ref_rate)),
         ("roll", "tau_phi", "τ_φ, с", 0.05, 1.5, 0.01, roll.tau_phi),
         ("roll", "p_max", "±p_max, °/с", 10.0, 300.0, 5.0, deg(roll.p_max)),
         ("roll", "p_FF", "FF", 0.0, 0.3, 0.002, roll.FF),
@@ -112,6 +113,7 @@ def param_spec(aircraft):
         ("yaw", "beta_hold", "контур β вкл", None, None, None, lat.beta_hold),
         ("yaw", "beta_Kp", "Kp", 0.0, 3.0, 0.05, lat.beta_Kp),
         ("yaw", "beta_Ki", "Ki", 0.0, 3.0, 0.05, lat.beta_Ki),
+        ("yaw", "dr_mix", "K δa→δr", -1.5, 0.5, 0.01, round(lat.da_dr_mix, 2)),
         ("yaw", "dr_max", "±δr_max, °", 2.0, 25.0, 1.0, deg(aircraft.delta_r_max)),
 
         ("prot", "prot_on", "защита вкл", None, None, None, aua.enabled),
@@ -144,6 +146,7 @@ def apply_params(g, v):
     lat, pit, spd, r = g.lat, g.pitch, g.speed, np.radians
     lat.params.chi_K = v["chi_K"]
     lat.params.phi_ref_max = r(v["phi_ref_max"])
+    lat.params.phi_ref_rate = r(v["phi_rate"])
     rc = lat.roll
     rc.params.tau_phi, rc.params.p_max, rc.params.FF = v["tau_phi"], r(v["p_max"]), v["p_FF"]
     rc.pid_p.Kp, rc.pid_p.Ki = v["p_Kp"], v["p_Ki"]
@@ -160,6 +163,7 @@ def apply_params(g, v):
 
     lat.params.beta_hold = bool(v["beta_hold"])
     lat.pid_beta.Kp, lat.pid_beta.Ki = v["beta_Kp"], v["beta_Ki"]
+    lat.params.da_dr_mix = v["dr_mix"]
     lat.aircraft.delta_r_max = r(v["dr_max"])
 
     pr = g.prot
@@ -313,7 +317,8 @@ class Bench(Game):
             "Va_ref": spd.Va_ref, "Va": Va, "e_Va": spd.Va_ref - Va,
             "thr_trim": spd.trim_throttle, "dthr": c[1] - spd.trim_throttle, "thr": c[1],
             # рыскание
-            "beta": deg(beta), "dr": deg(c[3]),
+            "beta": deg(beta), "dr": deg(c[3]), "dr_mix": deg(self.lat.dr_mix),
+            "da_y": deg(c[2]),
             # защита по α
             "alpha": deg(alpha), "a_warn": deg(self.prot.alpha_warn),
             "a_crit": deg(self.prot.alpha_crit), "a_exit": deg(self.prot.alpha_exit),

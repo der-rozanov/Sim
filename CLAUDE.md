@@ -44,6 +44,7 @@ control/              — управление (импортирует толь�
     controllers.py    — PitchController, SpeedController, AltitudeHold (ПИ h → θ_ref), PID, PIDParams,
                         LateralController (курс→крен→δa, β→δr), wrap_angle,
                         RollController — крен по схеме PX4: φ → p_ref → FF + ПИ по p → δa (РЕШ-22),
+                        + ограничение скорости φ_ref и микс δa→δr (РЕШ-23),
                         RollHold + with_roll_hold() — крен φ=0 в продольных сценариях
                         PitchControlParams.gain_scheduling — масштабирование delta_e ∝ (Va_ref/Va)²
     sensors.py        — measure_gyro/altitude/airspeed/angle_of_attack/gps_*,
@@ -423,9 +424,9 @@ git checkout -- checks/*.png      # check_*.py перегенерируют PNG 
 - НЕ перенастроено: lab6 (варианты Va = 22–30 м/с и ωn_θ = 4.5–6 рад/с рассчитаны под
   Aerosonde; у FPV собственная ωn_θ ≈ 14.5 — решения лабораторной не проходят свои
   проверки) — учебный материал, решение за автором. LQR (s11) считается по модели сам.
-- Скольжение до 7° на входе в разворот (обратное рыскание; s12, β по зонду): возможная
-  доработка — перекрёстная связь элероны → РН или r_ref = g·sin φ/V (координация, как
-  turn assist INAV / FW_WR_FF PX4).
+- Координация разворота (РЕШ-23): скорость уставки крена ≤ 90°/с и микс δr += K·δa,
+  K = −N_δa/N_δr = −0.654 — рывок носа против разворота −34 → −6°/с, |β| ≤ 2.7° (s12).
+  При beta_hold=False РН и микс выключены.
 
 ### Открытые дефекты и долги (найдены 2026-10-06, не исправлены — см. дорожную карту)
 - `compute_trim` — линейный по CL/Cm (без sigmoid), только горизонтальный полёт без

@@ -11,6 +11,7 @@
 5. Крен (RollController): phi -> заданная скорость крена p_ref -> элероны delta_a
    (упреждение FF + ПИ по скорости крена)
 6. Скольжение beta -> руль направления delta_r (координированный разворот)
+   + подмешивание элеронов в РН против обратного рыскания
 
 Управляющие команды:
 - delta_e (отклонение руля высоты), рад
@@ -471,6 +472,10 @@ class LateralControlParams:
     # Контур курса: χ/χ_ref = K/(τ_φ s² + s + K) → ζ = 1 при K = 1/(4·τ_φ)
     chi_K: float = 1.0                     # 1/с
     phi_ref_max: float = np.radians(30.0)  # ограничение уставки крена
+    # Ограничение скорости изменения уставки крена (PX4 FW_PN_R_SLEW_MAX): без него
+    # ступенька курса давала скачок δa ≈ 15° за шаг и рывок носа против разворота
+    # (обратное рыскание элеронов, r ≈ −34 °/с)
+    phi_ref_rate: float = np.radians(90.0)  # рад/с
 
     # Контур скольжения: delta_r = −(Kp·beta + Ki·∫beta)
     beta_hold: bool = True    # False — руль направления в нейтрали (δr = 0)
@@ -478,6 +483,9 @@ class LateralControlParams:
     beta_Kp: float = 0.5
     beta_Ki: float = 0.550   # ζ_β = 0.7
     beta_integral_limit: float = 0.2  # рад·с
+    # Подмешивание элеронов в РН (ArduPilot KFF_RDDRMIX): δr += K·δa гасит момент
+    # рыскания от элеронов сразу, не дожидаясь роста β. K = −N_δa / N_δr (tuning.py)
+    da_dr_mix: float = -0.6536
 
 
 class LateralController:
@@ -488,14 +496,16 @@ class LateralController:
         chi_ref (уставка курса)
           |   chi_meas (GPS: путевой угол), Vg (GPS: путевая скорость)
           v
-        [K_chi] + Vg·κ -> χ̇_ref -> [atan(Vg·χ̇_ref/g)] -> phi_ref  [Saturation ±phi_ref_max]
+        [K_chi] + Vg·κ -> χ̇_ref -> [atan(Vg·χ̇_ref/g)] -> [Saturation ±phi_ref_max]
+          -> [Rate limit ±phi_ref_rate] -> phi_ref
           |   phi_meas (ИНС), p_meas (гироскоп), Va_meas (ПВД)
           v
         [RollController: 1/τ_φ -> p_ref -> FF + PI_p] -> delta_a  [Saturation ±delta_a_max]
 
         beta_meas (зонд: УС)
           v
-        [PI_beta] -> delta_r  [Saturation ±delta_r_max]
+        −[PI_beta] + da_dr_mix·delta_a -> delta_r  [Saturation ±delta_r_max]
+        (beta_hold = False — руль направления в нейтрали, микс тоже выключен)
 
     Знаки (docs/physics.md, раздел 2): delta_a > 0 — крен вправо,
     delta_r > 0 — нос влево; чтобы убрать beta > 0 (поток справа), нос
@@ -512,12 +522,15 @@ class LateralController:
 
         self.chi_ref = 0.0
         self.kappa = 0.0     # кривизна заданной траектории, 1/м
-        self.phi_ref = 0.0   # последняя уставка крена (для логирования)
+        self.phi_ref = 0.0   # уставка крена после ограничителя скорости (его состояние)
+        self.dr_mix = 0.0    # вклад микса элеронов в δr (для логирования)
+        self._phi_init = True
 
     def reset(self):
-        """Сброс интегралов всех контуров."""
+        """Сброс интегралов; ограничитель уставки крена стартует с текущего крена."""
         self.roll.reset()
         self.pid_beta.reset()
+        self._phi_init = True
 
     def set_course(self, chi_ref: float, kappa: float = 0.0):
         """
@@ -552,18 +565,23 @@ class LateralController:
         # Контур курса -> уставка крена (рассогласование по кратчайшему пути)
         e_chi = wrap_angle(self.chi_ref - meas['chi'])
         chi_dot_ref = meas['Vg'] * self.kappa + pr.chi_K * e_chi
-        phi_raw = np.arctan(meas['Vg'] * chi_dot_ref / ac.g)
-        self.phi_ref = saturation(phi_raw, -pr.phi_ref_max, pr.phi_ref_max)
+        phi_cmd = saturation(np.arctan(meas['Vg'] * chi_dot_ref / ac.g),
+                             -pr.phi_ref_max, pr.phi_ref_max)
+        if self._phi_init:                       # включение САУ — без скачка уставки
+            self.phi_ref, self._phi_init = meas['phi'], False
+        step = pr.phi_ref_rate * dt
+        self.phi_ref += saturation(phi_cmd - self.phi_ref, -step, step)
 
         # Контур крена -> элероны
         delta_a = self.roll.step(self.phi_ref, meas['phi'], meas['p'], meas['Va'], dt)
 
-        # Контур скольжения -> руль направления
+        # Контур скольжения + микс элеронов -> руль направления
         if pr.beta_hold:
-            delta_r = saturation(-self.pid_beta.step(meas['beta'], dt),
+            self.dr_mix = pr.da_dr_mix * delta_a
+            delta_r = saturation(-self.pid_beta.step(meas['beta'], dt) + self.dr_mix,
                                  -ac.delta_r_max, ac.delta_r_max)
         else:
-            delta_r = 0.0
+            self.dr_mix, delta_r = 0.0, 0.0
 
         return delta_a, delta_r
 
