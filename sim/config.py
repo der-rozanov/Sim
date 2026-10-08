@@ -17,6 +17,9 @@ class AircraftParams:
     Прежний набор (Aerosonde, B&M 2-е изд., РЕШ-18/19) — aerosonde_params().
     """
 
+    # Тип ЛА — ключ реестра AIRCRAFT_TYPES; по нему viz/ выбирает 3D-модель
+    name: str = "fpv"
+
     # --- Масса и инерция (радиусы инерции по Roskam) ---
     mass: float = 2.0      # кг
     Jx:   float = 0.1013   # кг·м², момент инерции крена
@@ -119,7 +122,7 @@ def aerosonde_params() -> AircraftParams:
     с поправками проекта РЕШ-19 (α_stall 16°, пороги УА, |δe|, свободное вращение).
     """
     return AircraftParams(
-        mass=11.0, Jx=0.8244, Jy=1.135, Jz=1.759, Jxz=0.1204,
+        name="aerosonde", mass=11.0, Jx=0.8244, Jy=1.135, Jz=1.759, Jxz=0.1204,
         S=0.55, b=2.8956, c=0.18994,
         CL0=0.23, CLa=5.61, CLq=7.95, CLde=0.13,
         CDp=0.043, e_oswald=0.9, CDq=0.0, CDde=0.0135,
@@ -134,6 +137,22 @@ def aerosonde_params() -> AircraftParams:
         C_Q2=-0.01664, C_Q1=0.004970, C_Q0=0.005230,
         alpha_warning=0.1745, alpha_crit=0.2269,
     )
+
+
+# Реестр типов ЛА: имя -> фабрика параметров флайт-модели.
+# Новый тип: функция, возвращающая AircraftParams(name="<имя>", ...), + строка здесь;
+# 3D-модель для него — в viz/aircraft3d.MODELS (иначе модель по умолчанию).
+# Aerosonde в реестр не внесён: САУ (control/tuning.py) рассчитана под FPV.
+AIRCRAFT_TYPES = {
+    "fpv": AircraftParams,
+}
+
+
+def aircraft_by_name(name: str) -> AircraftParams:
+    """Параметры ЛА по имени типа из AIRCRAFT_TYPES."""
+    if name not in AIRCRAFT_TYPES:
+        raise KeyError(f"неизвестный тип ЛА {name!r}; есть: {', '.join(AIRCRAFT_TYPES)}")
+    return AIRCRAFT_TYPES[name]()
 
 
 @dataclass

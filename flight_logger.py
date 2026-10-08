@@ -215,6 +215,7 @@ class FlightLogger:
             "description": self._description,
             "saved_at":    datetime.datetime.now().isoformat(timespec="seconds"),
             "aircraft": {
+                "name": ac.name,
                 "mass": ac.mass, "Jx": ac.Jx, "Jy": ac.Jy, "Jz": ac.Jz, "Jxz": ac.Jxz,
                 "S": ac.S, "b": ac.b, "c": ac.c,
                 "rho": ac.rho, "g": ac.g,

@@ -31,7 +31,8 @@
 
 ```
 sim/                  — ядро физики (изолировано, без управления)
-    config.py         — параметры ЛА, ветра, датчиков, прогона (AircraftParams и др.)
+    config.py         — параметры ЛА, ветра, датчиков, прогона (AircraftParams и др.);
+                        реестр типов ЛА AIRCRAFT_TYPES, aircraft_by_name() (РЕШ-24)
     state.py          — вектор состояния 6DOF (12 компонент), индексы U..Y, DE..DR,
                         air_data() -> (Va, alpha, beta), air_velocity(), earth_velocity()
     dynamics.py       — derivatives() [полная 6DOF, чистая функция], thrust()
@@ -63,6 +64,8 @@ flight_logger.py      — FlightLogger, load_log(), print_log_info()
 viz/                  — отображение (принимает Log, не знает физики)
     plotting.py       — plot_dynamics/trajectory/energy/integrator_check()
     animate.py        — animate_log()  [силуэт ЛА, анимация по Log]
+    aircraft3d.py     — 3D-модели ЛА (процедурный low-poly, по мотивам Cessna 172);
+                        реестр MODELS: тип ЛА (AircraftParams.name) → модель
     viewer.py         — FlightLogViewer; CLI: python viz/viewer.py [файл.flightlog]
     world3d.py        — мир 3D: карты default (10×10 км: ВПП, река, озеро, деревня, холм,
                         леса), kainki (спутниковый снимок 4×4 км на рельефе SRTM) и
@@ -73,7 +76,7 @@ viz/                  — отображение (принимает Log, не �
     mapdata.py        — загрузка снимка Esri и рельефа SRTM в viz/map_cache/ (не в git)
     osmdata.py        — загрузка/разбор OpenStreetMap (Overpass) для карты kainki_osm
     landcover.py      — классы поверхности по снимку (лес/пашня/луг/вода) для kainki_large_osm
-    viewer3d.py       — 3D-тренажёр (Ursina): мир, силуэт с рулями, 4 камеры;
+    viewer3d.py       — 3D-тренажёр (Ursina): мир, модель ЛА с рулями, 4 камеры;
                         CLI: python viz/viewer3d.py [файл.flightlog] [--map kainki]
     bench_panel.py    — окно стенда САУ (tkinter): блок-схема, ползунки, осциллограф;
                         процесс-спутник scenarios/Bench3D.py, связь через очереди
@@ -133,7 +136,7 @@ docs/                 — техническая документация (ка�
     SENSORS.md        — псевдодатчики
     viewer3d.md       — 3D-тренажёр: запуск, клавиши, СК и ориентация, проверки
     architecture.md   — зависимости, Log, controls_fn, совместимость 6DOF
-    decisions.md      — журнал решений РЕШ-01…17 (почему сделано так)
+    decisions.md      — журнал решений РЕШ-01…24 (почему сделано так)
     scenarios_report.md — результаты сценариев С1–С14
     continuation.md   — ИСТОРИЧЕСКИЙ (состояние на 2026-06)
 results/              — .flightlog файлы (генерируемые, в .gitignore)
@@ -176,7 +179,7 @@ from viz.plotting import plot_dynamics
   (MuJoCo, JSBSim и т.п. в код не тянуть — решение принято осознанно).
 - Интегратор пишется вручную (RK4 основной, Эйлер опционально).
 - scipy допустим только при явной необходимости и с согласования автора.
-- Исключение (РЕШ-16): `ursina` (Panda3D, тянет pillow) — только в `viz/viewer3d.py`,
+- Исключение (РЕШ-16): `ursina` (Panda3D, тянет pillow) — только в `viz/viewer3d.py`, `viz/aircraft3d.py`,
   `viz/world3d.py`, `viz/mapdata.py`, `viz/osmdata.py`, `viz/landcover.py`, `scenarios/GameScenario3D.py`
   и `scenarios/Bench3D.py`.
   В `sim/`, `control/`, `runner.py` не импортировать. Спутниковые тайлы Esri — только

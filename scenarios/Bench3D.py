@@ -48,7 +48,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
-from sim.config import AircraftParams, WindParams, SimConfig
+from sim.config import WindParams, SimConfig, AIRCRAFT_TYPES, aircraft_by_name
 from sim.state import H, P, Q, PHI, THETA, X, Y, air_data, earth_velocity
 from sim.aero import aero_forces_moments
 from control.controllers import AltitudeHoldParams
@@ -348,9 +348,10 @@ def main():
     ap.add_argument("--cam", type=int, default=1, choices=[1, 2, 3, 4])
     ap.add_argument("--map", default="default", choices=list(MAPS), help="карта мира")
     ap.add_argument("--no-map", action="store_true", help="без окна карты (маршрута)")
+    ap.add_argument("--aircraft", default="fpv", choices=list(AIRCRAFT_TYPES), help="тип ЛА")
     a = ap.parse_args()
 
-    aircraft = AircraftParams()
+    aircraft = aircraft_by_name(a.aircraft)
     wind_params = WindParams(Vw_const=a.wind_n, Vw_cross=a.wind_e)
     cfg = SimConfig(Va0=16.0, h0=a.h0, theta0=0.0, dt=0.01, t_end=1e9)
 
