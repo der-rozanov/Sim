@@ -41,11 +41,11 @@ if _ROOT not in sys.path:
 
 from flight_logger import load_log
 from viz.world3d import World, make_world, MAPS
+from viz.aircraft3d import make_model
 
 from ursina import (Ursina, Entity, Mesh, Text, Sky, Vec3, Color, camera, scene,
                     window, mouse, held_keys, application, time as utime,
                     DirectionalLight, AmbientLight, destroy)
-from ursina.shaders.lit_with_shadows_shader import lit_with_shadows_shader
 from ursina.shaders.unlit_shader import unlit_shader
 
 ALERT_LABEL = ["НОРМ", "ПРЕД", "КРИТ", "СРЫВ"]
@@ -109,6 +109,7 @@ class Track:
         self.events = self.meta.get("events", [])
         self.b = float(self.meta.get("aircraft", {}).get("b", 2.0))
         self.c = float(self.meta.get("aircraft", {}).get("c", 0.2))
+        self.name = self.meta.get("aircraft", {}).get("name", "fpv")
 
     def index(self, t: float) -> int:
         return int(np.clip(np.searchsorted(self.t, t), 0, len(self.t) - 1))
@@ -118,76 +119,6 @@ class Track:
         return np.array([np.interp(t, self.t, self.pos[:, k]) for k in range(3)])
 
 
-
-
-# ===========================================================================
-# Силуэт ЛА
-# ===========================================================================
-
-class AircraftModel:
-    """
-    Силуэт ЛА из примитивов в масштабе размаха b (из метаданных лога).
-    Локальные оси модели: +Z — нос, +X — правое крыло, +Y — верх.
-    Рули отклоняются по логу (знаки как в sim/config.py):
-      δe > 0 — задняя кромка руля высоты вниз;
-      δa > 0 — правый элерон вверх, левый вниз (правый крен);
-      δr > 0 — задняя кромка руля направления влево.
-    """
-
-    def __init__(self, b: float, c: float):
-        self.root = Entity()
-        self.body = Entity(parent=self.root)
-        s = dict(parent=self.body, shader=lit_with_shadows_shader)
-        L = 0.7 * b
-        d = 0.075 * b
-        c = max(c, 0.09 * b)                           # хорда не тоньше «штриха»
-        white, grey = Color(0.95, 0.95, 0.97, 1), Color(0.6, 0.62, 0.66, 1)
-        orange, red = Color(1.0, 0.55, 0.1, 1), Color(0.85, 0.12, 0.1, 1)
-
-        Entity(model="sphere", color=white, scale=(d, d * 1.1, L), **s)          # фюзеляж
-        Entity(model="sphere", color=Color(0.2, 0.3, 0.45, 1),
-               scale=(0.6 * d, 0.5 * d, 0.25 * L), position=(0, 0.45 * d, 0.22 * L), **s)
-        zw = 0.08 * L                                   # крыло
-        Entity(model="cube", color=white, scale=(b, 0.03 * c + 0.01, 0.75 * c),
-               position=(0, 0, zw + 0.125 * c), **s)
-        for sgn in (-1, 1):
-            Entity(model="cube", color=red, scale=(0.06 * b, 0.035 * c + 0.012, 0.75 * c),
-                   position=(sgn * 0.48 * b, 0, zw + 0.125 * c), **s)
-        self.ail = []
-        for sgn in (-1, 1):                             # элероны: внешние 40 % полуразмаха
-            pv = Entity(parent=self.body, position=(sgn * 0.37 * b, 0, zw - 0.25 * c))
-            Entity(parent=pv, model="cube", color=orange, shader=lit_with_shadows_shader,
-                   scale=(0.26 * b, 0.02 * c + 0.008, 0.25 * c), position=(0, 0, -0.125 * c))
-            self.ail.append((sgn, pv))
-        zt = -0.47 * L                                  # оперение
-        ct = 0.8 * c
-        Entity(model="cube", color=white, scale=(0.36 * b, 0.02, 0.6 * ct),
-               position=(0, 0, zt + 0.3 * ct), **s)
-        self.elev = Entity(parent=self.body, position=(0, 0, zt))
-        Entity(parent=self.elev, model="cube", color=orange, shader=lit_with_shadows_shader,
-               scale=(0.36 * b, 0.015, 0.4 * ct), position=(0, 0, -0.2 * ct))
-        Entity(model="cube", color=white, scale=(0.02, 0.17 * b, 0.6 * ct),
-               position=(0, 0.085 * b, zt + 0.3 * ct), **s)
-        self.rud = Entity(parent=self.body, position=(0, 0, zt))
-        Entity(parent=self.rud, model="cube", color=orange, shader=lit_with_shadows_shader,
-               scale=(0.015, 0.17 * b, 0.4 * ct), position=(0, 0.085 * b, -0.2 * ct))
-        self.prop = Entity(parent=self.body, position=(0, 0, 0.5 * L + 0.02))
-        for a in (0, 90):
-            Entity(parent=self.prop, model="cube", color=grey, shader=lit_with_shadows_shader,
-                   scale=(0.32 * b, 0.03 * b, 0.01), rotation_z=a)
-
-    def pose(self, pos, nose, up, scale: float):
-        self.root.position = Vec3(*pos)
-        self.root.scale = scale
-        p = Vec3(*pos)
-        self.root.lookAt(p + Vec3(*nose), Vec3(*up))   # Panda3D: точно, с креном
-
-    def surfaces(self, de, da, dr, thr, dt):
-        self.elev.rotation_x = -np.degrees(de)
-        for sgn, pv in self.ail:
-            pv.rotation_x = sgn * np.degrees(da)
-        self.rud.rotation_y = np.degrees(dr)
-        self.prop.rotation_z += 3000.0 * thr * dt
 
 
 # ===========================================================================
@@ -231,13 +162,13 @@ class View3D:
     CAM_NAMES = {1: "за хвостом", 2: "из кабины", 3: "облёт мышью", 4: "обзор сверху"}
 
     def __init__(self, b: float, c: float, terrain: World, help_text: str,
-                 cam: int = 1, hud_lines: int = 11):
+                 cam: int = 1, hud_lines: int = 11, aircraft_name: str = "fpv"):
         self.b, self.ter = b, terrain
         self.cam_mode, self.big = cam, False
         self.orbit_yaw, self.orbit_pitch, self.orbit_r = 30.0, 15.0, 12.0 * b
         self._cam_pos = None
 
-        self.ac = AircraftModel(b, c)
+        self.ac = make_model(aircraft_name, b, c)     # 3D-модель по типу ЛА (viz/aircraft3d.py)
         self.path_all = _line([], Color(1, 1, 1, 0.35), 1.5)
         self.path_all.enabled = False
         self.trail = _line([], Color(1.0, 0.25, 0.2, 1), 3.0)
@@ -329,7 +260,8 @@ class View3D:
             camera.look_at(p + Vec3(*(flat * 4 * b)))
             camera.rotation_z = 0
         elif self.cam_mode == 2:                                  # из кабины
-            camera.position = Vec3(*(pos + 0.16 * b * np.asarray(nose) + 0.07 * b * np.asarray(up)))
+            eye = self.ac.eye                                     # глаз пилота в осях модели
+            camera.position = Vec3(*(pos + eye[2] * np.asarray(nose) + eye[1] * np.asarray(up)))
             camera.lookAt(camera.position + Vec3(*nose), Vec3(*up))
         elif self.cam_mode == 3:                                  # облёт мышью
             if mouse.right:
@@ -397,7 +329,8 @@ class Player3D(Entity):
         self.show_path = False
         self.shot, self._frames = shot, 0
 
-        self.view = View3D(track.b, track.c, terrain, self.HELP, cam=cam)
+        self.view = View3D(track.b, track.c, terrain, self.HELP, cam=cam,
+                           aircraft_name=track.name)
         step = max(1, int(round(0.1 / (track.t[1] - track.t[0]))))
         self._sub = np.arange(0, len(track.t), step)               # прорежение следа
         _set_line(self.view.path_all, track.pos[self._sub])
