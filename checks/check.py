@@ -364,7 +364,7 @@ try:
     all_ok &= check("GPS-курс: скорость на восток -> chi = 90°",
                     abs(np.degrees(measure_gps_course(0.0, 30.0, 0.0, None)) - 90) < 1e-9)
 
-    level = {'chi': 0.0, 'phi': 0.0, 'p': 0.0, 'beta': 0.0}
+    level = {'chi': 0.0, 'Vg': 16.0, 'phi': 0.0, 'p': 0.0, 'Va': 16.0, 'beta': 0.0}
     lc = LateralController(ap, LateralControlParams())
     lc.set_course(np.radians(20))
     da, dr = lc.step(level, cfg.dt)

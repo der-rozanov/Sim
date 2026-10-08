@@ -39,11 +39,13 @@ C_REF, C_MEAS, C_CTRL = "#d62728", "#1f77b4", "#2ca02c"
 # Ползунки/флажки на схемах: ключ → (x, y) верхнего центра, длина в пикс, цвет блока
 SLIDER_POS = {
     # крен
-    "chi_Kp": (205, 78, 120, C_BOX), "chi_Ki": (205, 140, 120, C_BOX),
-    "phi_ref_max": (370, 122, 90, C_SAT),
-    "phi_Kp": (595, 78, 120, C_BOX), "phi_Ki": (595, 140, 120, C_BOX),
-    "da_max": (800, 122, 90, C_SAT),
-    "phi_Kd": (800, 245, 90, C_BOX),
+    "chi_K": (165, 80, 90, C_BOX),
+    "phi_ref_max": (280, 122, 66, C_SAT),
+    "tau_phi": (435, 110, 76, C_BOX),
+    "p_max": (540, 122, 74, C_SAT),
+    "p_Kp": (720, 78, 100, C_BOX), "p_Ki": (720, 140, 100, C_BOX),
+    "p_FF": (720, 240, 100, C_BOX),
+    "da_max": (875, 122, 60, C_SAT),
     # тангаж / высота
     "KH": (155, 92, 85, C_BOX), "h_Ki": (155, 140, 85, C_BOX),
     "theta_Kp": (350, 55, 100, C_BOX), "theta_Ki": (350, 112, 100, C_BOX),
@@ -72,7 +74,10 @@ SLIDER_POS = {
 SCOPES = {
     "roll": [("курс χ, °", [("chi_ref", C_REF, "χ_ref", 1), ("chi", C_MEAS, "χ", 0)], ("auto", 30)),
              ("крен φ, °", [("phi_ref", C_REF, "φ_ref", 1), ("phi", C_MEAS, "φ", 0)], ("sym", 35)),
-             ("элероны δa, °", [("da", C_CTRL, "δa", 0)], ("sym", 10))],
+             ("скорость крена p, °/с", [("p_ref", C_REF, "p_ref", 1), ("p", C_MEAS, "p", 0)],
+              ("sym", 30)),
+             ("элероны δa, °", [("da_ff", "#999", "FF·p_ref", 1), ("da", C_CTRL, "δa", 0)],
+              ("sym", 10))],
     "pitch": [("высота h, м", [("h_ref", C_REF, "h_ref", 1), ("h", C_MEAS, "h", 0)], ("auto", 20)),
               ("тангаж θ, °", [("theta_ref", C_REF, "θ_ref", 1), ("theta", C_MEAS, "θ", 0)], ("sym", 10)),
               ("угл. скорость q, °/с", [("q_ref", C_REF, "q_ref", 1), ("q", C_MEAS, "q", 0)], ("sym", 10)),
@@ -194,46 +199,58 @@ class Panel:
     # --- схемы вкладок ------------------------------------------------------
     def _draw_roll(self, cv):
         Y, A, S, V = 130, self._arrow, self._sum, self._val
-        self._title(cv, "Боковая САУ: курс χ → крен φ → элероны δa")
+        self._title(cv, "Боковая САУ: курс χ → крен φ → скорость крена p → δa (схема PX4)")
         cv.create_text(30, 110, text="χ_ref", font=FONT_B, fill=C_REF)
         V(cv, 30, 150, lambda m: f"{m['chi_ref'] % 360:5.1f}°", C_REF)
-        A(cv, 50, Y, 69, Y)
-        S(cv, 80, Y)
-        A(cv, 91, Y, 135, Y)
-        V(cv, 113, 115, lambda m: f"{m['e_chi']:+.1f}°")
-        self._box(cv, 135, 55, 275, 205, "ПИ курса")
-        A(cv, 275, Y, 315, Y)
-        self._box(cv, 315, 75, 425, 185, "огр. φ_ref", C_SAT)
-        self._sat_icon(cv, 370, 103)
-        A(cv, 425, Y, 469, Y)
-        V(cv, 447, 115, lambda m: f"{m['phi_ref']:+.1f}°", C_REF)
-        S(cv, 480, Y)
-        A(cv, 491, Y, 525, Y)
-        V(cv, 508, 115, lambda m: f"{m['e_phi']:+.1f}°")
-        self._box(cv, 525, 55, 665, 205, "ПИ крена")
-        A(cv, 665, Y, 689, Y)
-        S(cv, 700, Y)
-        A(cv, 711, Y, 745, Y)
-        self._box(cv, 745, 75, 855, 185, "огр. δa", C_SAT)
-        self._sat_icon(cv, 800, 103)
-        A(cv, 855, Y, 900, Y)
-        V(cv, 877, 115, lambda m: f"{m['da']:+.1f}°", C_CTRL)
-        self._box(cv, 900, 85, 990, 175, "ЛА")
-        cv.create_text(945, 130, text="6DOF\n(3D-окно)", font=FONT, justify="center")
-        A(cv, 990, 100, 1045, 100, 1045, 355, 80, 355, 80, 141)          # χ (GPS)
+        A(cv, 50, Y, 64, Y)
+        S(cv, 75, Y)
+        A(cv, 86, Y, 110, Y)
+        V(cv, 98, 160, lambda m: f"{m['e_chi']:+.0f}°")
+        self._box(cv, 110, 55, 220, 205, "П курса")
+        cv.create_text(165, 175, text="χ̇ = K_χ·e_χ\nφ = atan(Vg·χ̇/g)", font=FONT_S, justify="center")
+        A(cv, 220, Y, 240, Y)
+        self._box(cv, 240, 75, 320, 185, "огр. φ_ref", C_SAT)
+        self._sat_icon(cv, 280, 103)
+        A(cv, 320, Y, 349, Y)
+        V(cv, 335, 115, lambda m: f"{m['phi_ref']:+.0f}°", C_REF)
+        S(cv, 360, Y)
+        A(cv, 371, Y, 390, Y)
+        V(cv, 380, 160, lambda m: f"{m['e_phi']:+.0f}°")
+        self._box(cv, 390, 75, 480, 185, "1/τ_φ")
+        A(cv, 480, Y, 500, Y)
+        self._box(cv, 500, 75, 580, 185, "огр. p_ref", C_SAT)
+        self._sat_icon(cv, 540, 103)
+        A(cv, 580, Y, 619, Y)
+        V(cv, 600, 115, lambda m: f"{m['p_ref']:+.0f}", C_REF)
+        S(cv, 630, Y)
+        A(cv, 641, Y, 660, Y)
+        V(cv, 650, 160, lambda m: f"{m['e_p']:+.0f}")
+        self._box(cv, 660, 55, 780, 205, "ПИ скор. крена")
+        A(cv, 780, Y, 804, Y)
+        S(cv, 815, Y, marks=(("+", -15, -12), ("+", 14, 20)))
+        A(cv, 826, Y, 840, Y)
+        A(cv, 600, Y, 600, 255, 660, 255)                                 # упреждение FF
+        self._box(cv, 660, 222, 780, 290, "упрежд. FF")
+        A(cv, 780, 255, 815, 255, 815, 141)
+        V(cv, 860, 270, lambda m: f"FF·p_ref = {m['da_ff']:+.1f}°")
+        self._box(cv, 840, 75, 910, 185, "огр. δa", C_SAT)
+        self._sat_icon(cv, 875, 103)
+        A(cv, 910, Y, 925, Y)
+        V(cv, 918, 205, lambda m: f"δa {m['da']:+.1f}°", C_CTRL)
+        self._box(cv, 925, 85, 995, 175, "ЛА")
+        cv.create_text(960, 130, text="6DOF", font=FONT, justify="center")
+        A(cv, 995, 100, 1050, 100, 1050, 355, 75, 355, 75, 141)          # χ (GPS)
         cv.create_text(1000, 92, text="χ", font=FONT_B, fill=C_MEAS, anchor="w")
         V(cv, 300, 343, lambda m: f"χ = {m['chi'] % 360:5.1f}°", C_MEAS)
-        A(cv, 990, Y, 1025, Y, 1025, 320, 480, 320, 480, 141)            # φ (ИНС)
+        A(cv, 995, Y, 1030, Y, 1030, 335, 360, 335, 360, 141)            # φ (ИНС)
         cv.create_text(1000, 122, text="φ", font=FONT_B, fill=C_MEAS, anchor="w")
-        V(cv, 600, 308, lambda m: f"φ = {m['phi']:+.1f}°", C_MEAS)
-        A(cv, 990, 160, 1005, 160, 1005, 255, 855, 255)                  # p (гироскоп)
-        cv.create_text(995, 152, text="p", font=FONT_B, fill=C_MEAS, anchor="w")
-        V(cv, 930, 243, lambda m: f"{m['p']:+.0f}°/с", C_MEAS)
-        self._box(cv, 745, 222, 855, 305, "демпф. Kd")
-        A(cv, 745, 255, 700, 255, 700, 141)
-        V(cv, 675, 270, lambda m: f"Kd·p = {m['kdp']:+.1f}°")
-        self._footer(cv, "φ_ref = Kp·e_χ + Ki·∫e_χ;   δa = Kp·e_φ + Ki·∫e_φ − Kd·p.   "
-                         "Руль направления — контур β (вкладка «Рыскание»).")
+        V(cv, 480, 323, lambda m: f"φ = {m['phi']:+.1f}°", C_MEAS)
+        A(cv, 995, 160, 1010, 160, 1010, 315, 630, 315, 630, 141)        # p (гироскоп)
+        cv.create_text(1000, 152, text="p", font=FONT_B, fill=C_MEAS, anchor="w")
+        V(cv, 900, 303, lambda m: f"p = {m['p']:+.0f}°/с", C_MEAS)
+        self._footer(cv, "p_ref = (φ_ref − φ)/τ_φ;  δa = s·FF·p_ref + s²·(Kp·e_p + Ki·∫e_p),  "
+                         "s = Va₀/Va.  FF делает основную работу, ПИ поправляет.  "
+                         "РН — вкладка «Рыскание».")
 
     def _draw_pitch(self, cv):
         Y, A, S, V = 135, self._arrow, self._sum, self._val

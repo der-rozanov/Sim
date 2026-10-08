@@ -268,7 +268,7 @@ def _reset():
     sim["h_hold"]    = False
     sim["h_ref"]     = cfg.h0
     ap_pitch.reset({"theta": s0[THETA], "q": 0.0, "h": cfg.h0})
-    roll_hold.pid_phi.reset()
+    roll_hold.reset()
     ap_pitch.set_pitch_setpoint(alpha_trim)
     ap_speed.set_Va_ref(cfg.Va0)
     ap_speed.reset()
@@ -406,7 +406,7 @@ def update(_frame):
                 delta_e  = sim["delta_e"]
                 throttle = sim["throttle"]
 
-            delta_a  = roll_hold.step(state[PHI], state[P], cfg.dt)
+            delta_a  = roll_hold.step(state[PHI], state[P], Va, cfg.dt)
             controls = np.array([delta_e, throttle, delta_a, 0.0])
 
             t_buf.append(t)

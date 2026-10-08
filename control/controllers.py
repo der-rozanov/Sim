@@ -6,9 +6,10 @@
 2. Внутренний (q-контур): стабилизация угловой скорости q
 3. Контур скорости (Va-контур): удержание воздушной скорости через тягу
 
-Боковой канал (LateralController):
-4. Курс chi -> уставка крена phi_ref
-5. Крен phi (+ демпфирование по p) -> элероны delta_a
+Боковой канал (LateralController, схема как в PX4 / ArduPilot):
+4. Курс chi -> заданная скорость разворота -> уставка крена phi_ref
+5. Крен (RollController): phi -> заданная скорость крена p_ref -> элероны delta_a
+   (упреждение FF + ПИ по скорости крена)
 6. Скольжение beta -> руль направления delta_r (координированный разворот)
 
 Управляющие команды:
@@ -18,7 +19,7 @@
 """
 
 import numpy as np
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sim.state import PHI, P
 
@@ -396,23 +397,79 @@ def wrap_angle(angle: float) -> float:
 
 
 @dataclass
+class RollControlParams:
+    """
+    Регулятор крена по схеме PX4 / ArduPilot: угол → скорость крена → элероны.
+
+        p_ref = (φ_ref − φ) / τ_φ,                |p_ref| ≤ p_max
+        δa    = s·FF·p_ref + s²·(Kp·e_p + Ki·∫e_p),  e_p = p_ref − p,  s = Va_ref / Va
+
+    FF — упреждение: δa, при котором установившаяся скорость крена равна p_ref
+    (FF = a_φ1 / a_φ2); оно делает основную работу. ПИ по скорости крена только
+    поправляет: P — против возмущений, I — против постоянного момента винта.
+    Масштаб s: a_φ1 ∝ Va, a_φ2 ∝ Va², поэтому FF ∝ 1/Va, Kp, Ki ∝ 1/Va².
+    Аналоги: PX4 FW_R_TC, FW_R_RMAX, FW_RR_FF, FW_RR_P, FW_RR_I;
+    ArduPilot RLL2SRV_TCONST, RLL2SRV_RMAX, RLL_RATE_FF/P/I.
+    Расчёт — control/tuning.py (FPV-самолёт, Va = 16 м/с).
+    """
+    tau_phi: float = 0.25            # с, постоянная времени крена (PX4 0.5, ArduPilot 0.45)
+    p_max: float = np.radians(120.0)  # рад/с, предел p_ref (p_уст при δa = 20° ≈ 210 °/с)
+    FF: float = 0.09438              # рад/(рад/с) = a_φ1 / a_φ2
+    Kp: float = 0.03211              # контур p: полюс a_φ1 + a_φ2·Kp = 75 рад/с
+    Ki: float = 0.1284               # нуль ПИ на 1/τ_φ
+    integral_limit: float = 0.467    # рад → вклад интеграла ≤ 0.06 рад ≈ 3.4° δa
+    Va_ref: float = 16.0             # м/с, скорость, на которой рассчитаны FF, Kp, Ki
+    scale_min: float = 0.5           # пределы масштаба s = Va_ref / Va
+    scale_max: float = 2.0
+
+
+class RollController:
+    """Крен φ_ref → δa (каскад угол → скорость крена). Состояние — только интеграл."""
+
+    def __init__(self, aircraft, params: RollControlParams = None):
+        self.aircraft = aircraft
+        self.params = params or RollControlParams()
+        pr = self.params
+        self.pid_p = PID(PIDParams(Kp=pr.Kp, Ki=pr.Ki, integral_limit=pr.integral_limit),
+                         name="p")
+        self.p_ref = 0.0     # для логирования / окна стенда
+        self.da_ff = 0.0     # упреждающая часть δa
+
+    def reset(self):
+        self.pid_p.reset()
+
+    def step(self, phi_ref: float, phi: float, p: float, Va: float, dt: float) -> float:
+        """Уставка крена и измерения (φ, p, Va) → δa, рад."""
+        pr, ac = self.params, self.aircraft
+        self.p_ref = saturation((phi_ref - phi) / pr.tau_phi, -pr.p_max, pr.p_max)
+        s = saturation(pr.Va_ref / max(Va, 1.0), pr.scale_min, pr.scale_max)
+        e_p = self.p_ref - p
+        self.da_ff = s * pr.FF * self.p_ref
+        da_raw = self.da_ff + s * s * self.pid_p.step(e_p, dt)
+        delta_a = saturation(da_raw, -ac.delta_a_max, ac.delta_a_max)
+        if da_raw != delta_a and e_p * da_raw > 0:
+            self.pid_p.unwind(e_p, dt)          # элероны в упоре — интеграл не копим
+        return delta_a
+
+
+@dataclass
 class LateralControlParams:
     """
-    Параметры боковой САУ (B&M гл. 6, последовательное замыкание контуров).
+    Параметры боковой САУ. Курс — П-контур через заданную скорость разворота
+    (как L1/NPFG в PX4/ArduPilot: уставка крена из требуемого бокового ускорения):
 
+        χ̇_ref = Vg·κ + K_chi·(χ_ref − χ),   φ_ref = atan(Vg·χ̇_ref / g),   |φ_ref| ≤ phi_ref_max
+
+    κ — кривизна заданной траектории от навигатора (упреждение на дугах, как в L1/NPFG).
+
+    Интеграла по курсу нет: на прямой φ = 0 при любом χ, статической ошибки нет.
     Коэффициенты рассчитаны для FPV-самолёта при Va = 16 м/с
     (control/tuning.py, docs/control.md раздел 11).
     """
-    # Контур крена: delta_a = Kp·e_phi + Ki·∫e_phi − Kd·p
-    phi_Kp: float = 0.6746   # ωn_φ = 20 рад/с; ζ = 1.4 — своё демпфирование
-    phi_Ki: float = 0.2698   # нуль ПИ на 0.02·ωn_φ — только против момента винта
-    phi_Kd: float = 0.2   # a_φ1 велико — демпфирование не нужно
-    phi_integral_limit: float = 0.2   # рад·с
+    roll: RollControlParams = field(default_factory=RollControlParams)
 
-    # Контур курса: phi_ref = Kp·e_chi + Ki·∫e_chi
-    chi_Kp: float = 2.744   # ωn_χ = 1.05 рад/с (полюс крена 8.4 / 8)
-    chi_Ki: float = 1.804
-    chi_integral_limit: float = 0.1   # рад·с → вклад интеграла ≤ ~9.5° крена
+    # Контур курса: χ/χ_ref = K/(τ_φ s² + s + K) → ζ = 1 при K = 1/(4·τ_φ)
+    chi_K: float = 1.0                     # 1/с
     phi_ref_max: float = np.radians(30.0)  # ограничение уставки крена
 
     # Контур скольжения: delta_r = −(Kp·beta + Ki·∫beta)
@@ -429,12 +486,12 @@ class LateralController:
 
     Структура:
         chi_ref (уставка курса)
-          |   chi_meas (GPS: путевой угол)
+          |   chi_meas (GPS: путевой угол), Vg (GPS: путевая скорость)
           v
-        [PI_chi] -> phi_ref  [Saturation ±phi_ref_max]
-          |   phi_meas (ИНС), p_meas (гироскоп)
+        [K_chi] + Vg·κ -> χ̇_ref -> [atan(Vg·χ̇_ref/g)] -> phi_ref  [Saturation ±phi_ref_max]
+          |   phi_meas (ИНС), p_meas (гироскоп), Va_meas (ПВД)
           v
-        [PI_phi − Kd·p] -> delta_a  [Saturation ±delta_a_max]
+        [RollController: 1/τ_φ -> p_ref -> FF + PI_p] -> delta_a  [Saturation ±delta_a_max]
 
         beta_meas (зонд: УС)
           v
@@ -449,25 +506,28 @@ class LateralController:
         self.aircraft = aircraft
         self.params = params
 
-        self.pid_chi = PID(PIDParams(Kp=params.chi_Kp, Ki=params.chi_Ki,
-                                     integral_limit=params.chi_integral_limit), name="chi")
-        self.pid_phi = PID(PIDParams(Kp=params.phi_Kp, Ki=params.phi_Ki,
-                                     integral_limit=params.phi_integral_limit), name="phi")
+        self.roll = RollController(aircraft, params.roll)
         self.pid_beta = PID(PIDParams(Kp=params.beta_Kp, Ki=params.beta_Ki,
                                       integral_limit=params.beta_integral_limit), name="beta")
 
         self.chi_ref = 0.0
+        self.kappa = 0.0     # кривизна заданной траектории, 1/м
         self.phi_ref = 0.0   # последняя уставка крена (для логирования)
 
     def reset(self):
         """Сброс интегралов всех контуров."""
-        self.pid_chi.reset()
-        self.pid_phi.reset()
+        self.roll.reset()
         self.pid_beta.reset()
 
-    def set_course(self, chi_ref: float):
-        """Установить уставку курса (путевого угла), рад."""
+    def set_course(self, chi_ref: float, kappa: float = 0.0):
+        """
+        Установить уставку курса (путевого угла), рад, и кривизну заданной
+        траектории kappa, 1/м (>0 — разворот вправо; 0 — прямая или ручная уставка).
+        Кривизна даёт упреждение χ̇ = Vg·kappa: на дуге радиуса R крен
+        atan(Vg²/(g·R)) задаётся сразу, а не набирается ошибкой курса.
+        """
         self.chi_ref = wrap_angle(chi_ref)
+        self.kappa = kappa
 
     def step(self, meas: dict, dt: float) -> tuple:
         """
@@ -476,8 +536,10 @@ class LateralController:
         Args:
             meas: {
                 'chi':  путевой угол (GPS), рад
+                'Vg':   путевая скорость (GPS), м/с
                 'phi':  угол крена (ИНС), рад
                 'p':    угловая скорость крена (гироскоп), рад/с
+                'Va':   воздушная скорость (ПВД), м/с
                 'beta': УС (зонд), рад
             }
             dt: шаг времени, сек
@@ -489,17 +551,12 @@ class LateralController:
 
         # Контур курса -> уставка крена (рассогласование по кратчайшему пути)
         e_chi = wrap_angle(self.chi_ref - meas['chi'])
-        phi_raw = self.pid_chi.step(e_chi, dt)
+        chi_dot_ref = meas['Vg'] * self.kappa + pr.chi_K * e_chi
+        phi_raw = np.arctan(meas['Vg'] * chi_dot_ref / ac.g)
         self.phi_ref = saturation(phi_raw, -pr.phi_ref_max, pr.phi_ref_max)
-        if phi_raw != self.phi_ref and e_chi * phi_raw > 0:
-            self.pid_chi.unwind(e_chi, dt)      # крен в упоре — интеграл курса не копим
 
-        # Контур крена -> элероны (демпфирование по измеренной p, а не по производной ошибки)
-        e_phi = self.phi_ref - meas['phi']
-        da_raw = self.pid_phi.step(e_phi, dt) - pr.phi_Kd * meas['p']
-        delta_a = saturation(da_raw, -ac.delta_a_max, ac.delta_a_max)
-        if da_raw != delta_a and e_phi * da_raw > 0:
-            self.pid_phi.unwind(e_phi, dt)
+        # Контур крена -> элероны
+        delta_a = self.roll.step(self.phi_ref, meas['phi'], meas['p'], meas['Va'], dt)
 
         # Контур скольжения -> руль направления
         if pr.beta_hold:
@@ -556,52 +613,34 @@ class AltitudeHold:
 # САУ по крену для продольных сценариев
 # ---------------------------------------------------------------------------
 
-@dataclass
-class RollHoldParams:
-    """
-    Удержание крена φ_ref = 0 (крылья горизонтально).
-
-    Kp, Kd — как в контуре крена LateralController. Интеграл больше: он
-    парирует постоянный реактивный момент винта (на малой скорости и полном
-    газе нужно до ~2° δa).
-    """
-    Kp: float = 0.6746   # как контур крена LateralController
-    Ki: float = 0.2698
-    Kd: float = 0.0
-    integral_limit: float = 0.2   # рад·с → вклад интеграла ≤ 0.06 рад ≈ 3.4° δa
-
-
 class RollHold:
     """
-    САУ по крену продольных сценариев: δa = PI(0 − φ) − Kd·p,  δr = 0.
+    САУ по крену продольных сценариев: φ_ref = 0 → RollController → δa,  δr = 0.
 
     Зачем: реактивный момент винта кренит ЛА, спиральная мода неустойчива —
     без управления элеронами ЛА уходит в спираль за ~25 с (РЕШ-19).
+    Коэффициенты — те же, что у контура крена LateralController (RollControlParams);
+    интеграл по скорости крена парирует момент винта.
     Датчики — ИНС (φ) и гироскоп (p) со своим генератором шума rng, чтобы не
-    сдвигать последовательности шума продольных датчиков сценария.
+    сдвигать последовательности шума продольных датчиков сценария; Va — истинная
+    (масштаб коэффициентов, шум ПВД здесь не важен).
     """
 
     def __init__(self, aircraft, sensor_params, rng,
-                 params: RollHoldParams = None):
-        self.aircraft = aircraft
+                 params: RollControlParams = None):
         self.sp = sensor_params
         self.rng = rng
-        self.params = params or RollHoldParams()
-        pr = self.params
-        self.pid_phi = PID(PIDParams(Kp=pr.Kp, Ki=pr.Ki,
-                                     integral_limit=pr.integral_limit), name="phi_hold")
+        self.roll = RollController(aircraft, params)
 
-    def step(self, phi: float, p: float, dt: float) -> float:
-        """Истинные φ, p → измерения → δa, рад."""
+    def reset(self):
+        self.roll.reset()
+
+    def step(self, phi: float, p: float, Va: float, dt: float) -> float:
+        """Истинные φ, p, Va → измерения → δa, рад."""
         sp, rng = self.sp, self.rng
         phi_meas = phi + rng.normal(0.0, sp.ins_angle_noise)
         p_meas   = p + sp.gyro_bias + rng.normal(0.0, sp.gyro_noise)
-        e_phi = 0.0 - phi_meas
-        da_raw = self.pid_phi.step(e_phi, dt) - self.params.Kd * p_meas
-        delta_a = saturation(da_raw, -self.aircraft.delta_a_max, self.aircraft.delta_a_max)
-        if da_raw != delta_a and e_phi * da_raw > 0:
-            self.pid_phi.unwind(e_phi, dt)
-        return delta_a
+        return self.roll.step(0.0, phi_meas, p_meas, Va, dt)
 
 
 def with_roll_hold(controls_fn, aircraft, sensor_params, dt: float, seed: int = 7):
@@ -616,7 +655,7 @@ def with_roll_hold(controls_fn, aircraft, sensor_params, dt: float, seed: int = 
 
     def fn(t, state, Va, alpha):
         c = np.asarray(controls_fn(t, state, Va, alpha), dtype=float)
-        delta_a = hold.step(state[PHI], state[P], dt)
+        delta_a = hold.step(state[PHI], state[P], Va, dt)
         return np.array([c[0], c[1], delta_a, 0.0])
 
     fn.roll_hold = hold
