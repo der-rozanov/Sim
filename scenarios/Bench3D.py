@@ -4,7 +4,8 @@ Bench3D — испытательный стенд САУ для студенто
 + отдельное окно с блок-схемами САУ, где параметры крутятся ползунками на лету.
 
 Вкладки окна схемы (viz/bench_panel.py):
-  Крен            χ_ref → [ПИ курса] → [огр. φ_ref] → [ПИ крена − Kd·p] → [огр. δa]
+  Крен            χ_ref → [K_χ, atan] → [огр. φ_ref] → [1/τ_φ] → [огр. p_ref]
+                  → [FF + ПИ скорости крена] → [огр. δa]   (схема PX4 / ArduPilot)
   Тангаж / высота h_ref → [ПИ высоты] → θ_ref → [ПИД θ] → [огр. q_ref] → [ПИД q]
                   → [× −(Va₀/Va)²] → [огр. δe]
   Скорость        Va_ref → [ПИД Va] + δt_трим → [огр. 0…1]
@@ -80,15 +81,16 @@ def param_spec(aircraft):
     alt = AltitudeHoldParams()
     lat, pit, spd, nav = (LateralControlParams(), PitchControlParams(), SpeedControlParams(),
                           NavParams())
-    aua = default_aua(aircraft)
+    aua, roll = default_aua(aircraft), lat.roll
     deg = lambda x: round(float(np.degrees(x)))
     return [
-        ("roll", "chi_Kp", "Kp", 0.0, 10.0, 0.05, lat.chi_Kp),
-        ("roll", "chi_Ki", "Ki", 0.0, 5.0, 0.05, lat.chi_Ki),
+        ("roll", "chi_K", "K_χ, 1/с", 0.0, 3.0, 0.05, lat.chi_K),
         ("roll", "phi_ref_max", "±φ_max, °", 5.0, 60.0, 1.0, deg(lat.phi_ref_max)),
-        ("roll", "phi_Kp", "Kp", 0.0, 3.0, 0.01, lat.phi_Kp),
-        ("roll", "phi_Ki", "Ki", 0.0, 4.0, 0.01, lat.phi_Ki),
-        ("roll", "phi_Kd", "Kd", 0.0, 0.5, 0.005, lat.phi_Kd),
+        ("roll", "tau_phi", "τ_φ, с", 0.05, 1.5, 0.01, roll.tau_phi),
+        ("roll", "p_max", "±p_max, °/с", 10.0, 300.0, 5.0, deg(roll.p_max)),
+        ("roll", "p_FF", "FF", 0.0, 0.3, 0.002, roll.FF),
+        ("roll", "p_Kp", "Kp", 0.0, 0.2, 0.001, roll.Kp),
+        ("roll", "p_Ki", "Ki", 0.0, 1.0, 0.005, roll.Ki),
         ("roll", "da_max", "±δa_max, °", 2.0, 25.0, 1.0, deg(aircraft.delta_a_max)),
 
         ("pitch", "KH", "Kp, рад/м", 0.0, 0.3, 0.001, alt.Kp),
@@ -140,10 +142,11 @@ def apply_params(g, v):
     На лету, интегралы не сбрасываются. Ограничения рулей меняются в копиях
     параметров ЛА у регуляторов — модель ЛА не трогается."""
     lat, pit, spd, r = g.lat, g.pitch, g.speed, np.radians
-    lat.pid_chi.Kp, lat.pid_chi.Ki = v["chi_Kp"], v["chi_Ki"]
+    lat.params.chi_K = v["chi_K"]
     lat.params.phi_ref_max = r(v["phi_ref_max"])
-    lat.pid_phi.Kp, lat.pid_phi.Ki = v["phi_Kp"], v["phi_Ki"]
-    lat.params.phi_Kd = v["phi_Kd"]
+    rc = lat.roll
+    rc.params.tau_phi, rc.params.p_max, rc.params.FF = v["tau_phi"], r(v["p_max"]), v["p_FF"]
+    rc.pid_p.Kp, rc.pid_p.Ki = v["p_Kp"], v["p_Ki"]
     lat.aircraft.delta_a_max = r(v["da_max"])
 
     g.alt.pid.Kp, g.alt.pid.Ki = v["KH"], v["h_Ki"]
@@ -223,9 +226,9 @@ class Bench(Game):
         if out.force_throttle is not None:
             thr = out.force_throttle
         Vx, Vy, _ = earth_velocity(s)
-        self.lat.set_course(self.chi_ref)
-        da, dr = self.lat.step({"chi": np.arctan2(Vy, Vx), "phi": s[PHI],
-                                "p": s[P], "beta": beta}, dt)
+        self.lat.set_course(self.chi_ref, self.kappa)
+        da, dr = self.lat.step({"chi": np.arctan2(Vy, Vx), "Vg": np.hypot(Vx, Vy),
+                                "phi": s[PHI], "p": s[P], "Va": Va, "beta": beta}, dt)
         c = np.array([de, thr, da, dr])
         if self.kick and self.t < self.kick[2]:
             c[self.kick[0]] += self.kick[1]
@@ -297,7 +300,9 @@ class Bench(Game):
             "e_chi": deg(e_chi),
             "phi_ref": deg(self.lat.phi_ref), "phi": deg(phi),
             "e_phi": deg(self.lat.phi_ref - phi),
-            "p": deg(s[P]), "kdp": deg(self.lat.params.phi_Kd * s[P]), "da": deg(c[2]),
+            "p_ref": deg(self.lat.roll.p_ref), "p": deg(s[P]),
+            "e_p": deg(self.lat.roll.p_ref - s[P]), "da_ff": deg(self.lat.roll.da_ff),
+            "da": deg(c[2]),
             # тангаж / высота
             "h_ref": h_ref, "h": s[H], "e_h": h_ref - s[H],
             "theta_ref": deg(pit.theta_ref), "theta": deg(s[THETA]),

@@ -43,6 +43,7 @@ sim/                  — ядро физики (изолировано, без 
 control/              — управление (импортирует только sim/)
     controllers.py    — PitchController, SpeedController, AltitudeHold (ПИ h → θ_ref), PID, PIDParams,
                         LateralController (курс→крен→δa, β→δr), wrap_angle,
+                        RollController — крен по схеме PX4: φ → p_ref → FF + ПИ по p → δa (РЕШ-22),
                         RollHold + with_roll_hold() — крен φ=0 в продольных сценариях
                         PitchControlParams.gain_scheduling — масштабирование delta_e ∝ (Va_ref/Va)²
     sensors.py        — measure_gyro/altitude/airspeed/angle_of_attack/gps_*,
@@ -396,8 +397,11 @@ git checkout -- checks/*.png      # check_*.py перегенерируют PNG 
 - Реактивный момент винта кренит ЛА; спиральная мода неустойчива (T2 = 10 с). В продольных
   сценариях (s1–s11, lab6, GameScenario) крен держит `RollHold` (φ_ref = 0) через
   `with_roll_hold(controls_fn, aircraft, sp, dt)` — РЕШ-19. |φ| ≲ 0.5°, δa ≈ 0.4°.
-- Коэффициенты LateralController рассчитаны для Va=30 м/с; при другой скорости
-  или своих АДХ — пересчитать (docs/control.md, 9.2).
+- Крен и курс (РЕШ-22, 2026-10-08) — каскад по схеме PX4/ArduPilot: p_ref = (φ_ref − φ)/τ_φ
+  (≤ p_max), δa = FF·p_ref + ПИ(p_ref − p) с масштабом по Va; курс — П-контур
+  φ_ref = atan(Vg·(Vg·κ + K_χ·e_χ)/g), κ — кривизна от навигатора. Коэффициенты — расчёт
+  tuning.py (docs/control.md 11.4). meas LateralController требует 'Vg' и 'Va';
+  RollHold.step(phi, p, Va, dt).
 - Сценарии s12/s13 выводят только текст + .flightlog; графиков бокового канала
   в viz/ пока нет (по указанию автора графику не трогали).
 - `CY_dr = +0.19` (2-е изд. B&M; в табл. E.2 1-го изд. было −0.17 — РЕШ-15).
@@ -419,8 +423,9 @@ git checkout -- checks/*.png      # check_*.py перегенерируют PNG 
 - НЕ перенастроено: lab6 (варианты Va = 22–30 м/с и ωn_θ = 4.5–6 рад/с рассчитаны под
   Aerosonde; у FPV собственная ωn_θ ≈ 14.5 — решения лабораторной не проходят свои
   проверки) — учебный материал, решение за автором. LQR (s11) считается по модели сам.
-- Скольжение до 11° на входе в разворот (обратное рыскание): возможная доработка —
-  перекрёстная связь элероны → РН.
+- Скольжение до 7° на входе в разворот (обратное рыскание; s12, β по зонду): возможная
+  доработка — перекрёстная связь элероны → РН или r_ref = g·sin φ/V (координация, как
+  turn assist INAV / FW_WR_FF PX4).
 
 ### Открытые дефекты и долги (найдены 2026-10-06, не исправлены — см. дорожную карту)
 - `compute_trim` — линейный по CL/Cm (без sigmoid), только горизонтальный полёт без

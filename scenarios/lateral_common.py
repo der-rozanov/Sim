@@ -103,9 +103,12 @@ class FullSAU:
         throttle = self.speed.step(Va_meas, self.cfg.dt)
 
         # ---- Боковой канал ---------------------------------------------
-        self.lat.set_course(chi_ref)
-        delta_a, delta_r = self.lat.step({'chi': chi_meas, 'phi': phi_meas,
-                                          'p': p_meas, 'beta': beta_meas}, self.cfg.dt)
+        self.lat.set_course(chi_ref, self.nav.kappa if ref is not None else 0.0)
+        # путевая скорость — по истинной земной скорости (шум GPS скорости ~0.1 м/с
+        # на уставку крена не влияет, а лишний вызов rng сдвинул бы шум сценариев)
+        delta_a, delta_r = self.lat.step({'chi': chi_meas, 'Vg': np.hypot(Vx, Vy),
+                                          'phi': phi_meas, 'p': p_meas, 'Va': Va_meas,
+                                          'beta': beta_meas}, self.cfg.dt)
 
         self.chi_ref_buf.append(self.lat.chi_ref)
         self.phi_ref_buf.append(self.lat.phi_ref)

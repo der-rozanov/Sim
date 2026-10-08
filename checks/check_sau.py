@@ -8,7 +8,7 @@
   1. тангаж  θc: +3°          — PitchController (каскад θ → q → δe)
   2. высота  hc: +5 м          — П-контур KH + тангаж + скорость
   3. скорость Vc: 16 → 18 м/с  — SpeedController
-  4. крен    φ: 20° → 0        — RollHold (φ_ref = 0)
+  4. крен    φ: 20° → 0        — RollHold (φ_ref = 0, каскад φ → p_ref → δa)
   5. курс    χc: +20°          — LateralController
   6. большой манёвр: курс +90° и высота +30 м одновременно (с насыщениями)
 Метрики: перерегулирование и время установления (5 %) — модель и теория.
@@ -26,7 +26,7 @@ from sim.state import THETA, Q, H, P, PHI, PSI, earth_velocity
 from runner import run, compute_trim, trim_state
 from control.controllers import (PitchController, PitchControlParams, SpeedController,
                                  SpeedControlParams, LateralController,
-                                 LateralControlParams, RollHold, wrap_angle,
+                                 LateralControlParams, RollControlParams, RollHold, wrap_angle,
                                  AltitudeHold, AltitudeHoldParams)
 from control.tuning import design_sau
 
@@ -91,11 +91,12 @@ def closed_loop(theta_ref=None, h_ref=None, Va_ref=VA, chi_ref=None, state0=None
         de = pitch.step(t, {'theta': s[THETA], 'q': s[Q], 'h': s[H], 'Va': Va}, cfg.dt)[0]
         dt_ = speed.step(Va, cfg.dt)
         if chi_ref is None:
-            da, dr = hold.step(s[PHI], s[P], cfg.dt), 0.0
+            da, dr = hold.step(s[PHI], s[P], Va, cfg.dt), 0.0
         else:
             Vx, Vy, _ = earth_velocity(s)
             lat.set_course(f(chi_ref, t))
-            da, dr = lat.step({'chi': np.arctan2(Vy, Vx), 'phi': s[PHI], 'p': s[P],
+            da, dr = lat.step({'chi': np.arctan2(Vy, Vx), 'Vg': np.hypot(Vx, Vy),
+                               'phi': s[PHI], 'p': s[P], 'Va': Va,
                                'beta': np.arcsin(np.clip(s[6] / Va, -1, 1))}, cfg.dt)
         return np.array([de, dt_, da, dr])
 
@@ -104,7 +105,6 @@ def closed_loop(theta_ref=None, h_ref=None, Va_ref=VA, chi_ref=None, state0=None
 
 
 pitch_KH = PitchControlParams().KH
-g_V = ac.g / VA
 results = []
 
 # 1. Тангаж
@@ -132,16 +132,21 @@ results.append(("Скорость ΔVa, м/с (16 → 18)", log.t, y, lin, 2.0, 
 s_r = s0.copy(); s_r[PHI] = np.radians(20.0)
 log = closed_loop(theta_ref=alpha_t, h_ref=cfg.h0, state0=s_r, t_end=2.0)
 y = np.degrees(log.state[:, PHI])
-lin = 20.0 - tf_step([gn["kp_phi"] * k["a_phi2"], gn["ki_phi"] * k["a_phi2"]],
-                     [1, k["a_phi1"] + gn["kd_phi"] * k["a_phi2"], gn["kp_phi"] * k["a_phi2"],
-                      gn["ki_phi"] * k["a_phi2"]], log.t, 20.0)
+# φ/φc каскада угол → скорость крена (ṗ = −a_φ1·p + a_φ2·δa, без насыщений):
+#   num = a_φ2·((FF + kp)s + ki)/τ,  den = s³ + (a_φ1 + a_φ2·kp)s² + a_φ2(ki + (FF + kp)/τ)s + a_φ2·ki/τ
+a1, a2, tau = k["a_phi1"], k["a_phi2"], gn["tau_phi"]
+FFk = gn["FF_p"] + gn["kp_p"]
+num_phi = [a2 * FFk / tau, a2 * gn["ki_p"] / tau]
+den_phi = [1, a1 + a2 * gn["kp_p"], a2 * (gn["ki_p"] + FFk / tau), a2 * gn["ki_p"] / tau]
+lin = 20.0 - tf_step(num_phi, den_phi, log.t, 20.0)
 results.append(("Крен φ, ° (из 20° к 0)", log.t, y, lin, 0.0, 20.0))
 
 # 5. Курс
 log = closed_loop(h_ref=cfg.h0, chi_ref=np.radians(20.0), t_end=12.0)
 chi = np.degrees([np.arctan2(*earth_velocity(s)[1::-1]) for s in log.state])
-lin = tf_step([gn["kp_chi"] * g_V, gn["ki_chi"] * g_V],
-              [1, gn["kp_chi"] * g_V, gn["ki_chi"] * g_V], log.t, 20.0)
+# χ̇ = (g/V)·φ,  φc = (V/g)·K·e_χ  →  χ/χc = K·Φ/(s + K·Φ),  Φ = φ/φc
+Kn = gn["K_chi"] * np.array(num_phi)
+lin = tf_step(Kn, np.polyadd(np.r_[den_phi, 0.0], Kn), log.t, 20.0)
 results.append(("Курс χ, ° (ступенька +20°)", log.t, chi, lin, 20.0, 0.0))
 
 # 6. Большой манёвр (без теории — с насыщениями)
@@ -153,6 +158,7 @@ bad = []
 for name, obj, ref in (("PitchControlParams", PitchControlParams(), d.pitch),
                        ("SpeedControlParams", SpeedControlParams(), d.speed),
                        ("LateralControlParams", LateralControlParams(), d.lateral),
+                       ("RollControlParams", RollControlParams(), d.roll),
                        ("AltitudeHoldParams", AltitudeHoldParams(), d.altitude)):
     for f, v in asdict(ref).items():
         dv = getattr(obj, f)

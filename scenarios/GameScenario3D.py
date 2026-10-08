@@ -204,6 +204,7 @@ class Game(Entity):
             Vx, Vy, _ = earth_velocity(s)
             self.chi_ref, h_ref = self.nav.step(s[X], s[Y], np.arctan2(Vy, Vx))
             self.h_ref = float(np.clip(h_ref, H_MIN, H_MAX))
+        self.kappa = self.nav.kappa if self.nav_on else 0.0
 
     def _poll_map(self):
         if self.q_map is None:
@@ -311,9 +312,9 @@ class Game(Entity):
         de = self.pitch.step(self.t, {"q": s[Q], "theta": s[THETA], "h": s[H], "Va": Va}, dt)[0]
         thr = self.speed.step(Va, dt)
         Vx, Vy, _ = earth_velocity(s)
-        self.lat.set_course(self.chi_ref)
-        da, dr = self.lat.step({"chi": np.arctan2(Vy, Vx), "phi": s[PHI],
-                                "p": s[P], "beta": beta}, dt)
+        self.lat.set_course(self.chi_ref, self.kappa)
+        da, dr = self.lat.step({"chi": np.arctan2(Vy, Vx), "Vg": np.hypot(Vx, Vy),
+                                "phi": s[PHI], "p": s[P], "Va": Va, "beta": beta}, dt)
         return np.array([de, thr, da, dr])
 
     # --- кадр -------------------------------------------------------------------
