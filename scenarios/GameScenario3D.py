@@ -77,6 +77,9 @@ DA_DEFL   = np.radians(3.0)     # элероны при A/D
 DR_DEFL   = np.radians(3.0)     # руль направления при Q/E
 SURF_RATE = np.radians(20.0)    # скорость перекладки рулей в ручном режиме, рад/с
 TRIM_STEP = np.radians(0.3)
+# Клавиши ручного пилотирования: при потере фокуса 3D-окном Ursina не получает
+# «клавиша отпущена» — held_keys остаются 1 и рули «заклинивает» (полёт 2026-10-08)
+PILOT_KEYS = ("w", "s", "a", "d", "q", "e")
 THR_STEP  = 0.05
 
 THETA_STEP, THETA_LIM = np.radians(1.0), np.radians(20.0)
@@ -318,7 +321,16 @@ class Game(Entity):
         return np.array([de, thr, da, dr])
 
     # --- кадр -------------------------------------------------------------------
+    def _focus_check(self):
+        """3D-окно без фокуса → отпустить клавиши пилотирования (рули к балансировке)."""
+        win = application.base.win
+        self.focus = win is None or win.getProperties().getForeground()
+        if not self.focus:
+            for k in PILOT_KEYS:
+                held_keys[k] = 0
+
     def update(self):
+        self._focus_check()
         self._poll_map()
         dt = self.cfg.dt
         if not (self.paused or self.crashed):
