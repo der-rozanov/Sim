@@ -387,8 +387,18 @@ try:
     all_ok &= check("beta_hold=False -> delta_r = 0", dr == 0.0)
 
     lc = LateralController(ap, LateralControlParams())
+    lc.set_course(np.radians(30))
+    da, dr = lc.step(level, cfg.dt)
+    all_ok &= check("микс: δa > 0 -> δr < 0 (нос вправо, против обратного рыскания)",
+                    da > 0 and dr < 0, f"δa={np.degrees(da):.2f}°  δr={np.degrees(dr):.2f}°")
+    all_ok &= check("уставка крена растёт не быстрее phi_ref_rate",
+                    abs(lc.phi_ref) <= LateralControlParams().phi_ref_rate * cfg.dt + 1e-12,
+                    f"phi_ref={np.degrees(lc.phi_ref):.2f}° за шаг")
+
+    lc = LateralController(ap, LateralControlParams())
     lc.set_course(np.pi / 2)
-    lc.step(level, cfg.dt)
+    for _ in range(100):                       # 1 с — ограничитель скорости успевает
+        lc.step(level, cfg.dt)
     all_ok &= check("уставка крена ограничена ±phi_ref_max",
                     abs(lc.phi_ref) <= LateralControlParams().phi_ref_max + 1e-12,
                     f"phi_ref={np.degrees(lc.phi_ref):.1f}°")
