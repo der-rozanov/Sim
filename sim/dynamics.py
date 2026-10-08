@@ -31,6 +31,9 @@ derivatives(state, controls, t, params, wind_fn) -> dstate
     fy_grav = +m·g·cos θ·sin φ
     fz_grav = +m·g·cos θ·cos φ
 
+Земля (необязательно, ground_fn): силы и моменты колёс шасси и точек
+конструкции — sim/ground.py, docs/physics.md 4.6. Без ground_fn земли нет.
+
 Тяга: только вдоль x_body (тянущий винт, вдоль оси фюзеляжа); реактивный
 момент винта −Q_prop добавляется к моменту крена.
 
@@ -43,6 +46,7 @@ from .config import AircraftParams
 from .state import (U, W, Q, THETA, X, H, V, P, R, PHI, PSI, Y, N_STATES,
                     DE, DT, DA, DR, full_controls, air_data, earth_velocity)
 from .aero import aero_forces_moments, aero_lateral
+from .ground import ground_forces
 
 
 def propeller(throttle: float, Va: float, params: AircraftParams) -> tuple:
@@ -119,7 +123,8 @@ def derivatives(state: np.ndarray,
                 controls: np.ndarray,
                 t: float,
                 params: AircraftParams,
-                wind_fn) -> np.ndarray:
+                wind_fn,
+                ground_fn=None) -> np.ndarray:
     """
     Производная вектора состояния.
 
@@ -130,6 +135,7 @@ def derivatives(state: np.ndarray,
       delta_r  — руль направления, рад (необязателен, по умолчанию 0)
 
     wind_fn(h, t) -> (Vwx, Vwh[, Vwy]) — функция ветра
+    ground_fn(N, E) -> h_g — высота земли (массивы) или None — без земли
 
     Возвращает dstate той же размерности, что и state.
     """
@@ -163,6 +169,12 @@ def derivatives(state: np.ndarray,
     fx = fx_a + fx_t + fx_g
     fy = fy_a + fy_g
     fz = fz_a + fz_g
+
+    # Земля: реакция и трение колёс / конструкции
+    if ground_fn is not None:
+        (fx_n, fy_n, fz_n), (L_n, M_n, N_n) = ground_forces(state, c, params, ground_fn)
+        fx, fy, fz = fx + fx_n, fy + fy_n, fz + fz_n
+        L_roll, M_pitch, N_yaw = L_roll + L_n, M_pitch + M_n, N_yaw + N_n
 
     G1, G2, G3, G4, G5, G6, G7, G8 = _gammas(params)
     m = params.mass

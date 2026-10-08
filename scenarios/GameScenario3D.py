@@ -30,6 +30,11 @@ GameScenario3D — пилотирование ЛА в реальном врем�
 
 Общие: Пробел — пауза, R — сброс, 1–4 — камера, M — масштаб силуэта, Esc — выход.
 
+Земля твёрдая (sim/ground.py, РЕШ-25): поверхность карты — World.surface(), как
+нарисована, с ВПП и покрытиями. ЛА садится на шасси, катится (Q/E — носовое
+колесо), взлетает. Авария: касание конструкцией (винт, крыло, хвост), касание
+колесом быстрее gear_v_crash (поломка шасси), касание воды.
+
 Запуск:
     python scenarios/GameScenario3D.py
     python scenarios/GameScenario3D.py --wind-n -5 --wind-e 3   # ветер, м/с
@@ -52,6 +57,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from sim.config import WindParams, SimConfig, AIRCRAFT_TYPES, aircraft_by_name
 from sim.integrators import step_rk4
+from sim.ground import contacts, near_ground
 from sim.wind import wind as _wind
 from sim.state import (air_data, earth_velocity, total_energy, full_controls, canonical_euler,
                        U, W, Q, THETA, X, H, P, PHI, PSI, Y, N_STATES, N_CONTROLS)
@@ -115,6 +121,7 @@ class Game(Entity):
         self.s0 = trim_state(aircraft, cfg)
         self.s0[PSI] = terrain.start_psi          # старт вдоль ВПП карты
         self.ter = terrain
+        self.ground = lambda N, E: terrain.surface(E, N)    # NED → Ursina: X — восток, Z — север
         self.view = View3D(aircraft.b, aircraft.c, terrain, self.HELP, cam=cam, hud_lines=13,
                            aircraft_name=aircraft.name)
 
@@ -142,6 +149,7 @@ class Game(Entity):
         self.state = self.s0.copy()
         self.t, self.acc = 0.0, 0.0
         self.paused, self.crashed = False, False
+        self.on_ground, self.crash_msg = False, ""
         self.ap, self.h_hold = False, False
         self.de_trim_man = self.de_trim
         self.thr = self.thr_trim
@@ -371,13 +379,39 @@ class Game(Entity):
         if round(self.t / dt) % 10 == 0:
             self.trail.append(ned_to_u(s[X], s[Y], -s[H]))
             del self.trail[:-TRAIL_MAX]
+        # земля — в шаг только у поверхности (вызов поверхности дорогой)
+        gf = self.ground if near_ground(s, self.ac, self.ground) else None
         # После петель/бочек углы Эйлера копятся — приводим к канонич. виду (та же ориентация)
-        self.state = canonical_euler(step_rk4(s, self.controls, dt, self.t, self.ac, self.wind_call))
+        self.state = canonical_euler(step_rk4(s, self.controls, dt, self.t, self.ac,
+                                              self.wind_call, gf))
         self.t += dt
-        p = ned_to_u(self.state[X], self.state[Y], -self.state[H])
-        if self.state[H] < float(self.ter.height(p[0], p[2])):
-            self.crashed = True
-            self._event("столкновение", "red")
+        if gf is not None:
+            self._ground_contact()
+        else:
+            self.on_ground = False
+
+    def _ground_contact(self):
+        """Касание земли: посадка / авария (конструкция, шасси, вода)."""
+        c = contacts(self.state, self.ac, self.ground)
+        on = c["depth"] > 0
+        if not on.any():
+            self.on_ground = False
+            return
+        v_sink = max(0.0, float(-c["vn"][on].min()))         # скорость к земле, м/с
+        wet = self.ter.is_water(c["pos"][on, 1], c["pos"][on, 0]).any()
+        if (on & ~c["wheel"]).any():
+            self._crash("УДАР О ЗЕМЛЮ")
+        elif wet:
+            self._crash("ПРИВОДНЕНИЕ")
+        elif v_sink > self.ac.gear_v_crash:
+            self._crash(f"ПОЛОМКА ШАССИ ({v_sink:.1f} м/с)")
+        elif not self.on_ground:
+            self._event(f"касание {v_sink:.1f} м/с", "green")
+        self.on_ground = True
+
+    def _crash(self, msg):
+        self.crashed, self.crash_msg = True, msg
+        self._event(msg.lower(), "red")
 
     def _hud(self):
         s, c = self.state, self.controls
@@ -396,7 +430,7 @@ class Game(Entity):
                     f"     χ_ref {deg(self.chi_ref) % 360:5.1f}°{nav}")
         else:
             mode = f"РУЧНОЙ  трим δe {deg(self.de_trim_man):5.2f}°\n"
-        state = "ПАУЗА" if self.paused else ""
+        state = "ПАУЗА" if self.paused else ("НА ЗЕМЛЕ" if self.on_ground else "")
         text = (
             f"{mode}\n"
             f"t   {self.t:7.2f} с   {state}\n"
@@ -412,7 +446,7 @@ class Game(Entity):
         )
         al = [self.ac.alpha_warning, self.ac.alpha_crit, self.ac.alpha_stall]
         alert = int(sum(alpha >= x for x in al))
-        msg = "СТОЛКНОВЕНИЕ С ЗЕМЛЁЙ — R для сброса" if self.crashed else ""
+        msg = f"{self.crash_msg} — R для сброса" if self.crashed else ""
         self.view.set_hud(text, alert, msg)
 
     # --- сохранение -------------------------------------------------------------
