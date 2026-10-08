@@ -38,7 +38,10 @@ sim/                  — ядро физики (изолировано, без 
     dynamics.py       — derivatives() [полная 6DOF, чистая функция], thrust()
     aero.py           — aero_forces_moments() (продольный), aero_lateral() (боковой)
     dynamics.py: propeller() — мотор + винт (B&M 2-е изд.), реактивный момент по крену
-    integrators.py    — step_euler(), step_rk4()
+    integrators.py    — step_euler(), step_rk4()  [+ ground_fn=None — твёрдая земля]
+    ground.py         — контакт с землёй (РЕШ-25): колёса шасси + точки конструкции,
+                        пружина-демпфер + трение; contacts(), ground_forces(), near_ground();
+                        поверхность — ground_fn(N, E) -> h (в 3D — World.surface)
     wind.py           — wind(h, t, params) -> (Vwx, Vwh, Vwy)
 
 control/              — управление (импортирует только sim/)
@@ -72,7 +75,9 @@ viz/                  — отображение (принимает Log, не �
                         kainki_osm (те же 4×4 км в стиле default по контурам OSM),
                         kainki_large / kainki_large_osm — то же на 10×10 км (мультяшная
                         раскраска — по снимку через landcover.py + OSM)
-                        + бесконечная равнина вокруг; make_world(имя), World.height(X, Z)
+                        + бесконечная равнина вокруг; make_world(имя), World.height(X, Z);
+                        World.surface(X, Z) — твёрдая земля физики = нарисованная сетка
+                        (World.grid()) + ВПП/перрон/дорога; World.is_water()
     mapdata.py        — загрузка снимка Esri и рельефа SRTM в viz/map_cache/ (не в git)
     osmdata.py        — загрузка/разбор OpenStreetMap (Overpass) для карты kainki_osm
     landcover.py      — классы поверхности по снимку (лес/пашня/луг/вода) для kainki_large_osm
@@ -121,6 +126,8 @@ checks/               — проверки здравого смысла
     check.py              — проверки всех модулей sim/ + раздел 7 (6DOF: вырождение
                             в продольный канал, знаки, Jxz, собственные движения)
                             + раздел 8 (знаки и логика LateralController)
+    check_ground.py       — контакт с землёй: стоянка (осадка vs статика), взлёт, посадка,
+                            руление, уклоны 6° (скатывается) и 2° (стоит)
     check_lateral.py      — боковой канал в открытом контуре: импульс элеронами,
                             дублет РН (голландский шаг), разворот, ступенька бокового ветра
     check_polar.py        — аэродинамическая поляра
@@ -349,6 +356,7 @@ from viz.plotting import plot_dynamics
 ```bash
 python checks/check.py            # все модули + 6DOF + боковая САУ: ALL CHECKS PASSED
 python checks/check_lateral.py    # моды бокового канала vs линейная теория
+python checks/check_ground.py     # шасси и земля: ALL GROUND CHECKS PASSED
 # регрессия: все сценарии без окон (Git Bash)
 export MPLBACKEND=Agg PYTHONIOENCODING=utf-8
 for f in scenarios/s*.py scenarios/lab6/L*.py; do python "$f" >/dev/null 2>&1; echo "$f rc=$?"; done
@@ -430,6 +438,14 @@ git checkout -- checks/*.png      # check_*.py перегенерируют PNG 
 - Координация разворота (РЕШ-23): скорость уставки крена ≤ 90°/с и микс δr += K·δa,
   K = −N_δa/N_δr = −0.654 — рывок носа против разворота −34 → −6°/с, |β| ≤ 2.7° (s12).
   При beta_hold=False РН и микс выключены.
+
+### Земля и шасси (РЕШ-25, 2026-10-08)
+- В 3D-игре и стенде земля твёрдая на всех картах: `World.surface()` повторяет
+  нарисованную сетку; новая карта получает землю, если строит рельеф через `grid()`.
+- Трёхопорное шасси FPV и точки конструкции — `AircraftParams.gear_*`, сняты с 3D-модели
+  (ОЦЕНКА [АВТОР]). Авария — решение игры (`Game._ground_contact`): конструкция,
+  колесо > `gear_v_crash`, вода. Здания/деревья не твёрдые, тормозов нет.
+- В s1–s14 земли нет (`ground_fn=None`), `runner.run()` по-прежнему стоп при h < 0.
 
 ### Открытые дефекты и долги (найдены 2026-10-06, не исправлены — см. дорожную карту)
 - `compute_trim` — линейный по CL/Cm (без sigmoid), только горизонтальный полёт без

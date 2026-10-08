@@ -30,7 +30,12 @@
 в равнину, шва по высоте нет.
 
 Высота поверхности height(X, Z) — та же функция, по которой построена сетка
-(используется для тени следа, отвеса и столкновения в игре).
+(используется для тени следа и отвеса).
+
+Твёрдая земля для физики (шасси, удар) — surface(X, Z): ровно то, что нарисовано —
+узлы сетки карты grid() и квадратов равнины, та же разбивка клеток на треугольники,
++ покрытия поверх рельефа (_cover: ВПП, перрон, дорога, мост, вода). Так у каждой
+карты земля своя и совпадает с картинкой (РЕШ-25). is_water(X, Z) — касание воды.
 
 Вид сверху top_image() / save_top_image() — фон окна карты (viz/map_panel.py):
 та же раскраска, что у сетки, север вверх, охват map_x × map_z; строится
@@ -110,10 +115,60 @@ class World:
     plain_p, fade = 2500.0, 600.0
     plain_tint = 1.0                   # яркость полей равнины
 
+    CELL = 40.0                        # клетка сетки рельефа карты, м
+
     def __init__(self, seed: int = 7):
         self.rng = np.random.default_rng(seed)
         self.period = None             # совместимость с View3D
         self._tiles, self._tile_ij = [], None
+        self._grid, self._plain_grid = None, None
+
+    def grid(self):
+        """Узлы сетки рельефа карты (X, Y, Z), индексы [i по X, j по Z] — по ним
+        строится сетка карты и считается surface()."""
+        if self._grid is None:
+            (x0, x1), (z0, z1) = self.map_x, self.map_z
+            h = self.CELL
+            xs = x0 + h * np.arange(int(round((x1 - x0) / h)) + 1)
+            zs = z0 + h * np.arange(int(round((z1 - z0) / h)) + 1)
+            X, Z = np.meshgrid(xs, zs, indexing="ij")
+            self._grid = (X, self.height(X, Z), Z)
+        return self._grid
+
+    def plain_grid(self):
+        """Узлы квадрата равнины (X, Y, Z) от его угла; клетка ≈ 50 м."""
+        if self._plain_grid is None:
+            P = self.plain_p
+            s = np.linspace(0, P, int(round(P / 50)) + 1)
+            X, Z = np.meshgrid(s, s, indexing="ij")
+            self._plain_grid = (X, self.plain(X, Z), Z)
+        return self._plain_grid
+
+    # --- твёрдая земля (физика) ------------------------------------------------
+    def surface(self, X, Z):
+        """Высота твёрдой поверхности, м: сетка как нарисована + покрытия (_cover)."""
+        X, Z = np.broadcast_arrays(np.asarray(X, float), np.asarray(Z, float))
+        return self._cover(X, Z, self._mesh_height(X, Z))
+
+    def is_water(self, X, Z):
+        """True — в точке вода (касание — авария)."""
+        return np.zeros(np.broadcast(X, Z).shape, bool)
+
+    def _cover(self, X, Z, h):
+        """Покрытия поверх сетки рельефа (ВПП и т. п.); h — высота сетки."""
+        return h
+
+    def _mesh_height(self, X, Z):
+        """Высота нарисованной сетки: карта внутри map_x × map_z, квадраты равнины
+        вне (квадрат стоит в (x0 + i·P, z0 + j·P) — см. follow())."""
+        (x0, x1), (z0, z1) = self.map_x, self.map_z
+        _, Ym, _ = self.grid()
+        Xp, Yp, _ = self.plain_grid()
+        P, cp = self.plain_p, Xp[1, 0]
+        on_map = (X >= x0) & (X <= x1) & (Z >= z0) & (Z <= z1)
+        hm = _tri_interp(Ym, (X - x0) / self.CELL, (Z - z0) / self.CELL)
+        hp = _tri_interp(Yp, ((X - x0) % P) / cp, ((Z - z0) % P) / cp)
+        return np.where(on_map, hm, hp)
 
     def plain(self, X, Z):
         w = 2 * np.pi / self.plain_p
@@ -178,10 +233,8 @@ class World:
 
     def _build_plain_tiles(self):
         rng, P = np.random.default_rng(11), self.plain_p
-        n = int(round(P / 50))                   # клетка 50 м
-        s = np.linspace(0, P, n + 1)
-        X, Z = np.meshgrid(s, s, indexing="ij")
-        Y = self.plain(X, Z)                     # квадраты стоят в кратных P — высота совпадает
+        X, Y, Z = self.plain_grid()              # клетка ≈ 50 м
+        n = X.shape[0] - 1
         nf = n // 5                              # поля 250 м
         crop = rng.integers(0, len(PALETTE["crops"]), (nf, nf))
         crop = np.repeat(np.repeat(crop, 5, 0), 5, 1)
@@ -205,6 +258,7 @@ class DefaultMap(World):
 
     name, title = "default", "учебная карта 10×10 км"
     map_x, map_z, plain_p, fade = MAP_X, MAP_Z, PLAIN, FADE
+    CELL = CELL
 
     @staticmethod
     def runway_mask(X, Z):
@@ -247,15 +301,30 @@ class DefaultMap(World):
                        1 - _smooth(0, 150, self.lake_dist(X, Z))) * w
         return H * (1 - c) + c * BED_Y
 
+    # --- твёрдая земля: покрытия как в _build_water / _road / _airfield -------
+    def _wet(self, X, Z, h):
+        """Вода видна, где сетка ниже WATER_Y под лентой реки или кругом озера."""
+        river = (np.abs(X - river_x(Z)) < 75) & (Z >= LAKE_Z)
+        lake = np.hypot(X - LAKE_X, Z - LAKE_Z) < LAKE_R + 120
+        return (h < WATER_Y) & (river | lake)
+
+    def _cover(self, X, Z, h):
+        h = np.where(self._wet(X, Z, h), WATER_Y, h)
+        L, W = RUNWAY["len"], RUNWAY["w"]
+        h = np.where((np.abs(X) <= W / 2) & (np.abs(Z) <= L / 2), np.maximum(h, 0.3), h)
+        h = np.where((np.abs(X - 90) <= 60) & (np.abs(Z + 250) <= 60), np.maximum(h, 0.25), h)
+        road = _seg_dist(X, Z, ROAD) <= 4
+        bridge = np.abs(X - river_x(Z)) < 75
+        return np.where(road, np.maximum(h, np.where(bridge, 1.5, h + 0.4)), h)
+
+    def is_water(self, X, Z):
+        X, Z = np.broadcast_arrays(np.asarray(X, float), np.asarray(Z, float))
+        return self._wet(X, Z, self._mesh_height(X, Z)) & (self.surface(X, Z) <= WATER_Y)
+
     # --- карта ------------------------------------------------------------
     def _build_map(self):
         root = Entity()
-        nx = int((MAP_X[1] - MAP_X[0]) / CELL)
-        nz = int((MAP_Z[1] - MAP_Z[0]) / CELL)
-        xs = MAP_X[0] + CELL * np.arange(nx + 1)
-        zs = MAP_Z[0] + CELL * np.arange(nz + 1)
-        X, Z = np.meshgrid(xs, zs, indexing="ij")
-        Y = self.height(X, Z)
+        X, Y, Z = self.grid()
         Xc, Zc = X[:-1, :-1] + CELL / 2, Z[:-1, :-1] + CELL / 2
         Yc = 0.25 * (Y[:-1, :-1] + Y[1:, :-1] + Y[1:, 1:] + Y[:-1, 1:])
 
@@ -463,9 +532,7 @@ class KainkiMap(World):
         """
         S, h = self.SIZE, self.CELL
         n = int(S / h)
-        s = -S / 2 + h * np.arange(n + 1)
-        X, Z = np.meshgrid(s, s, indexing="ij")
-        Y = self.height(X, Z)
+        X, Y, Z = self.grid()
         # мягкая отмывка рельефа поверх снимка (на снимке своя светотень)
         gx = np.gradient(Y, h, axis=0); gz = np.gradient(Y, h, axis=1)
         nrm = np.stack([-gx, np.ones_like(Y), -gz], -1)
@@ -487,6 +554,14 @@ class KainkiMap(World):
     def _top_base(self):
         from PIL import Image
         return Image.open(os.path.join(self.cache, "ortho.jpg"))
+
+    def _cover(self, X, Z, h):
+        """Полосы (+0.5 м) и перрон (+0.45 м) — как в _build_airfield."""
+        (ax, az), aw, al = self.APRON
+        dy = np.where(_in_convex(X, Z, _rect((ax, az), aw, al, 107.7)), 0.45, 0.0)
+        for p0, p1, w in self.STRIPS:
+            dy = np.where(_in_convex(X, Z, _strip(p0, p1, w)), 0.5, dy)
+        return h + dy
 
     def _top_overlay(self, draw, to_px, scale):
         (ax, az), aw, al = self.APRON
@@ -558,11 +633,8 @@ class KainkiOsmMap(KainkiMap):
         self.areas, self.lines, self.buildings = load(self.CACHE_NAME, self.LAT0, self.LON0, self.SIZE)
         img, masks = self._render()
         self._top_img = img
-        S, h = self.SIZE, self.CELL
-        n = int(S / h)
-        s = -S / 2 + h * np.arange(n + 1)
-        X, Z = np.meshgrid(s, s, indexing="ij")
-        Y = self.height(X, Z)
+        S = self.SIZE
+        X, Y, Z = self.grid()
         root = Entity()
         g = _grid_mesh(X, Y, Z, np.ones(X[:-1, :-1].shape + (3,)), uv_size=S)
         tex = Texture(img)
@@ -882,6 +954,27 @@ def _grid_mesh(X, Y, Z, col, uv_size=None):
         return _mesh(verts, tris, cols)
     uvs = verts[:, [0, 2]] / uv_size + 0.5
     return _mesh(verts, tris, cols, uvs=uvs)
+
+
+def _tri_interp(Y, gx, gz):
+    """
+    Высота сетки Y[i, j] в точке с дробными индексами (gx, gz) — по треугольникам,
+    как их рисуют _grid_mesh и _terrain: клетка делится диагональю (i, j)–(i+1, j+1).
+    """
+    i = np.clip(np.floor(gx).astype(int), 0, Y.shape[0] - 2)
+    j = np.clip(np.floor(gz).astype(int), 0, Y.shape[1] - 2)
+    fx, fz = np.clip(gx - i, 0, 1), np.clip(gz - j, 0, 1)
+    y00, y10, y11, y01 = Y[i, j], Y[i + 1, j], Y[i + 1, j + 1], Y[i, j + 1]
+    return np.where(fx >= fz, y00 + fx * (y10 - y00) + fz * (y11 - y10),
+                    y00 + fz * (y01 - y00) + fx * (y11 - y01))
+
+
+def _in_convex(X, Z, poly):
+    """Точки (X, Z) внутри выпуклого многоугольника poly (обход в любую сторону)."""
+    poly = np.asarray(poly, float)
+    cr = [(b[0] - a[0]) * (Z - a[1]) - (b[1] - a[1]) * (X - a[0])
+          for a, b in zip(poly, np.roll(poly, -1, 0))]
+    return np.logical_and.reduce([c >= 0 for c in cr]) | np.logical_and.reduce([c <= 0 for c in cr])
 
 
 def _ribbon(L, R):
