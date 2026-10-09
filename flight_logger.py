@@ -59,7 +59,7 @@ import numpy as np
 
 from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
 from runner import Log
-from sim.state import THETA, Q, H, X, U, W, V, P, R, PHI, PSI, Y, DA, DR
+from sim.state import THETA, Q, H, X, U, W, V, P, R, PHI, PSI, Y, DE, DA, DR
 
 # Папка для логов по умолчанию — results/ рядом с flight_logger.py
 _DEFAULT_RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
@@ -216,6 +216,7 @@ class FlightLogger:
             "saved_at":    datetime.datetime.now().isoformat(timespec="seconds"),
             "aircraft": {
                 "name": ac.name,
+                "servo_tau": ac.servo_tau, "servo_rate_deg_s": float(np.degrees(ac.servo_rate)),
                 "mass": ac.mass, "Jx": ac.Jx, "Jy": ac.Jy, "Jz": ac.Jz, "Jxz": ac.Jxz,
                 "S": ac.S, "b": ac.b, "c": ac.c,
                 "rho": ac.rho, "g": ac.g,
@@ -277,8 +278,11 @@ class FlightLogger:
                 "psi":        "угол рыскания, рад",
                 "beta_true":  "истинный УС, рад",
                 "wind_y":     "боковой (восточный) ветер, м/с",
-                "delta_a":    "элероны, рад",
-                "delta_r":    "руль направления, рад",
+                "delta_a":    "элероны (положение), рад",
+                "delta_r":    "руль направления (положение), рад",
+                "delta_e_cmd": "команда руля высоты до привода, рад (если есть)",
+                "delta_a_cmd": "команда элеронов до привода, рад (если есть)",
+                "delta_r_cmd": "команда РН до привода, рад (если есть)",
                 "u":          "продольная скорость (связ.), м/с",
                 "w":          "нормальная скорость (связ.), м/с",
                 "theta":      "угол тангажа, рад",
@@ -288,7 +292,7 @@ class FlightLogger:
                 "gamma":      "угол траектории (по воздуху, theta − alpha; точен без крена), рад",
                 "wind_x":     "горизонтальный ветер, м/с",
                 "wind_h":     "вертикальный ветер, м/с",
-                "delta_e":    "руль высоты, рад",
+                "delta_e":    "руль высоты (положение), рад",
                 "throttle":   "тяга, о.е. [0-1]",
                 "E_kin":      "кинетическая энергия, Дж",
                 "E_pot":      "потенциальная энергия, Дж",
@@ -346,6 +350,11 @@ class FlightLogger:
             h_ref       = hr_arr,
             theta_ref   = thr_arr,
         )
+
+        if getattr(log, "controls_cmd", None) is not None:   # команды до приводов рулей
+            arrays["delta_e_cmd"] = log.controls_cmd[:, DE]
+            arrays["delta_a_cmd"] = log.controls_cmd[:, DA]
+            arrays["delta_r_cmd"] = log.controls_cmd[:, DR]
 
         # ---- Парный прогон ---------------------------------------------
         if paired is not None:

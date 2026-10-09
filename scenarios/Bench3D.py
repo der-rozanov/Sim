@@ -329,7 +329,7 @@ class Bench(Game):
             "e_phi": deg(lat.phi_ref - phi),
             "p_ref": deg(lat.roll.p_ref), "p": deg(s[P]),
             "e_p": deg(lat.roll.p_ref - s[P]), "da_ff": deg(lat.roll.da_ff),
-            "da": deg(c[2]),
+            "da": deg(c[2]), "da_cmd": deg(self.cmd[2]),     # положение руля / команда приводу
             # высота и скорость (TECS)
             "h_ref": h_ref, "h": s[H], "e_h": h_ref - s[H],
             "Va_ref": sau.refs.Va, "Va": Va, "e_V": sau.refs.Va - Va,
@@ -341,9 +341,9 @@ class Bench(Game):
             "theta_ref": deg(pit.theta_ref), "theta": deg(s[THETA]),
             "e_theta": deg(pit.theta_ref - s[THETA]),
             "q_ref": deg(pit.q_ref), "q": deg(s[Q]), "e_q": deg(pit.q_ref - s[Q]),
-            "gs": gs, "de": deg(c[0]),
+            "gs": gs, "de": deg(c[0]), "de_cmd": deg(self.cmd[0]),
             # рыскание
-            "beta": deg(beta), "dr": deg(c[3]), "dr_mix": deg(lat.dr_mix),
+            "beta": deg(beta), "dr": deg(c[3]), "dr_cmd": deg(self.cmd[3]), "dr_mix": deg(lat.dr_mix),
             "da_y": deg(c[2]),
             # защита по α
             "alpha": deg(alpha), "a_warn": deg(self.prot.alpha_warn),

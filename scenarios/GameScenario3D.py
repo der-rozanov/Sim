@@ -58,6 +58,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from sim.config import WindParams, SimConfig, AIRCRAFT_TYPES, aircraft_by_name
 from sim.integrators import step_rk4
+from sim.actuators import actuator_init, actuator_step
 from sim.ground import contacts, near_ground
 from sim.wind import wind as _wind
 from sim.state import (air_data, earth_velocity, total_energy, full_controls, canonical_euler,
@@ -80,7 +81,7 @@ from ursina import Entity, application, held_keys, time as utime
 DE_DEFL   = np.radians(2.0)     # отклонение руля высоты от триммера при нажатой W/S
 DA_DEFL   = np.radians(3.0)     # элероны при A/D
 DR_DEFL   = np.radians(3.0)     # руль направления при Q/E
-SURF_RATE = np.radians(20.0)    # скорость перекладки рулей в ручном режиме, рад/с
+SURF_RATE = np.radians(20.0)    # темп отклонения «ручки» с клавиатуры (команда; привод — sim/actuators.py)
 TRIM_STEP = np.radians(0.3)
 # Клавиши ручного пилотирования: при потере фокуса 3D-окном Ursina не получает
 # «клавиша отпущена» — held_keys остаются 1 и рули «заклинивает» (полёт 2026-10-08)
@@ -126,7 +127,7 @@ class Game(Entity):
 
         self.sau = self._make_sau()
 
-        self.rec = []                  # (t, state, controls, Va, alpha, beta, wind)
+        self.rec = []                  # (t, state, controls, Va, alpha, beta, wind, cmd)
         self.events = []
         self.shot, self._frames = shot, 0
         self.reset()
@@ -162,7 +163,8 @@ class Game(Entity):
         self.de_trim_man = self.de_trim
         self.thr = self.thr_trim
         self.surf = np.array([self.de_trim, 0.0, 0.0])        # δe, δa, δr (ручной)
-        self.controls = np.array([self.de_trim, self.thr_trim, 0.0, 0.0])
+        self.controls = actuator_init([self.de_trim, self.thr_trim, 0.0, 0.0], self.ac)
+        self.cmd = self.controls.copy()                       # команда до приводов рулей
         self.sau.set_mode(Mode.PITCH)
         self.sau.engage(theta=self.alpha_trim, h=self.cfg.h0, Va=self.cfg.Va0, chi=0.0)
         self.trail = []
@@ -354,10 +356,11 @@ class Game(Entity):
         s, dt = self.state, self.cfg.dt
         w_vec = self.wind_call(s[H], self.t)
         Va, alpha, beta = air_data(s, w_vec)
-        self.controls = full_controls(self._sau(s, Va, alpha, beta, dt) if self.ap
-                                      else self._manual(dt))
+        self.cmd = full_controls(self._sau(s, Va, alpha, beta, dt) if self.ap
+                                 else self._manual(dt))
+        self.controls = actuator_step(self.controls, self.cmd, dt, self.ac)  # рули — с приводом
         self.rec.append((self.t, s.copy(), self.controls.copy(), Va, alpha, beta,
-                         np.asarray(w_vec, float)))
+                         np.asarray(w_vec, float), self.cmd.copy()))
         if round(self.t / dt) % 10 == 0:
             self.trail.append(ned_to_u(s[X], s[Y], -s[H]))
             del self.trail[:-TRAIL_MAX]
@@ -436,10 +439,11 @@ class Game(Entity):
     def save(self):
         if len(self.rec) < 200:                       # < 2 с — не сохранять
             return
-        t, st, ct, Va, al, be, wv = (np.array(x) for x in zip(*self.rec))
+        t, st, ct, Va, al, be, wv, cc = (np.array(x) for x in zip(*self.rec))
         E = np.array([total_energy(s, self.ac) for s in st])
         log = Log(t=t, state=st, controls=ct, Va=Va, alpha=al,
-                  E_kin=E[:, 0], E_pot=E[:, 1], E_total=E[:, 2], wind_vec=wv, beta=be)
+                  E_kin=E[:, 0], E_pot=E[:, 1], E_total=E[:, 2], wind_vec=wv, beta=be,
+                  controls_cmd=cc)
         FlightLogger(scenario="Игра 3D", description="ручной полёт / САУ в реальном времени",
                      aircraft=self.ac, wind_params=self.wp, cfg=self.cfg,
                      trim=(self.alpha_trim, self.de_trim, self.thr_trim),
