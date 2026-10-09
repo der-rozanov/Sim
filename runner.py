@@ -10,6 +10,7 @@ from sim.state import (initial_state, air_data, total_energy, full_controls,
                        U, W, Q, THETA, H, N_STATES, N_CONTROLS)
 from sim.wind import wind as _wind
 from sim.integrators import step_rk4
+from sim.actuators import actuator_init, actuator_step
 from sim.dynamics import thrust
 
 
@@ -18,7 +19,7 @@ class Log:
     """Результат одного прогона симулятора."""
     t:        np.ndarray   # (N,)      время, с
     state:    np.ndarray   # (N, 12)   вектор состояния (индексы — sim.state)
-    controls: np.ndarray   # (N, 4)    [delta_e рад, throttle 0-1, delta_a рад, delta_r рад]
+    controls: np.ndarray   # (N, 4)    положения рулей [delta_e рад, throttle 0-1, delta_a рад, delta_r рад]
     Va:       np.ndarray   # (N,)      воздушная скорость, м/с
     alpha:    np.ndarray   # (N,)      УА, рад
     E_kin:    np.ndarray   # (N,)      кинетическая энергия, Дж
@@ -26,6 +27,7 @@ class Log:
     E_total:  np.ndarray   # (N,)      полная механическая энергия, Дж
     wind_vec: np.ndarray   # (N, 3)    [Vwx, Vwh, Vwy] м/с
     beta:     np.ndarray = None  # (N,) УС, рад
+    controls_cmd: np.ndarray = None  # (N, 4) команды САУ до приводов рулей (sim/actuators.py)
 
 
 def run(controls_fn,
@@ -39,6 +41,9 @@ def run(controls_fn,
 
     controls_fn(t, state, Va, alpha) -> np.ndarray([delta_e, throttle(, delta_a, delta_r)])
         Вызывается на каждом шаге. Управление заморожено до следующего шага.
+        Это КОМАНДА: рули отрабатывают её через приводы (sim/actuators.py,
+        AircraftParams.servo_tau / servo_rate); в физику идут положения рулей
+        (log.controls), команды — в log.controls_cmd.
         Продольные сценарии могут отдавать 2 элемента — тогда delta_a = delta_r = 0.
         УС для боковой САУ — log/air_data (в controls_fn передаются Va, alpha
         для совместимости).
@@ -61,22 +66,28 @@ def run(controls_fn,
         E_total  = np.empty(n),
         wind_vec = np.empty((n, 3)),
         beta     = np.empty(n),
+        controls_cmd = np.empty((n, N_CONTROLS)),
     )
 
     state = initial_state(cfg) if state0 is None else state0.copy()
     wind_call = lambda h, t: _wind(h, t, wind_params)
     t = 0.0
+    surf = None                    # положения рулей (привод)
 
     for i in range(n):
         h = state[H]
         w_vec = wind_call(h, t)
         Va, alpha, beta = air_data(state, w_vec)
-        controls = full_controls(controls_fn(t, state, Va, alpha))
+        cmd = full_controls(controls_fn(t, state, Va, alpha))
+        surf = (actuator_init(cmd, aircraft) if surf is None
+                else actuator_step(surf, cmd, cfg.dt, aircraft))
+        controls = surf
         Ek, Ep, Et = total_energy(state, aircraft)
 
         log.t[i]        = t
         log.state[i]    = state.copy()
         log.controls[i] = controls
+        log.controls_cmd[i] = cmd
         log.Va[i]       = Va
         log.alpha[i]    = alpha
         log.E_kin[i]    = Ek
@@ -186,4 +197,5 @@ def _trim_log(log: Log, last_i: int) -> Log:
         E_total  = log.E_total[:last_i],
         wind_vec = log.wind_vec[:last_i],
         beta     = log.beta[:last_i],
+        controls_cmd = log.controls_cmd[:last_i],
     )

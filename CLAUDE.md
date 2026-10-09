@@ -39,6 +39,9 @@ sim/                  — ядро физики (изолировано, без 
     aero.py           — aero_forces_moments() (продольный), aero_lateral() (боковой)
     dynamics.py: propeller() — мотор + винт (B&M 2-е изд.), реактивный момент по крену
     integrators.py    — step_euler(), step_rk4()  [+ ground_fn=None — твёрдая земля]
+    actuators.py      — приводы рулей (РЕШ-28): actuator_step(pos, cmd, dt, params) —
+                        апериодическое звено τ + предел скорости + упоры; Log.controls —
+                        положения рулей, Log.controls_cmd — команды САУ
     ground.py         — контакт с землёй (РЕШ-25): колёса шасси + точки конструкции,
                         пружина-демпфер + трение; contacts(), ground_forces(), near_ground();
                         поверхность — ground_fn(N, E) -> h (в 3D — World.surface)
@@ -148,7 +151,7 @@ docs/                 — техническая документация (ка�
     SENSORS.md        — псевдодатчики
     viewer3d.md       — 3D-тренажёр: запуск, клавиши, СК и ориентация, проверки
     architecture.md   — зависимости, Log, controls_fn, совместимость 6DOF
-    decisions.md      — журнал решений РЕШ-01…27 (почему сделано так)
+    decisions.md      — журнал решений РЕШ-01…28 (почему сделано так)
     scenarios_report.md — результаты сценариев С1–С14
     continuation.md   — ИСТОРИЧЕСКИЙ (состояние на 2026-06)
 results/              — .flightlog файлы (генерируемые, в .gitignore)

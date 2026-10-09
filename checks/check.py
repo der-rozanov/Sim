@@ -408,6 +408,58 @@ except Exception as e:
     check("LateralController", False, str(e)); all_ok = False
 
 # ------------------------------------------------------------------
+section("9. Приводы рулей (sim/actuators.py)")
+try:
+    import dataclasses
+    from sim.config import AircraftParams
+    from sim.state import DE, DT, DA, DR
+    from sim.actuators import actuator_init, actuator_step
+
+    ap = AircraftParams()
+    dt = 0.001
+    tau, rate = ap.servo_tau, ap.servo_rate
+
+    # Малая ступенька (линейная зона): за τ руль проходит 1 − e⁻¹ = 63 %
+    step = np.radians(2.0)
+    pos = actuator_init([0, 0.5, 0, 0], ap)
+    for _ in range(int(round(tau / dt))):
+        pos = actuator_step(pos, [step, 0.5, 0, 0], dt, ap)
+    all_ok &= check("малая ступенька δe 2°: за τ отработано 63 %",
+                    abs(pos[DE] / step - (1 - np.exp(-1))) < 0.01,
+                    f"{100 * pos[DE] / step:.1f} %  (τ = {tau * 1e3:.0f} мс)")
+
+    # Большая ступенька: перекладка с предельной скоростью, пока рассогласование
+    # больше servo_rate·τ (≈ 9°), дальше — экспонента
+    pos = actuator_init([0, 0.5, 0, 0], ap)
+    big = np.radians(20.0)
+    traj = [pos[DA]]
+    for _ in range(200):                       # 0.2 с
+        pos = actuator_step(pos, [0, 0.5, big, 0], dt, ap)
+        traj.append(pos[DA])
+    v = np.diff(traj) / dt
+    all_ok &= check("большая ступенька δa 20°: перекладка с servo_rate, не быстрее",
+                    abs(traj[20] - rate * 0.02) < 1e-9 and v.max() <= rate + 1e-9,
+                    f"δa(0.02 с) = {np.degrees(traj[20]):.1f}° = {np.degrees(rate):.0f}°/с · 0.02 с, "
+                    f"δa(0.2 с) = {np.degrees(traj[-1]):.1f}°")
+
+    # Команда за упором — руль останавливается на упоре
+    for _ in range(2000):
+        pos = actuator_step(pos, [0, 0.5, 0, np.radians(60)], dt, ap)
+    all_ok &= check("команда δr 60° -> руль на упоре delta_r_max",
+                    abs(pos[DR] - ap.delta_r_max) < 1e-9, f"δr = {np.degrees(pos[DR]):.1f}°")
+    all_ok &= check("газ проходит без задержки", pos[DT] == 0.5)
+
+    # τ = 0, rate = inf — мгновенные рули (как до РЕШ-28)
+    ap0 = dataclasses.replace(ap, servo_tau=0.0, servo_rate=np.inf)
+    cmd = np.array([0.1, 0.3, -0.2, 0.05])
+    all_ok &= check("servo_tau = 0, servo_rate = inf -> мгновенная отработка",
+                    np.allclose(actuator_step(np.zeros(4), cmd, 0.01, ap0), cmd))
+
+except Exception as e:
+    import traceback; traceback.print_exc()
+    check("actuators", False, str(e)); all_ok = False
+
+# ------------------------------------------------------------------
 print("\n" + "="*50)
 if all_ok:
     print("  ALL CHECKS PASSED")
