@@ -92,6 +92,8 @@ class TECS:
         self.E_ref = self.E = self.B_ref = self.B = 0.0
         self.hdot_ref = self.Vdot_ref = self.Vdot = 0.0
         self.underspeed = 0.0
+        self.thr_ff = self.thr_fb = 0.0       # δt: упреждение и обратная связь (ПИ по e_E)
+        self.theta_ff = self.theta_fb = 0.0   # θ: упреждение α* + γ_ff и ПИ по e_B
 
     def reset_alt(self):
         """Новая уставка высоты / смена режима: интеграл баланса с нуля."""
@@ -137,6 +139,8 @@ class TECS:
         self.iE += e_E * dt
         raw = (np.interp(refs.Va, pr.Va_tab, pr.thr_tab) + pr.K_E * self.E_ref
                + pr.thr_Kp * e_E + pr.thr_Ki * self.iE)
+        self.thr_ff = np.interp(refs.Va, pr.Va_tab, pr.thr_tab) + pr.K_E * self.E_ref
+        self.thr_fb = raw - self.thr_ff
         throttle = float(np.clip(raw, ac.throttle_min, ac.throttle_max))
         if raw != throttle and e_E * (raw - throttle) > 0:
             self.iE -= e_E * dt                      # газ в упоре — интеграл не копим
@@ -144,12 +148,15 @@ class TECS:
 
         # Тангаж ← баланс энергии
         if not hold_alt:
+            self.theta_ff, self.theta_fb = refs.theta, 0.0
             return refs.theta, throttle
         e_B = self.B_ref - self.B
         self.iB += e_B * dt
         gamma_ff = 0.5 * (self.B_ref + (2.0 - w) * self.E_ref)
         raw = (np.interp(V, pr.Va_tab, pr.alpha_tab) + gamma_ff
                + pr.pit_Kp * e_B + pr.pit_Ki * self.iB)
+        self.theta_ff = np.interp(V, pr.Va_tab, pr.alpha_tab) + gamma_ff
+        self.theta_fb = raw - self.theta_ff
         theta = float(np.clip(raw, pr.theta_min, pr.theta_max))
         if raw != theta and e_B * (raw - theta) > 0:
             self.iB -= e_B * dt
