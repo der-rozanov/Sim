@@ -6,9 +6,11 @@ Bench3D — испытательный стенд САУ для студенто
 Вкладки окна схемы (viz/bench_panel.py):
   Крен            χ_ref → [K_χ, atan] → [огр. φ_ref] → [1/τ_φ] → [огр. p_ref]
                   → [FF + ПИ скорости крена] → [огр. δa]   (схема PX4 / ArduPilot)
-  Тангаж / высота h_ref → [ПИ высоты] → θ_ref → [ПИД θ] → [огр. q_ref] → [ПИД q]
-                  → [× −(Va₀/Va)²] → [огр. δe]
-  Скорость        Va_ref → [ПИД Va] + δt_трим → [огр. 0…1]
+  Высота и скорость (TECS, control/tecs.py)
+                  h_ref, Va_ref → [П высоты, П скорости] → темпы энергии Ė_ref, Ḃ_ref
+                  → газ: [ПИ по Ė] + упреждение → [огр. 0…1] → [защита скорости]
+                  → тангаж: [ПИ по Ḃ] + упреждение → [огр. θ] → θ_ref
+  Тангаж          θ_ref → [ПИД θ] → [огр. q_ref] → [ПИД q] → [× −(Va₀/Va)²] → [огр. δe]
   Рыскание (β)    β = 0 → [ПИ β] → [× −1] → (+ K·δa — микс элеронов) → [огр. δr]
   Защита по α     автомат защиты от выхода на закритические УА (control/aua.py,
                   отключаемый): между контуром высоты и ПИД тангажа; по истинному α
@@ -17,8 +19,8 @@ Bench3D — испытательный стенд САУ для студенто
 
 Окно карты (viz/map_panel.py, третий процесс): вид сверху, ЛА и след, точки
 маршрута ставятся мышью; «Лететь по маршруту» — САУ ведёт по точкам.
-САУ — control/sau.py (как в GameScenario3D и s12–s14) с защитой по α; по умолчанию
-параметры штатные — летает.
+САУ — control/sau.py (как в GameScenario3D и s12–s14): TECS + защита по α;
+по умолчанию параметры штатные — летает.
 
 Окно схемы — отдельный процесс (tkinter); связь — очереди.
 Расчёт САУ и физики — только здесь, в 3D-процессе.
@@ -51,9 +53,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 from sim.config import WindParams, SimConfig, AIRCRAFT_TYPES, aircraft_by_name
 from sim.state import H, P, Q, PHI, THETA, X, Y, air_data, earth_velocity
 from sim.aero import aero_forces_moments
-from control.controllers import AltitudeHoldParams
-from control.controllers import (LateralControlParams, PitchControlParams,
-                                 SpeedControlParams, wrap_angle)
+from control.controllers import LateralControlParams, PitchControlParams, wrap_angle
+from control.tecs import TECSParams
 from control.aua import AngleOfAttackProtector, AUAParams, AUAState
 from control.sau import SAU, SAUParams, TruthSensors, Mode
 from viz.viewer3d import make_app, MAPS
@@ -77,74 +78,90 @@ STALL_THETA = np.radians(15.0)
 
 
 def param_spec(aircraft):
-    """Параметры на схемах: (вкладка, ключ, подпись, мин, макс, шаг, по умолчанию).
-    Углы — в градусах; шаг None — флажок вкл/выкл."""
-    alt = AltitudeHoldParams()
-    lat, pit, spd, nav = (LateralControlParams(), PitchControlParams(), SpeedControlParams(),
-                          NavParams())
+    """
+    Параметры на схемах: (вкладка, ключ, подпись, мин, макс, шаг, по умолчанию).
+    Углы — в градусах; шаг None — флажок вкл/выкл. Подпись — «имя, единица».
+
+    По умолчанию — расчётные значения (control/tuning.py, параметры ЛА); диапазон —
+    примерно до 3× расчётного, шаг — чтобы расчётное значение ставилось с ошибкой ≲ 0.5 %.
+    """
+    lat, pit, tp, nav = LateralControlParams(), PitchControlParams(), TECSParams(), NavParams()
     aua, roll = default_aua(aircraft), lat.roll
-    deg = lambda x: round(float(np.degrees(x)))
+    deg = lambda x, n=0: round(float(np.degrees(x)), n)
     return [
-        ("roll", "chi_K", "K_χ, 1/с", 0.0, 3.0, 0.05, lat.chi_K),
+        ("roll", "chi_K", "K_χ, 1/с", 0.0, 3.0, 0.02, lat.chi_K),
         ("roll", "phi_ref_max", "±φ_max, °", 5.0, 60.0, 1.0, deg(lat.phi_ref_max)),
-        ("roll", "phi_rate", "φ̇, °/с", 10.0, 360.0, 5.0, deg(lat.phi_ref_rate)),
-        ("roll", "tau_phi", "τ_φ, с", 0.05, 1.5, 0.01, roll.tau_phi),
+        ("roll", "phi_rate", "φ̇_max, °/с", 10.0, 270.0, 5.0, deg(lat.phi_ref_rate)),
+        ("roll", "tau_phi", "τ_φ, с", 0.05, 0.75, 0.01, roll.tau_phi),
         ("roll", "p_max", "±p_max, °/с", 10.0, 300.0, 5.0, deg(roll.p_max)),
-        ("roll", "p_FF", "FF", 0.0, 0.3, 0.002, roll.FF),
-        ("roll", "p_Kp", "Kp", 0.0, 0.2, 0.001, roll.Kp),
-        ("roll", "p_Ki", "Ki", 0.0, 1.0, 0.005, roll.Ki),
-        ("roll", "da_max", "±δa_max, °", 2.0, 25.0, 1.0, deg(aircraft.delta_a_max)),
+        ("roll", "p_FF", "FF", 0.0, 0.3, 0.0005, roll.FF),
+        ("roll", "p_Kp", "Kp", 0.0, 0.1, 0.0002, roll.Kp),
+        ("roll", "p_Ki", "Ki", 0.0, 0.4, 0.001, roll.Ki),
+        ("roll", "da_max", "±δa_max, °", 2.0, 30.0, 1.0, deg(aircraft.delta_a_max)),
 
-        ("pitch", "KH", "Kp, рад/м", 0.0, 0.3, 0.001, alt.Kp),
-        ("pitch", "h_Ki", "Ki, рад/(м·с)", 0.0, 0.1, 0.0005, alt.Ki),
+        ("tecs", "K_h", "K_h, 1/с", 0.05, 1.5, 0.05, tp.K_h),
+        ("tecs", "K_V", "K_V, 1/с", 0.05, 1.5, 0.05, tp.K_V),
+        ("tecs", "g_climb", "γ_набор, °", 1.0, 15.0, 0.1, deg(max(tp.gamma_climb_tab), 1)),
+        ("tecs", "g_sink", "γ_сниж, °", 1.0, 15.0, 0.1, deg(max(tp.gamma_sink_tab), 1)),
+        ("tecs", "w", "w (вес h)", 0.0, 2.0, 0.05, tp.w),
+        ("tecs", "thr_Kp", "Kp", 0.0, 0.5, 0.01, tp.thr_Kp),
+        ("tecs", "thr_Ki", "Ki", 0.0, 5.0, 0.01, tp.thr_Ki),
+        ("tecs", "pit_Kp", "Kp", 0.0, 0.5, 0.01, tp.pit_Kp),
+        ("tecs", "pit_Ki", "Ki", 0.0, 3.0, 0.01, tp.pit_Ki),
+        ("tecs", "theta_lim", "±θ_max, °", 5.0, 30.0, 1.0, deg(tp.theta_max)),
+        ("tecs", "Va_min", "Va_min, м/с", 5.0, 14.0, 0.1, round(tp.Va_min, 1)),
+        ("tecs", "tau_f", "τ_f, с", 0.02, 0.5, 0.01, tp.tau_f),
+
         ("pitch", "theta_Kp", "Kp", 0.0, 40.0, 0.1, pit.theta_Kp),
-        ("pitch", "theta_Ki", "Ki", 0.0, 1.0, 0.01, pit.theta_Ki),
-        ("pitch", "theta_Kd", "Kd", 0.0, 1.0, 0.01, pit.theta_Kd),
-        ("pitch", "q_max", "±q_max, °/с", 5.0, 90.0, 1.0, deg(pit.q_max)),
-        ("pitch", "q_Kp", "Kp", 0.0, 0.2, 0.001, pit.q_Kp),
-        ("pitch", "q_Ki", "Ki", 0.0, 0.2, 0.001, pit.q_Ki),
-        ("pitch", "q_Kd", "Kd", 0.0, 0.05, 0.0005, pit.q_Kd),
+        ("pitch", "theta_Ki", "Ki", 0.0, 2.0, 0.02, pit.theta_Ki),
+        ("pitch", "theta_Kd", "Kd", 0.0, 0.5, 0.005, pit.theta_Kd),
+        ("pitch", "q_max", "±q_max, °/с", 30.0, 900.0, 6.0, deg(pit.q_max)),
+        ("pitch", "q_Kp", "Kp", 0.0, 0.12, 0.0002, pit.q_Kp),
+        ("pitch", "q_Ki", "Ki", 0.0, 0.1, 0.001, pit.q_Ki),
+        ("pitch", "q_Kd", "Kd", 0.0, 0.01, 0.0001, pit.q_Kd),
         ("pitch", "gs", "GS", None, None, None, pit.gain_scheduling),
-        ("pitch", "de_max", "±δe_max, °", 2.0, 25.0, 1.0, deg(aircraft.delta_e_max)),
-
-        ("speed", "Va_Kp", "Kp", 0.0, 1.0, 0.01, spd.Va_Kp),
-        ("speed", "Va_Ki", "Ki", 0.0, 0.3, 0.005, spd.Va_Ki),
-        ("speed", "Va_Kd", "Kd", 0.0, 0.1, 0.005, spd.Va_Kd),
+        ("pitch", "de_max", "±δe_max, °", 2.0, 30.0, 1.0, deg(aircraft.delta_e_max)),
 
         ("yaw", "beta_hold", "контур β вкл", None, None, None, lat.beta_hold),
-        ("yaw", "beta_Kp", "Kp", 0.0, 3.0, 0.05, lat.beta_Kp),
-        ("yaw", "beta_Ki", "Ki", 0.0, 3.0, 0.05, lat.beta_Ki),
-        ("yaw", "dr_mix", "K δa→δr", -1.5, 0.5, 0.01, round(lat.da_dr_mix, 2)),
-        ("yaw", "dr_max", "±δr_max, °", 2.0, 25.0, 1.0, deg(aircraft.delta_r_max)),
+        ("yaw", "beta_Kp", "Kp", 0.0, 2.0, 0.02, lat.beta_Kp),
+        ("yaw", "beta_Ki", "Ki", 0.0, 2.0, 0.01, lat.beta_Ki),
+        ("yaw", "dr_mix", "K δa→δr", -1.5, 0.5, 0.005, round(lat.da_dr_mix, 3)),
+        ("yaw", "dr_max", "±δr_max, °", 2.0, 30.0, 1.0, deg(aircraft.delta_r_max)),
 
         ("prot", "prot_on", "защита вкл", None, None, None, aua.enabled),
-        ("prot", "a_warn", "α_пред, °", 5.0, 30.0, 0.5, deg(aua.alpha_warn)),
-        ("prot", "a_crit", "α_крит, °", 5.0, 30.0, 0.5, deg(aua.alpha_crit)),
-        ("prot", "a_exit", "α_выход, °", 0.0, 25.0, 0.5, deg(aua.alpha_exit)),
-        ("prot", "th_warn", "Δθ_пред, °", -10.0, 0.0, 0.5, deg(aua.theta_warn_delta)),
-        ("prot", "th_rec", "θ_восст, °", -30.0, 5.0, 1.0, deg(aua.theta_recovery)),
+        ("prot", "a_warn", "α_пред, °", 3.0, 20.0, 0.1, deg(aua.alpha_warn, 1)),
+        ("prot", "a_crit", "α_крит, °", 3.0, 20.0, 0.1, deg(aua.alpha_crit, 1)),
+        ("prot", "a_exit", "α_выход, °", 0.0, 15.0, 0.1, deg(aua.alpha_exit, 1)),
+        ("prot", "th_warn", "Δθ_пред, °", -10.0, 0.0, 0.5, deg(aua.theta_warn_delta, 1)),
+        ("prot", "th_rec", "θ_восст, °", -20.0, 5.0, 0.5, deg(aua.theta_recovery, 1)),
         ("prot", "thr_rec", "δt_восст", 0.0, 1.0, 0.05, aua.throttle_recovery),
 
-        ("nav", "R_fillet", "R скругления, м", 0.0, 600.0, 10.0, nav.R_fillet),
-        ("nav", "R_orbit", "R кружения, м", 100.0, 800.0, 10.0, nav.R_orbit),
+        ("nav", "R_fillet", "R скругления, м", 0.0, 400.0, 5.0, nav.R_fillet),
+        ("nav", "R_orbit", "R кружения, м", 50.0, 400.0, 5.0, nav.R_orbit),
         ("nav", "orbit_cw", "кружение по часовой", None, None, None, nav.orbit_cw),
         ("nav", "chi_inf", "χ∞, °", 0.0, 90.0, 1.0, deg(nav.chi_inf)),
-        ("nav", "k_path", "k_path, 1/м", 0.0, 0.1, 0.001, nav.k_path),
-        ("nav", "k_orbit", "k_orbit", 0.0, 10.0, 0.1, nav.k_orbit),
+        ("nav", "k_path", "k_path, 1/м", 0.0, 0.04, 0.0005, nav.k_path),
+        ("nav", "k_orbit", "k_orbit", 0.0, 6.0, 0.1, nav.k_orbit),
     ]
 
 
 def default_aua(aircraft):
-    """Штатные параметры автомата защиты: пороги — из параметров ЛА."""
-    return AUAParams(enabled=True, alpha_warn=aircraft.alpha_warning,
-                     alpha_crit=aircraft.alpha_crit)
+    """
+    Штатные параметры автомата защиты: пороги — из параметров ЛА. Выход из
+    восстановления — ниже порога предупреждения на ширину зоны предупреждения
+    (α_выход = α_пред − (α_крит − α_пред); у Aerosonde-умолчаний AUAParams то же
+    соотношение 15/20/10°) — иначе автомат возвращается в НОРМ внутри зоны ПРЕД.
+    """
+    warn, crit = aircraft.alpha_warning, aircraft.alpha_crit
+    return AUAParams(enabled=True, alpha_warn=warn, alpha_crit=crit,
+                     alpha_exit=warn - (crit - warn))
 
 
 def apply_params(g, v):
-    """Параметры из окна схемы → регуляторы САУ стенда g.sau (lat, pitch, lon.speed, lon.alt).
+    """Параметры из окна схемы → регуляторы САУ стенда g.sau (lat, pitch, lon — TECS).
     На лету, интегралы не сбрасываются. Ограничения рулей меняются в копиях
     параметров ЛА у регуляторов — модель ЛА не трогается."""
-    lat, pit, spd, r = g.sau.lat, g.sau.pitch, g.sau.lon.speed, np.radians
+    lat, pit, tp, r = g.sau.lat, g.sau.pitch, g.sau.lon.params, np.radians
     lat.params.chi_K = v["chi_K"]
     lat.params.phi_ref_max = r(v["phi_ref_max"])
     lat.params.phi_ref_rate = r(v["phi_rate"])
@@ -153,14 +170,19 @@ def apply_params(g, v):
     rc.pid_p.Kp, rc.pid_p.Ki = v["p_Kp"], v["p_Ki"]
     lat.aircraft.delta_a_max = r(v["da_max"])
 
-    g.sau.lon.alt.pid.Kp, g.sau.lon.alt.pid.Ki = v["KH"], v["h_Ki"]
+    tp.K_h, tp.K_V, tp.w = v["K_h"], v["K_V"], v["w"]
+    # пределы угла траектории: расчётная таблица по скорости, срезанная ползунком
+    up, dn = g.tecs_gamma_tabs
+    tp.gamma_climb_tab = tuple(min(x, r(v["g_climb"])) for x in up)
+    tp.gamma_sink_tab = tuple(min(x, r(v["g_sink"])) for x in dn)
+    tp.thr_Kp, tp.thr_Ki, tp.pit_Kp, tp.pit_Ki = v["thr_Kp"], v["thr_Ki"], v["pit_Kp"], v["pit_Ki"]
+    tp.theta_max, tp.theta_min = r(v["theta_lim"]), -r(v["theta_lim"])
+    tp.Va_min, tp.tau_f = v["Va_min"], v["tau_f"]
     pit.pid_theta.Kp, pit.pid_theta.Ki, pit.pid_theta.Kd = v["theta_Kp"], v["theta_Ki"], v["theta_Kd"]
     pit.q_max, pit.q_min = r(v["q_max"]), -r(v["q_max"])
     pit.pid_q.Kp, pit.pid_q.Ki, pit.pid_q.Kd = v["q_Kp"], v["q_Ki"], v["q_Kd"]
     pit.gain_scheduling = bool(v["gs"])
     pit.aircraft.delta_e_max, pit.aircraft.delta_e_min = r(v["de_max"]), -r(v["de_max"])
-
-    spd.pid_Va.Kp, spd.pid_Va.Ki, spd.pid_Va.Kd = v["Va_Kp"], v["Va_Ki"], v["Va_Kd"]
 
     lat.params.beta_hold = bool(v["beta_hold"])
     lat.pid_beta.Kp, lat.pid_beta.Ki = v["beta_Kp"], v["beta_Ki"]
@@ -206,11 +228,12 @@ class Bench(Game):
         # Ограничения рулей на стенде меняет только САУ, не модель ЛА
         self.sau.lat.aircraft = dataclasses.replace(aircraft)
         self.sau.pitch.aircraft = dataclasses.replace(aircraft)
+        p = self.sau.lon.params                      # расчётные таблицы — для ползунков γ
+        self.tecs_gamma_tabs = (p.gamma_climb_tab, p.gamma_sink_tab)
 
     def _make_sau(self):
-        # Блок-схемы окна стенда — раздельные контуры высоты и скорости (lon = "split");
-        # вкладка TECS — отдельной доработкой
-        params = SAUParams(lon="split", pitch=PitchControlParams(Va_ref=self.cfg.Va0),
+        params = SAUParams(lon="tecs",
+                           pitch=PitchControlParams(Va_ref=self.cfg.Va0),
                            h_min=H_MIN, h_max=H_MAX)
         return BenchSAU(self.ac, (self.alpha_trim, self.de_trim, self.thr_trim),
                         TruthSensors(), params, nav=self.nav, prot=self.prot)
@@ -245,7 +268,7 @@ class Bench(Game):
         self.sau.stall = False
         self.sau.refs.h = float(np.clip(s[H], H_MIN, H_MAX))
         self.sau.set_mode(Mode.ALTITUDE)
-        self.sau.lon.speed.reset()
+        self.sau.lon.reset()
 
     def _poll_panel(self):
         while True:
@@ -292,8 +315,9 @@ class Bench(Game):
         sau = self.sau
         e_chi = wrap_angle(sau.refs.chi - chi)
         phi = np.radians(_wrap180(deg(s[PHI])))
-        pit, spd, lat = sau.pitch, sau.lon.speed, sau.lat
+        pit, lon, lat = sau.pitch, sau.lon, sau.lat
         h_ref = sau.refs.h if self.h_hold else s[H]
+        Vs = max(Va, 1.0)                    # темпы энергии на стенде — ×Va, в м/с набора
         gs = (float(np.clip((pit.Va_ref / max(Va, 1.0)) ** 2, pit.gs_scale_min, pit.gs_scale_max))
               if pit.gain_scheduling else 1.0)
         msg = {
@@ -306,15 +330,18 @@ class Bench(Game):
             "p_ref": deg(lat.roll.p_ref), "p": deg(s[P]),
             "e_p": deg(lat.roll.p_ref - s[P]), "da_ff": deg(lat.roll.da_ff),
             "da": deg(c[2]),
-            # тангаж / высота
+            # высота и скорость (TECS)
             "h_ref": h_ref, "h": s[H], "e_h": h_ref - s[H],
+            "Va_ref": sau.refs.Va, "Va": Va, "e_V": sau.refs.Va - Va,
+            "hdot_ref": lon.hdot_ref, "Vdot_ref": lon.Vdot_ref,
+            "E_ref": lon.E_ref * Vs, "E": lon.E * Vs, "B_ref": lon.B_ref * Vs, "B": lon.B * Vs,
+            "thr_ff": lon.thr_ff, "thr_fb": lon.thr_fb, "thr": c[1],
+            "theta_ff": deg(lon.theta_ff), "theta_fb": deg(lon.theta_fb), "us": lon.underspeed,
+            # тангаж
             "theta_ref": deg(pit.theta_ref), "theta": deg(s[THETA]),
             "e_theta": deg(pit.theta_ref - s[THETA]),
             "q_ref": deg(pit.q_ref), "q": deg(s[Q]), "e_q": deg(pit.q_ref - s[Q]),
             "gs": gs, "de": deg(c[0]),
-            # скорость
-            "Va_ref": spd.Va_ref, "Va": Va, "e_Va": spd.Va_ref - Va,
-            "thr_trim": spd.trim_throttle, "dthr": c[1] - spd.trim_throttle, "thr": c[1],
             # рыскание
             "beta": deg(beta), "dr": deg(c[3]), "dr_mix": deg(lat.dr_mix),
             "da_y": deg(c[2]),

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Окно испытательного стенда САУ: вкладки по контурам (крен, тангаж/высота,
-скорость, рыскание, защита по α, навигация). На каждой вкладке — блок-схема контура с ползунками
+Окно испытательного стенда САУ: вкладки по контурам (крен, высота и скорость —
+TECS, тангаж, рыскание, защита по α, навигация). На каждой вкладке — блок-схема контура с ползунками
 параметров, живыми значениями сигналов, кнопками воздействий и осциллограф.
 Работает в ОТДЕЛЬНОМ процессе (tkinter, стандартная библиотека) рядом с
 3D-окном scenarios/Bench3D.py.
@@ -19,9 +19,11 @@
 перевод в радианы делает Bench3D.apply_params().
 """
 
+import math
 import queue
 import multiprocessing as mp
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import ttk
 from collections import deque
 
@@ -36,6 +38,7 @@ FONT_V = ("Consolas", 9)
 C_LINE, C_BOX, C_SAT = "#333", "#eef3fb", "#fff4e0"
 C_REF, C_MEAS, C_CTRL = "#d62728", "#1f77b4", "#2ca02c"
 
+# Ползунок — строка «имя = значение ед.» и под ней узкая полоса (≈ 30 пикс; в две строки ≈ 45)
 # Ползунки/флажки на схемах: ключ → (x, y) верхнего центра, длина в пикс, цвет блока
 SLIDER_POS = {
     # крен
@@ -46,21 +49,26 @@ SLIDER_POS = {
     "p_Kp": (720, 78, 100, C_BOX), "p_Ki": (720, 140, 100, C_BOX),
     "p_FF": (720, 230, 100, C_BOX),
     "da_max": (875, 122, 60, C_SAT),
-    # тангаж / высота
-    "KH": (155, 92, 85, C_BOX), "h_Ki": (155, 140, 85, C_BOX),
+    # высота и скорость (TECS)
+    "K_h": (150, 80, 90, C_BOX), "K_V": (150, 208, 90, C_BOX),
+    "g_climb": (318, 138, 110, C_BOX), "g_sink": (318, 184, 110, C_BOX), "w": (318, 230, 110, C_BOX),
+    "thr_Kp": (500, 76, 100, C_BOX), "thr_Ki": (500, 121, 100, C_BOX),
+    "pit_Kp": (500, 196, 100, C_BOX), "pit_Ki": (500, 241, 100, C_BOX),
+    "theta_lim": (680, 230, 66, C_SAT),
+    "Va_min": (830, 110, 110, C_BOX),
+    "tau_f": (850, 300, 120, C_BOX),
+    # тангаж
     "theta_Kp": (350, 55, 100, C_BOX), "theta_Ki": (350, 112, 100, C_BOX),
     "theta_Kd": (350, 169, 100, C_BOX),
     "q_max": (477, 127, 70, C_SAT),
     "q_Kp": (660, 55, 100, C_BOX), "q_Ki": (660, 112, 100, C_BOX), "q_Kd": (660, 169, 100, C_BOX),
     "gs": (787, 128, 0, C_BOX),
     "de_max": (897, 127, 70, C_SAT),
-    # скорость
-    "Va_Kp": (195, 70, 110, C_BOX), "Va_Ki": (195, 127, 110, C_BOX), "Va_Kd": (195, 184, 110, C_BOX),
     # рыскание
     "beta_hold": (215, 80, 0, C_BOX),
     "beta_Kp": (215, 108, 110, C_BOX), "beta_Ki": (215, 165, 110, C_BOX),
     "dr_mix": (340, 240, 90, C_BOX),
-    "dr_max": (480, 140, 80, C_SAT),
+    "dr_max": (480, 152, 80, C_SAT),
     # защита по α
     "prot_on": (1010, 60, 0, C_BOX),
     "a_warn": (967, 88, 70, C_BOX), "a_crit": (967, 152, 70, C_BOX), "a_exit": (967, 216, 70, C_BOX),
@@ -79,12 +87,15 @@ SCOPES = {
               ("sym", 30)),
              ("элероны δa, °", [("da_ff", "#999", "FF·p_ref", 1), ("da", C_CTRL, "δa", 0)],
               ("sym", 10))],
-    "pitch": [("высота h, м", [("h_ref", C_REF, "h_ref", 1), ("h", C_MEAS, "h", 0)], ("auto", 20)),
-              ("тангаж θ, °", [("theta_ref", C_REF, "θ_ref", 1), ("theta", C_MEAS, "θ", 0)], ("sym", 10)),
+    "tecs": [("высота h, м", [("h_ref", C_REF, "h_ref", 1), ("h", C_MEAS, "h", 0)], ("auto", 20)),
+             ("скорость Va, м/с", [("Va_ref", C_REF, "Va_ref", 1), ("Va", C_MEAS, "Va", 0)], ("auto", 4)),
+             ("темпы энергии ×Va, м/с", [("E_ref", C_REF, "Ė_ref", 1), ("E", C_MEAS, "Ė", 0),
+                                          ("B_ref", "#e69500", "Ḃ_ref", 1), ("B", "#9467bd", "Ḃ", 0)],
+              ("sym", 1)),
+             ("тяга δt", [("thr_ff", "#999", "упрежд.", 1), ("thr", C_CTRL, "δt", 0)], ("fix", 0.0, 1.0))],
+    "pitch": [("тангаж θ, °", [("theta_ref", C_REF, "θ_ref", 1), ("theta", C_MEAS, "θ", 0)], ("sym", 10)),
               ("угл. скорость q, °/с", [("q_ref", C_REF, "q_ref", 1), ("q", C_MEAS, "q", 0)], ("sym", 10)),
-              ("руль высоты δe, °", [("de", C_CTRL, "δe", 0)], ("auto", 6))],
-    "speed": [("скорость Va, м/с", [("Va_ref", C_REF, "Va_ref", 1), ("Va", C_MEAS, "Va", 0)], ("auto", 6)),
-              ("тяга δt", [("thr", C_CTRL, "δt", 0)], ("fix", 0.0, 1.0)),
+              ("руль высоты δe, °", [("de", C_CTRL, "δe", 0)], ("auto", 6)),
               ("высота h, м", [("h_ref", C_REF, "h_ref", 1), ("h", C_MEAS, "h", 0)], ("auto", 20))],
     "yaw": [("скольжение β, °", [("beta", C_MEAS, "β", 0)], ("sym", 2)),
             ("руль направления δr, °", [("dr_mix", "#999", "K·δa", 1), ("dr", C_CTRL, "δr", 0)],
@@ -93,7 +104,7 @@ SCOPES = {
     "prot": [("угол атаки α, °", [("a_warn", "#e69500", "α_пред", 1), ("a_crit", "#b00000", "α_крит", 1),
                                   ("alpha", C_MEAS, "α", 0)], ("auto", 10)),
              ("скорость Va, м/с", [("Va_ref", C_REF, "Va_ref", 1), ("Va", C_MEAS, "Va", 0)], ("auto", 6)),
-             ("тангаж θ, °", [("theta_cmd", "#999", "θ_ref (h)", 1), ("theta_ref", C_REF, "θ_ref*", 1),
+             ("тангаж θ, °", [("theta_cmd", "#999", "θ_ref (TECS)", 1), ("theta_ref", C_REF, "θ_ref*", 1),
                               ("theta", C_MEAS, "θ", 0)], ("sym", 10)),
              ("тяга δt", [("thr", C_CTRL, "δt", 0)], ("fix", 0.0, 1.0))],
     "nav": [("отклонение от линии / окружности e_py, м", [("e_py", C_MEAS, "e_py", 0)], ("sym", 20)),
@@ -102,8 +113,8 @@ SCOPES = {
             ("крен φ, °", [("phi_ref", C_REF, "φ_ref", 1), ("phi", C_MEAS, "φ", 0)], ("sym", 35))],
 }
 
-TABS = [("roll", "Крен"), ("pitch", "Тангаж / высота"), ("speed", "Скорость"), ("yaw", "Рыскание (β)"),
-        ("prot", "Защита по α"), ("nav", "Навигация")]
+TABS = [("roll", "Крен"), ("tecs", "Высота и скорость (TECS)"), ("pitch", "Тангаж"),
+        ("yaw", "Рыскание (β)"), ("prot", "Защита по α"), ("nav", "Навигация")]
 
 
 class Panel:
@@ -120,8 +131,8 @@ class Panel:
         root.title("Стенд САУ")
         self.nb = ttk.Notebook(root)
         self.nb.pack(fill="both", expand=True)
-        draw = {"roll": self._draw_roll, "pitch": self._draw_pitch,
-                "speed": self._draw_speed, "yaw": self._draw_yaw, "prot": self._draw_prot,
+        draw = {"roll": self._draw_roll, "tecs": self._draw_tecs, "pitch": self._draw_pitch,
+                "yaw": self._draw_yaw, "prot": self._draw_prot,
                 "nav": self._draw_nav}
         for name, title in TABS:
             f = tk.Frame(self.nb, bg="white")
@@ -255,16 +266,12 @@ class Panel:
 
     def _draw_pitch(self, cv):
         Y, A, S, V = 135, self._arrow, self._sum, self._val
-        self._title(cv, "Продольная САУ: высота h → тангаж θ → угл. скорость q → руль высоты δe")
-        cv.create_text(28, 115, text="h_ref", font=FONT_B, fill=C_REF)
-        V(cv, 28, 155, lambda m: f"{m['h_ref']:.0f} м", C_REF)
-        A(cv, 45, Y, 59, Y)
-        S(cv, 70, Y)
-        V(cv, 70, Y - 30, lambda m: f"{m['e_h']:+.1f}")
-        A(cv, 81, Y, 105, Y)
-        self._box(cv, 105, 65, 205, 215, "ПИ высоты")
-        cv.create_text(155, 230, text="+ α_трим, огр. ±15°", font=FONT_S, justify="center")
-        A(cv, 205, Y, 245, Y)
+        self._title(cv, "Тангаж: θ_ref (от TECS) → угл. скорость q → руль высоты δe")
+        self._box(cv, 20, 75, 190, 195, "TECS")
+        cv.create_text(105, 115, text="высота и скорость\n(вкладка «TECS»)\n+ защита по α",
+                       font=FONT_S, justify="center")
+        V(cv, 105, 172, lambda m: f"θ_TECS {m['theta_cmd']:+.1f}°", "#777")
+        A(cv, 190, Y, 245, Y)
         V(cv, 225, Y - 15, lambda m: f"{m['theta_ref']:+.1f}", C_REF)
         S(cv, 256, Y)
         V(cv, 256, Y - 30, lambda m: f"{m['e_theta']:+.1f}")
@@ -296,45 +303,105 @@ class Panel:
         A(cv, 1040, Y, 1071, Y, 1071, 292, 256, 292, 256, 146)           # θ (ИНС)
         cv.create_text(1043, 127, text="θ", font=FONT_B, fill=C_MEAS, anchor="w")
         V(cv, 650, 280, lambda m: f"θ = {m['theta']:+.1f}°", C_MEAS)
-        A(cv, 1040, 105, 1090, 105, 1090, 322, 70, 322, 70, 146)         # h (баровысотомер)
-        cv.create_text(1043, 97, text="h", font=FONT_B, fill=C_MEAS, anchor="w")
-        V(cv, 450, 310, lambda m: f"h = {m['h']:.1f} м", C_MEAS)
-        self._footer(cv, "θ_ref = α_трим + Kp·e_h + Ki·∫e_h;   q_ref = ПИД(θ_ref − θ);   "
+        self._footer(cv, "θ_ref — от TECS (после защиты по α);   q_ref = ПИД(θ_ref − θ);   "
                          "δe = δe_трим − k·ПИД(q_ref − q),  k = (Va₀/Va)² при GS (Va₀ = 16 м/с), иначе k = 1.")
 
-    def _draw_speed(self, cv):
-        Y, A, S, V = 150, self._arrow, self._sum, self._val
-        self._title(cv, "САУ скорости: воздушная скорость Va → тяга δt")
-        cv.create_text(30, 130, text="Va_ref", font=FONT_B, fill=C_REF)
-        V(cv, 30, 170, lambda m: f"{m['Va_ref']:.1f}", C_REF)
-        A(cv, 55, Y, 69, Y)
-        S(cv, 80, Y)
-        V(cv, 80, Y - 30, lambda m: f"{m['e_Va']:+.2f}")
-        A(cv, 91, Y, 130, Y)
-        self._box(cv, 130, 50, 260, 250, "ПИД скорости")
-        A(cv, 260, Y, 334, Y)
-        V(cv, 297, Y - 15, lambda m: f"{m['dthr']:+.3f}")
-        S(cv, 345, Y, marks=(("+", -15, -12), ("+", 15, -16)))
-        cv.create_text(345, 62, text="δt_трим (балансировка)", font=FONT)
-        V(cv, 345, 80, lambda m: f"{m['thr_trim']:.3f}")
-        A(cv, 345, 92, 345, 139)
-        A(cv, 356, Y, 420, Y)
-        self._box(cv, 420, 100, 520, 200, "огр. 0…1", C_SAT)
-        self._sat_icon(cv, 470, 150)
-        A(cv, 520, Y, 600, Y)
-        V(cv, 560, Y - 15, lambda m: f"{m['thr']:.3f}", C_CTRL)
-        self._box(cv, 600, 110, 690, 190, "ЛА")
-        cv.create_text(645, 155, text="6DOF", font=FONT)
-        A(cv, 690, Y, 740, Y, 740, 300, 80, 300, 80, 161)                # Va (ПВД)
-        cv.create_text(700, 142, text="Va", font=FONT_B, fill=C_MEAS, anchor="w")
-        V(cv, 400, 288, lambda m: f"Va = {m['Va']:.2f} м/с", C_MEAS)
-        cv.create_text(780, 110, anchor="nw", font=FONT, fill="#555", justify="left",
-                       text="Высота держится рулём высоты\n(вкладка «Тангаж / высота»).\n\n"
-                            "Тяга меняет и скорость, и высоту:\n"
-                            "ступенька Va_ref видна на обоих\n"
-                            "графиках внизу.")
-        self._footer(cv, "δt = δt_трим + ПИД(Va_ref − Va),  ограничение 0…1.   "
-                         "δt_трим — балансировочная тяга в точке настройки Va = 16 м/с (упреждение).")
+    def _draw_tecs(self, cv):
+        A, S, V = self._arrow, self._sum, self._val
+        YE, YB = 110, 230                       # линии полной энергии (газ) и баланса (тангаж)
+        self._title(cv, "TECS: высота h и скорость Va → темпы энергии → газ δt (Ė) и тангаж θ (Ḃ)")
+        # внешние контуры: высота и скорость
+        cv.create_text(26, 92, text="h_ref", font=FONT_B, fill=C_REF)
+        V(cv, 26, 128, lambda m: f"{m['h_ref']:.0f}", C_REF)
+        A(cv, 45, YE, 59, YE)
+        S(cv, 70, YE, marks=(("+", -15, -12), ("−", 15, -16)))
+        V(cv, 70, YE + 32, lambda m: f"{m['e_h']:+.1f}")
+        A(cv, 81, YE, 95, YE)
+        self._box(cv, 95, 55, 205, 165, "П высоты")
+        cv.create_text(150, 152, text="ḣ_ff + K_h·e_h", font=FONT_S)
+        A(cv, 205, YE, 240, YE)
+        V(cv, 223, YE - 12, lambda m: f"{m['hdot_ref']:+.1f}", C_REF)
+        cv.create_text(26, 212, text="Va_ref", font=FONT_B, fill=C_REF)
+        V(cv, 26, 248, lambda m: f"{m['Va_ref']:.1f}", C_REF)
+        A(cv, 45, YB, 59, YB)
+        S(cv, 70, YB)
+        V(cv, 70, YB - 26, lambda m: f"{m['e_V']:+.2f}")
+        A(cv, 81, YB, 95, YB)
+        self._box(cv, 95, 185, 205, 275, "П скорости")
+        cv.create_text(150, 262, text="V̇_ref = K_V·e_V", font=FONT_S)
+        A(cv, 205, YB, 240, YB)
+        V(cv, 223, YB - 12, lambda m: f"{m['Vdot_ref']:+.1f}", C_REF)
+        # требуемые темпы энергии
+        self._box(cv, 242, 55, 394, 285, "Темпы энергии")
+        cv.create_text(318, 104, font=("Segoe UI", 7), justify="center",
+                       text="γ_ref = ḣ_ref/Va, огр. γ\nĖ_ref = γ_ref + V̇_ref/g\n"
+                            "Ḃ_ref = wγ_ref − (2−w)V̇_ref/g")
+        A(cv, 394, YE, 409, YE)
+        V(cv, 420, YE - 26, lambda m: f"{m['E_ref']:+.2f}", C_REF)
+        A(cv, 394, YB, 409, YB)
+        V(cv, 420, YB - 26, lambda m: f"{m['B_ref']:+.2f}", C_REF)
+        S(cv, 420, YE)
+        S(cv, 420, YB)
+        A(cv, 431, YE, 440, YE)
+        A(cv, 431, YB, 440, YB)
+        # газ ← полная энергия
+        self._box(cv, 440, 55, 560, 170, "ПИ газа (Ė)")
+        A(cv, 560, YE, 579, YE)
+        V(cv, 500, 158, lambda m: f"вклад ПИ {m['thr_fb']:+.3f}")
+        S(cv, 590, YE, marks=(("+", -15, -12), ("+", 14, -16)))
+        self._box(cv, 610, 52, 850, 88, "упрежд. δt*(Va_ref) + K_E·Ė_ref")
+        V(cv, 730, 78, lambda m: f"{m['thr_ff']:.3f}")
+        A(cv, 610, 70, 590, 70, 590, 99)
+        A(cv, 601, YE, 640, YE)
+        self._box(cv, 640, 93, 715, 145, "огр. 0…1", C_SAT)
+        self._sat_icon(cv, 677, 124)
+        A(cv, 715, YE, 760, YE)
+        self._box(cv, 760, 93, 900, 178, "защита скорости")
+        us_box = cv.create_rectangle(762, 158, 898, 176, width=0, fill=C_BOX)
+        us_txt = cv.create_text(830, 167, text="", font=FONT_S)
+
+        def underspeed(cv, m):
+            k = m["us"]
+            cv.itemconfigure(us_box, fill="#ffb3b3" if k > 0 else C_BOX)
+            cv.itemconfigure(us_txt, text=(f"ЗАЩИТА k = {k:.2f}" if k > 0 else "k = 0 (Va ≥ Va_min)"))
+        self._dyn(cv, underspeed)
+        A(cv, 900, YE, 960, YE)
+        V(cv, 930, YE - 12, lambda m: f"{m['thr']:.2f}", C_CTRL)
+        # тангаж ← баланс энергии
+        self._box(cv, 440, 176, 560, 291, "ПИ тангажа (Ḃ)")
+        A(cv, 560, YB, 579, YB)
+        V(cv, 500, 280, lambda m: f"вклад ПИ {m['theta_fb']:+.2f}°")
+        S(cv, 590, YB, marks=(("+", -15, -12), ("+", 14, -16)))
+        self._box(cv, 605, 172, 775, 210, "упрежд. α*(Va) + γ_ff")
+        V(cv, 690, 199, lambda m: f"{m['theta_ff']:+.1f}°")
+        A(cv, 605, 191, 590, 191, 590, 219)
+        A(cv, 601, YB, 640, YB)
+        self._box(cv, 640, 214, 720, 290, "огр. θ", C_SAT)
+        A(cv, 720, YB, 780, YB)
+        V(cv, 750, YB - 12, lambda m: f"{m['theta_cmd']:+.1f}°", C_REF)
+        self._box(cv, 780, 200, 920, 260, "тангаж θ → q → δe")
+        cv.create_text(850, 242, text="(вкладка «Тангаж»)", font=FONT_S)
+        A(cv, 920, YB, 960, YB)
+        V(cv, 940, YB - 12, lambda m: f"{m['de']:+.1f}", C_CTRL)
+        self._box(cv, 960, 60, 1030, 280, "ЛА")
+        cv.create_text(995, 170, text="6DOF", font=FONT)
+        # обратные связи
+        A(cv, 1030, 95, 1085, 95, 1085, 46, 70, 46, 70, 99)              # h (барометр)
+        cv.create_text(1035, 87, text="h", font=FONT_B, fill=C_MEAS, anchor="w")
+        V(cv, 160, 38, lambda m: f"h = {m['h']:.1f} м", C_MEAS)
+        A(cv, 1030, 265, 1070, 265, 1070, 357, 70, 357, 70, 241)         # Va (ПВД)
+        cv.create_text(1035, 257, text="Va", font=FONT_B, fill=C_MEAS, anchor="w")
+        V(cv, 250, 349, lambda m: f"Va = {m['Va']:.2f} м/с", C_MEAS)
+        self._box(cv, 770, 296, 930, 348, "")                            # фильтр Va
+        A(cv, 995, 280, 995, 322, 930, 322)
+        cv.create_text(1000, 300, text="ḣ, Va", font=FONT_B, fill=C_MEAS, anchor="w")
+        A(cv, 770, 322, 760, 322)
+        self._box(cv, 430, 302, 760, 348, "Ė = ḣ/Va + V̇/g,   Ḃ = wγ − (2−w)V̇/g")
+        V(cv, 595, 335, lambda m: f"Ė·Va = {m['E']:+.2f}   Ḃ·Va = {m['B']:+.2f} м/с", C_MEAS)
+        A(cv, 430, 330, 420, 330, 420, 241)                              # Ḃ
+        A(cv, 430, 316, 402, 316, 402, 160, 420, 160, 420, 121)          # Ė
+        self._footer(cv, "δt = δt*(Va_ref) + K_E·Ė_ref + ПИ(Ė_ref − Ė);   θ = α*(Va) + γ_ff + ПИ(Ḃ_ref − Ḃ).   "
+                         "Темпы — ×Va, в м/с набора.  Газ — вся энергия, тангаж — её раздел h ↔ Va.")
 
     def _draw_yaw(self, cv):
         Y, A, S, V = 150, self._arrow, self._sum, self._val
@@ -357,7 +424,7 @@ class Panel:
         A(cv, 390, 262, 405, 262, 405, 161)
         V(cv, 440, 262, lambda m: f"{m['dr_mix']:+.1f}°")
         self._box(cv, 430, 100, 530, 200, "огр. δr", C_SAT)
-        self._sat_icon(cv, 480, 125)
+        self._sat_icon(cv, 480, 134)
         A(cv, 530, Y, 600, Y)
         V(cv, 565, Y - 15, lambda m: f"{m['dr']:+.2f}°", C_CTRL)
         self._box(cv, 600, 110, 690, 190, "ЛА")
@@ -380,7 +447,7 @@ class Panel:
         A, V = self._arrow, self._val
         self._title(cv, "Автомат защиты от выхода на закритические углы атаки (отключаемый)")
         cv.create_text(50, 92, text="θ_ref", font=FONT_B, fill=C_REF)
-        cv.create_text(50, 108, text="(контур h)", font=FONT_S)
+        cv.create_text(50, 108, text="(TECS)", font=FONT_S)
         V(cv, 50, 126, lambda m: f"{m['theta_cmd']:+.1f}°", C_REF)
         A(cv, 85, 100, 130, 100)
 
@@ -419,8 +486,8 @@ class Panel:
         self._box(cv, 640, 55, 770, 120, "ПИД тангажа")
         cv.create_text(705, 100, text="(вкладка «Тангаж»)", font=FONT_S)
         A(cv, 770, 85, 820, 85)
-        self._box(cv, 640, 140, 770, 195, "САУ скорости")
-        cv.create_text(705, 177, text="(вкладка «Скорость»)", font=FONT_S)
+        self._box(cv, 640, 140, 770, 195, "TECS: газ")
+        cv.create_text(705, 177, text="(вкладка «TECS»)", font=FONT_S)
         A(cv, 770, 165, 820, 165)
         A(cv, 560, 222, 820, 222)
         cv.create_text(690, 211, text="δt_восст — только КРИТ / ВОССТ", font=FONT_S)
@@ -483,8 +550,8 @@ class Panel:
         V(cv, 767, 214, lambda m: f"{m['h_ref']:.0f} м", C_REF)
         self._box(cv, 800, 70, 945, 130, "Курс → крен → δa")
         cv.create_text(872, 112, text="(вкладка «Крен»)", font=FONT_S)
-        self._box(cv, 800, 170, 945, 230, "Высота → θ → δe")
-        cv.create_text(872, 212, text="(вкладка «Тангаж»)", font=FONT_S)
+        self._box(cv, 800, 170, 945, 230, "TECS: h → θ, δt")
+        cv.create_text(872, 212, text="(вкладка «TECS»)", font=FONT_S)
         A(cv, 945, 100, 985, 100)
         A(cv, 945, 200, 985, 200)
         self._box(cv, 985, 70, 1065, 230, "ЛА")
@@ -508,13 +575,36 @@ class Panel:
                 v = tk.BooleanVar(value=default)
                 w = tk.Checkbutton(cv, text=label, variable=v, font=FONT, bg=bg,
                                    activebackground=bg, command=self._send_params)
+                cv.create_window(x, y, window=w, anchor="n")
             else:
                 v = tk.DoubleVar(value=default)
-                w = tk.Scale(cv, variable=v, from_=lo, to=hi, resolution=res, orient="horizontal",
-                             length=length, label=label, font=FONT, bg=bg, bd=0,
-                             highlightthickness=0, command=lambda _v: self._send_params())
+                self._slider(cv, x, y, length, bg, v, label, lo, hi, res)
             self.vars[key] = v
-            cv.create_window(x, y, window=w, anchor="n")
+
+    def _slider(self, cv, x, y, length, bg, var, label, lo, hi, res):
+        """
+        Компактный ползунок: «имя = значение ед.» (текст холста) над узкой полосой.
+        Не помещается в ширину полосы — имя первой строкой, значение второй.
+        """
+        name, _, unit = label.partition(", ")
+        dec = max(0, -math.floor(math.log10(res) + 1e-9))
+        unit = ("" if unit.startswith("°") else " ") + unit if unit else ""
+        fmt = lambda v: f"{v:.{dec}f}{unit}"
+        widest = max(fmt(lo), fmt(hi), key=len)
+        two = tkfont.Font(font=FONT).measure(f"{name} = {widest}") > length + 6
+        txt = cv.create_text(x, y, anchor="n", font=FONT, text="", justify="center")
+
+        def show(*_):
+            v = fmt(var.get())
+            cv.itemconfigure(txt, text=f"{name}\n{v}" if two else f"{name} = {v}")
+        var.trace_add("write", show)
+        show()
+        y += 15 if two else 0
+        w = tk.Scale(cv, variable=var, from_=lo, to=hi, resolution=res, orient="horizontal",
+                     length=length, showvalue=0, width=9, sliderlength=14, bd=0, bg=bg,
+                     troughcolor="#d6d6d6", highlightthickness=0,
+                     command=lambda _v: self._send_params())
+        cv.create_window(x, y + 16, window=w, anchor="n")
 
     def _buttons(self, tab, bar):
         def group(title, kind, steps, unit):
@@ -531,11 +621,11 @@ class Panel:
             group("Ступенька χ_ref", "chi", (-90, -30, -10, 10, 30, 90), "°")
         if tab == "roll":
             kick("da", "Толчок δa 1 с")
-        if tab == "pitch":
+        if tab == "tecs":
             group("Ступенька h_ref", "h", (-50, -10, 10, 50), " м")
+            group("Va_ref", "va", (-5, -1, 1, 5), "")
+        if tab == "pitch":
             kick("de", "Толчок δe 1 с")
-        if tab == "speed":
-            group("Ступенька Va_ref", "va", (-5, -1, 1, 5), "")
         if tab == "yaw":
             kick("dr", "Толчок δr 1 с")
         if tab == "prot":
