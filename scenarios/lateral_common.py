@@ -2,9 +2,8 @@
 """
 Общая часть сценариев бокового канала (s12–s14): полная САУ 6DOF (control/sau.py).
 
-Продольный канал:
-  h_ref → [ПИ h] → theta_ref → [каскад theta → q] → delta_e
-  Va_ref → [ПИ Va] → throttle
+Продольный канал — TECS (control/tecs.py):
+  h_ref, Va_ref → [темпы энергии Ė, Ḃ] → throttle (Ė), theta_ref (Ḃ) → [каскад theta → q] → delta_e
 Боковой канал — LateralController:
   chi_ref → [П chi] → phi_ref → [phi → p_ref → FF + ПИ p] → delta_a
   beta (зонд) → [ПИ beta] + микс δa → delta_r
@@ -12,7 +11,7 @@
 (B&M гл. 10–11, control/navigation.py); без маршрута — расписание chi_ref_fn(t).
 
 Источники измерений:
-  h — барометр, Va — СВС, q/p — гироскоп, theta/phi — ИНС,
+  h — барометр, ḣ — GPS, Va — СВС, q/p — гироскоп, theta/phi — ИНС,
   chi — GPS (путевой угол по земной скорости), beta — зонд УС.
 """
 

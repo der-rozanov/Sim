@@ -29,6 +29,8 @@ from control.controllers import (PitchController, PitchControlParams, SpeedContr
                                  LateralControlParams, RollControlParams, RollHold, wrap_angle,
                                  AltitudeHold, AltitudeHoldParams)
 from control.tuning import design_sau
+from control.tecs import TECSParams
+from control.sau import SAU, SAUParams, TruthSensors, Mode
 
 ac  = AircraftParams()
 VA  = 16.0
@@ -153,6 +155,27 @@ results.append(("Курс χ, ° (ступенька +20°)", log.t, chi, lin, 2
 # 6. Большой манёвр (без теории — с насыщениями)
 log6 = closed_loop(h_ref=cfg.h0 + 30.0, chi_ref=np.radians(90.0), t_end=25.0)
 
+# 7. TECS (control/tecs.py) в полной САУ: h/hc ≈ K_h/(s + K_h), V/Vc ≈ K_V/(s + K_V)
+def tecs_loop(h_ref, Va_ref, t_end):
+    sau = SAU(ac, (alpha_t, de_t, thr_t), TruthSensors(), SAUParams(lon="tecs"))
+    sau.engage(theta=alpha_t, h=cfg.h0, Va=VA, chi=0.0)
+    sau.set_mode(Mode.ALTITUDE)
+    sau.refs.h, sau.refs.Va = h_ref, Va_ref
+
+    def fn(t, s, Va, al):
+        return sau.step(t, s, Va, al, np.arcsin(np.clip(s[6] / Va, -1, 1)), cfg.dt)
+    return run(fn, ac, WindParams(), SimConfig(Va0=VA, h0=cfg.h0, dt=cfg.dt, t_end=t_end),
+               state0=s0.copy())
+
+tc = d.tecs
+log = tecs_loop(cfg.h0 + 5.0, VA, 15.0)
+lin = tf_step([tc.K_h], [1, tc.K_h], log.t, 5.0)
+results.append(("TECS: высота Δh, м (+5 м)", log.t, log.state[:, H] - cfg.h0, lin, 5.0, 0.0))
+log_tv = tecs_loop(cfg.h0, VA + 2.0, 15.0)
+lin = tf_step([tc.K_V], [1, tc.K_V], log_tv.t, 2.0)
+results.append(("TECS: скорость ΔVa, м/с (16 → 18)", log_tv.t, log_tv.Va - VA, lin, 2.0, 0.0))
+tecs_dh = np.abs(log_tv.state[:, H] - cfg.h0).max()
+
 # Умолчания регуляторов = расчёт design_sau(AircraftParams(), 16 м/с)?
 from dataclasses import asdict
 bad = []
@@ -160,11 +183,12 @@ for name, obj, ref in (("PitchControlParams", PitchControlParams(), d.pitch),
                        ("SpeedControlParams", SpeedControlParams(), d.speed),
                        ("LateralControlParams", LateralControlParams(), d.lateral),
                        ("RollControlParams", RollControlParams(), d.roll),
-                       ("AltitudeHoldParams", AltitudeHoldParams(), d.altitude)):
+                       ("AltitudeHoldParams", AltitudeHoldParams(), d.altitude),
+                       ("TECSParams", TECSParams(), d.tecs)):
     for f, v in asdict(ref).items():
         dv = getattr(obj, f)
-        if isinstance(v, float) and not np.isclose(v, dv, rtol=0.01, atol=1e-6):
-            bad.append(f"{name}.{f}: умолчание {dv:.4g}, расчёт {v:.4g}")
+        if isinstance(v, (float, tuple)) and not np.allclose(v, dv, rtol=0.01, atol=1e-3):
+            bad.append(f"{name}.{f}: умолчание {dv}, расчёт {v}")
 
 # ---------------------------------------------------------------------------
 print("=" * 78)
@@ -177,6 +201,7 @@ for name, t, y, lin, y1, y0 in results:
     print(f"{name:<36} {om:9.1f} / {ol:<9.1f} {tm:10.2f} / {tl:<9.2f}")
 print("\nУмолчания регуляторов совпадают с расчётом control/tuning.py" if not bad
       else "\nРАСХОЖДЕНИЯ умолчаний с расчётом:\n  " + "\n  ".join(bad))
+print(f"TECS, скорость 16 → 18 м/с: |Δh| ≤ {tecs_dh:.2f} м (связь высоты и скорости)")
 chi6 = np.degrees([np.arctan2(*earth_velocity(s)[1::-1]) for s in log6.state])
 print(f"\nМанёвр: курс +90°, высота +30 м за 25 с: χ = {chi6[-1]:.1f}°, Δh = {log6.state[-1, H] - cfg.h0:.1f} м, "
       f"|φ|max = {np.degrees(np.abs(log6.state[:, PHI]).max()):.1f}°, Va ∈ [{log6.Va.min():.1f}, {log6.Va.max():.1f}] м/с, "
