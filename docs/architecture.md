@@ -30,7 +30,7 @@ config.py            ← нет зависимостей (только dataclass
                                 ├── s6            ← runner, control, sensors, config
                                 ├── s7–s10        ← runner, control, sensors, estimators, config
                                 ├── s11           ← runner, control/lqr
-                                └── s12, s13      ← lateral_common (FullSAU) ← runner, control
+                                └── s12, s13      ← lateral_common (FullSAU → control.sau.SAU) ← runner, control
 ```
 
 `check.py` — импортирует все модули, зависимость только в одну сторону.

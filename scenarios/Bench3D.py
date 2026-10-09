@@ -17,8 +17,8 @@ Bench3D — испытательный стенд САУ для студенто
 
 Окно карты (viz/map_panel.py, третий процесс): вид сверху, ЛА и след, точки
 маршрута ставятся мышью; «Лететь по маршруту» — САУ ведёт по точкам.
-Регуляторы — штатные PitchController, SpeedController, LateralController
-(как в GameScenario3D); по умолчанию параметры штатные — летает.
+САУ — control/sau.py (как в GameScenario3D и s12–s14) с защитой по α; по умолчанию
+параметры штатные — летает.
 
 Окно схемы — отдельный процесс (tkinter); связь — очереди.
 Расчёт САУ и физики — только здесь, в 3D-процессе.
@@ -55,6 +55,7 @@ from control.controllers import AltitudeHoldParams
 from control.controllers import (LateralControlParams, PitchControlParams,
                                  SpeedControlParams, wrap_angle)
 from control.aua import AngleOfAttackProtector, AUAParams, AUAState
+from control.sau import SAU, SAUParams, TruthSensors, Mode
 from viz.viewer3d import make_app, MAPS
 from ursina import window, Vec2
 from viz import bench_panel
@@ -140,10 +141,10 @@ def default_aua(aircraft):
 
 
 def apply_params(g, v):
-    """Параметры из окна схемы → регуляторы стенда g (.lat, .pitch, .speed, .alt).
+    """Параметры из окна схемы → регуляторы САУ стенда g.sau (lat, pitch, lon.speed, lon.alt).
     На лету, интегралы не сбрасываются. Ограничения рулей меняются в копиях
     параметров ЛА у регуляторов — модель ЛА не трогается."""
-    lat, pit, spd, r = g.lat, g.pitch, g.speed, np.radians
+    lat, pit, spd, r = g.sau.lat, g.sau.pitch, g.sau.lon.speed, np.radians
     lat.params.chi_K = v["chi_K"]
     lat.params.phi_ref_max = r(v["phi_ref_max"])
     lat.params.phi_ref_rate = r(v["phi_rate"])
@@ -152,7 +153,7 @@ def apply_params(g, v):
     rc.pid_p.Kp, rc.pid_p.Ki = v["p_Kp"], v["p_Ki"]
     lat.aircraft.delta_a_max = r(v["da_max"])
 
-    g.alt.pid.Kp, g.alt.pid.Ki = v["KH"], v["h_Ki"]
+    g.sau.lon.alt.pid.Kp, g.sau.lon.alt.pid.Ki = v["KH"], v["h_Ki"]
     pit.pid_theta.Kp, pit.pid_theta.Ki, pit.pid_theta.Kd = v["theta_Kp"], v["theta_Ki"], v["theta_Kd"]
     pit.q_max, pit.q_min = r(v["q_max"]), -r(v["q_max"])
     pit.pid_q.Kp, pit.pid_q.Ki, pit.pid_q.Kd = v["q_Kp"], v["q_Ki"], v["q_Kd"]
@@ -182,6 +183,17 @@ def apply_params(g, v):
         g.nav.circle = (cn, ce, nv.R_orbit, 1.0 if nv.orbit_cw else -1.0)
 
 
+class BenchSAU(SAU):
+    """САУ стенда: в режиме «Срыв» (stall) внешний продольный контур отключён —
+    тяга 0 и θ_cmd = STALL_THETA; защита по α стоит после него, как обычно."""
+    stall = False
+
+    def _outer(self, est, dt):
+        if self.stall:
+            return STALL_THETA, 0.0
+        return super()._outer(est, dt)
+
+
 class Bench(Game):
 
     HELP = ("A/D χ_ref -/+10°  W/S h_ref  X/Z Va_ref  P САУ вкл/выкл  N маршрут  "
@@ -192,61 +204,46 @@ class Bench(Game):
         self.prot = AngleOfAttackProtector(aircraft, default_aua(aircraft))
         super().__init__(aircraft, wind_params, cfg, terrain, **kw)
         # Ограничения рулей на стенде меняет только САУ, не модель ЛА
-        self.lat.aircraft = dataclasses.replace(aircraft)
-        self.pitch.aircraft = dataclasses.replace(aircraft)
+        self.sau.lat.aircraft = dataclasses.replace(aircraft)
+        self.sau.pitch.aircraft = dataclasses.replace(aircraft)
+
+    def _make_sau(self):
+        params = SAUParams(pitch=PitchControlParams(Va_ref=self.cfg.Va0),
+                           h_min=H_MIN, h_max=H_MAX)
+        return BenchSAU(self.ac, (self.alpha_trim, self.de_trim, self.thr_trim),
+                        TruthSensors(), params, nav=self.nav, prot=self.prot)
 
     def reset(self):
         super().reset()
         self.chi_unwrap = None             # непрерывный χ для осциллографа
         self.kick = None                   # (индекс руля, добавка, t_конца)
-        self.stall = False                 # режим «Срыв»
-        self.theta_cmd = 0.0               # θ_ref до автомата защиты (для схемы)
-        self.prot.reset()
+        self.sau.stall = False             # режим «Срыв»
         self._toggle_ap()                  # стенд стартует с САУ
-        self.h_hold, self.h_ref = True, float(self.state[H])
+        self.sau.refs.h = float(self.state[H])
+        self.sau.set_mode(Mode.ALTITUDE)
 
     def update(self):
         self._poll_panel()
         super().update()
         self._telemetry()
 
-    def _sau(self, s, Va, beta, dt):
-        """Как Game._sau, но между контуром высоты и ПИД тангажа стоит автомат
-        защиты от закритических α (по истинному α); плюс режим «Срыв» и толчки."""
-        self._nav_ref(s)
-        if self.stall:
-            theta_cmd = STALL_THETA
-        else:
-            if self.h_hold:
-                self.theta_ref = float(self.alt.step(self.h_ref, s[H], dt))
-            theta_cmd = self.theta_ref
-        alpha = air_data(s, self.wind_call(s[H], self.t))[1]
-        out = self.prot.step(alpha, theta_cmd, self.speed.trim_throttle, dt)
-        self.theta_cmd = theta_cmd
-
-        self.pitch.set_pitch_setpoint(out.theta_ref)
-        de = self.pitch.step(self.t, {"q": s[Q], "theta": s[THETA], "h": s[H], "Va": Va}, dt)[0]
-        thr = 0.0 if self.stall else self.speed.step(Va, dt)
-        if out.force_throttle is not None:
-            thr = out.force_throttle
-        Vx, Vy, _ = earth_velocity(s)
-        self.lat.set_course(self.chi_ref, self.kappa)
-        da, dr = self.lat.step({"chi": np.arctan2(Vy, Vx), "Vg": np.hypot(Vx, Vy),
-                                "phi": s[PHI], "p": s[P], "Va": Va, "beta": beta}, dt)
-        c = np.array([de, thr, da, dr])
+    def _sau(self, s, Va, alpha, beta, dt):
+        """САУ (с защитой по α и режимом «Срыв») + толчки рулём из окна схемы."""
+        c = super()._sau(s, Va, alpha, beta, dt).copy()
         if self.kick and self.t < self.kick[2]:
             c[self.kick[0]] += self.kick[1]
 
-        if self.stall and out.state == AUAState.CRITICAL:    # защита перехватила
+        if self.sau.stall and self.sau.prot_out.state == AUAState.CRITICAL:  # защита перехватила
             self._stall_off(s)
             self._event("защита: перехват", "orange")
         return c
 
     def _stall_off(self, s):
         """Выход из режима «Срыв»: удержание текущей высоты, контур скорости снова в работе."""
-        self.stall = False
-        self.h_hold, self.h_ref = True, float(np.clip(s[H], H_MIN, H_MAX))
-        self.speed.reset()
+        self.sau.stall = False
+        self.sau.refs.h = float(np.clip(s[H], H_MIN, H_MAX))
+        self.sau.set_mode(Mode.ALTITUDE)
+        self.sau.lon.speed.reset()
 
     def _poll_panel(self):
         while True:
@@ -264,18 +261,17 @@ class Bench(Game):
                 continue
             elif kind == "chi":
                 self._nav_off("маршрут: ручная уставка")
-                self.chi_ref = wrap_angle(self.chi_ref + np.radians(val))
+                self.sau.refs.chi = wrap_angle(self.sau.refs.chi + np.radians(val))
             elif kind == "h":
                 self._nav_off("маршрут: ручная уставка")
-                self.h_hold = True
-                self.h_ref = float(np.clip(self.h_ref + val, H_MIN, H_MAX))
+                self.sau.refs.h = float(np.clip(self.sau.refs.h + val, H_MIN, H_MAX))
+                self.sau.set_mode(Mode.ALTITUDE)
             elif kind == "va":
-                self.Va_ref = float(np.clip(self.Va_ref + val, VA_MIN, VA_MAX))
-                self.speed.set_Va_ref(self.Va_ref)
+                self.sau.refs.Va = float(np.clip(self.sau.refs.Va + val, VA_MIN, VA_MAX))
             elif kind == "stall":
-                self.stall = True
+                self.sau.stall = True
                 self._event("срыв: δt = 0, θ_ref +15°", "red")
-            elif kind == "stall_off" and self.stall:
+            elif kind == "stall_off" and self.sau.stall:
                 self._stall_off(self.state)
                 self._event("срыв: отмена", "gray")
             elif kind == "kick":
@@ -291,10 +287,11 @@ class Bench(Game):
         if self.chi_unwrap is None:
             self.chi_unwrap = chi
         self.chi_unwrap += wrap_angle(chi - self.chi_unwrap)
-        e_chi = wrap_angle(self.chi_ref - chi)
+        sau = self.sau
+        e_chi = wrap_angle(sau.refs.chi - chi)
         phi = np.radians(_wrap180(deg(s[PHI])))
-        pit, spd = self.pitch, self.speed
-        h_ref = self.h_ref if self.h_hold else s[H]
+        pit, spd, lat = sau.pitch, sau.lon.speed, sau.lat
+        h_ref = sau.refs.h if self.h_hold else s[H]
         gs = (float(np.clip((pit.Va_ref / max(Va, 1.0)) ** 2, pit.gs_scale_min, pit.gs_scale_max))
               if pit.gain_scheduling else 1.0)
         msg = {
@@ -302,10 +299,10 @@ class Bench(Game):
             # крен
             "chi": deg(self.chi_unwrap), "chi_ref": deg(self.chi_unwrap + e_chi),
             "e_chi": deg(e_chi),
-            "phi_ref": deg(self.lat.phi_ref), "phi": deg(phi),
-            "e_phi": deg(self.lat.phi_ref - phi),
-            "p_ref": deg(self.lat.roll.p_ref), "p": deg(s[P]),
-            "e_p": deg(self.lat.roll.p_ref - s[P]), "da_ff": deg(self.lat.roll.da_ff),
+            "phi_ref": deg(lat.phi_ref), "phi": deg(phi),
+            "e_phi": deg(lat.phi_ref - phi),
+            "p_ref": deg(lat.roll.p_ref), "p": deg(s[P]),
+            "e_p": deg(lat.roll.p_ref - s[P]), "da_ff": deg(lat.roll.da_ff),
             "da": deg(c[2]),
             # тангаж / высота
             "h_ref": h_ref, "h": s[H], "e_h": h_ref - s[H],
@@ -317,14 +314,14 @@ class Bench(Game):
             "Va_ref": spd.Va_ref, "Va": Va, "e_Va": spd.Va_ref - Va,
             "thr_trim": spd.trim_throttle, "dthr": c[1] - spd.trim_throttle, "thr": c[1],
             # рыскание
-            "beta": deg(beta), "dr": deg(c[3]), "dr_mix": deg(self.lat.dr_mix),
+            "beta": deg(beta), "dr": deg(c[3]), "dr_mix": deg(lat.dr_mix),
             "da_y": deg(c[2]),
             # защита по α
             "alpha": deg(alpha), "a_warn": deg(self.prot.alpha_warn),
             "a_crit": deg(self.prot.alpha_crit), "a_exit": deg(self.prot.alpha_exit),
             "a_stall": deg(self.ac.alpha_stall),
             "prot_on": self.prot.enabled, "prot_state": int(self.prot.state),
-            "theta_cmd": deg(self.theta_cmd), "stall": self.stall,
+            "theta_cmd": deg(sau.theta_cmd), "stall": sau.stall,
             "ny": -aero_forces_moments(Va, alpha, s[Q], c[0], self.ac)[1] / (self.ac.mass * self.ac.g),
             # навигация
             "nav_on": self.nav_on, "nav_mode": self.nav.mode if self.nav_on else "—",

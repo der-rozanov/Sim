@@ -58,6 +58,9 @@ control/              — управление (импортирует толь�
     lqr.py            — LQRController продольного канала (scipy DARE) — s11
     tuning.py         — РАСЧЁТ САУ ПО МОДЕЛИ (РЕШ-21): plant_coeffs(), design_sau(aircraft, Va,
                         SAUSpecs) → параметры всех регуляторов; для другого ЛА — тот же вызов
+    sau.py            — SAU: вся САУ одним классом (РЕШ-26): sensors → estimator → nav →
+                        lon (h, Va → θ, δt) → [защита по α] → pitch; lat (χ → φ → δa, β → δr);
+                        режимы Mode PITCH/ALTITUDE/ROUTE; звенья заменяемые (TECS, EKF, INDI…)
     navigation.py     — WaypointNavigator, NavParams: полёт по точкам (B&M 10–11): прямая/
                         окружность векторным полем, углы — дугой R_fillet, кружение у последней
 
@@ -106,7 +109,7 @@ scenarios/            — прогоны s1–s14; каждый: конфиг �
     s13_crosswind.py       — ступенька бокового ветра: удержание путевого угла,
                              сверка с треугольником скоростей
     s14_waypoints.py       — полёт по точкам (WaypointNavigator): штиль и боковой ветер
-    lateral_common.py      — FullSAU: полная САУ 6DOF (высота+Va+курс; nav= — по точкам)
+    lateral_common.py      — FullSAU: обёртка control.sau.SAU с псевдодатчиками для run()
     GameScenario.py        — интерактивное ручное/автоматическое управление (клавиши, 2D)
     GameScenario3D.py      — пилотирование в 3D в реальном времени (Ursina): ручной режим
                              6DOF + САУ (θ/h, Va, курс, маршрут — окно карты, N);
@@ -143,7 +146,7 @@ docs/                 — техническая документация (ка�
     SENSORS.md        — псевдодатчики
     viewer3d.md       — 3D-тренажёр: запуск, клавиши, СК и ориентация, проверки
     architecture.md   — зависимости, Log, controls_fn, совместимость 6DOF
-    decisions.md      — журнал решений РЕШ-01…24 (почему сделано так)
+    decisions.md      — журнал решений РЕШ-01…26 (почему сделано так)
     scenarios_report.md — результаты сценариев С1–С14
     continuation.md   — ИСТОРИЧЕСКИЙ (состояние на 2026-06)
 results/              — .flightlog файлы (генерируемые, в .gitignore)

@@ -22,7 +22,8 @@ GameScenario3D — пилотирование ЛА в реальном врем�
   N      — навигация по маршруту вкл/выкл (маршрут — в окне карты; уставки χ_ref
            и h_ref даёт WaypointNavigator, control/navigation.py). Ручные уставки
            W/S/A/D навигацию выключают.
-Боковой канал САУ — LateralController (как в s12/s13): χ → φ_ref → δa, β → δr.
+САУ — control/sau.py (тот же класс, что в s12–s14): χ → φ_ref → δa, β → δr,
+h → θ_ref → δe, Va → δt.
 
 Окно карты (viz/map_panel.py, отдельный процесс): вид сверху, ЛА и след; точки
 маршрута ставятся мышью, «Лететь по маршруту» — САУ ведёт по точкам.
@@ -60,14 +61,12 @@ from sim.integrators import step_rk4
 from sim.ground import contacts, near_ground
 from sim.wind import wind as _wind
 from sim.state import (air_data, earth_velocity, total_energy, full_controls, canonical_euler,
-                       U, W, Q, THETA, X, H, P, PHI, PSI, Y, N_STATES, N_CONTROLS)
+                       U, W, THETA, X, H, PHI, PSI, Y, N_STATES, N_CONTROLS)
 from runner import Log, compute_trim, trim_state
 from flight_logger import FlightLogger
-from control.controllers import (PitchController, PitchControlParams,
-                                 SpeedController, SpeedControlParams,
-                                 LateralController, LateralControlParams, wrap_angle,
-                                 AltitudeHold, AltitudeHoldParams)
+from control.controllers import PitchControlParams, wrap_angle
 from control.navigation import WaypointNavigator, NavParams
+from control.sau import SAU, SAUParams, TruthSensors, Mode
 from viz import map_panel
 from viz.viewer3d import (View3D, make_app, MAPS, ned_to_u, body_axes,
                           screenshot_and_quit)
@@ -125,14 +124,7 @@ class Game(Entity):
         self.view = View3D(aircraft.b, aircraft.c, terrain, self.HELP, cam=cam, hud_lines=13,
                            aircraft_name=aircraft.name)
 
-        self.pitch = PitchController(aircraft, PitchControlParams(Va_ref=cfg.Va0))
-        self.pitch.set_trim_throttle(self.thr_trim)
-        self.pitch.set_trim_elevator(self.de_trim)   # упреждающий балансировочный δe
-        self.speed = SpeedController(aircraft, SpeedControlParams())
-        self.speed.set_trim_throttle(self.thr_trim)
-        self.lat = LateralController(aircraft, LateralControlParams())
-        # высота → θ_ref: ПИ (control/tuning.py); стенд Bench3D меняет Kp/Ki на лету
-        self.alt = AltitudeHold(AltitudeHoldParams(), self.alpha_trim)
+        self.sau = self._make_sau()
 
         self.rec = []                  # (t, state, controls, Va, alpha, beta, wind)
         self.events = []
@@ -140,6 +132,22 @@ class Game(Entity):
         self.reset()
         if ap:
             self._toggle_ap()
+
+    def _make_sau(self):
+        """САУ на истинных измерениях; стенд Bench3D подменяет её своей (защита по α)."""
+        params = SAUParams(pitch=PitchControlParams(Va_ref=self.cfg.Va0),
+                           h_min=H_MIN, h_max=H_MAX)
+        return SAU(self.ac, (self.alpha_trim, self.de_trim, self.thr_trim),
+                   TruthSensors(), params, nav=self.nav)
+
+    @property
+    def nav_on(self):
+        return self.ap and self.sau.mode is Mode.ROUTE
+
+    @property
+    def h_hold(self):
+        """Высоту держит САУ: режим ALTITUDE или ROUTE."""
+        return self.ap and self.sau.mode is not Mode.PITCH
 
     # --- состояние игры ---------------------------------------------------
     def reset(self):
@@ -150,40 +158,34 @@ class Game(Entity):
         self.t, self.acc = 0.0, 0.0
         self.paused, self.crashed = False, False
         self.on_ground, self.crash_msg = False, ""
-        self.ap, self.h_hold = False, False
+        self.ap = False
         self.de_trim_man = self.de_trim
         self.thr = self.thr_trim
         self.surf = np.array([self.de_trim, 0.0, 0.0])        # δe, δa, δr (ручной)
         self.controls = np.array([self.de_trim, self.thr_trim, 0.0, 0.0])
-        self.theta_ref, self.Va_ref = self.alpha_trim, self.cfg.Va0
-        self.h_ref, self.chi_ref = self.cfg.h0, 0.0
-        self.nav_on = False
+        self.sau.set_mode(Mode.PITCH)
+        self.sau.engage(theta=self.alpha_trim, h=self.cfg.h0, Va=self.cfg.Va0, chi=0.0)
         self.trail = []
 
     def _event(self, label, color="orange"):
         self.events.append({"t": round(self.t, 2), "label": label, "color": color})
 
     def _toggle_ap(self):
-        self.ap = not self.ap
-        self.h_hold = False
-        if not self.ap:
+        if self.ap:
             self._nav_off()
+            self.ap = False
             self.de_trim_man = self.controls[0]          # без рывка при выключении
             self.surf = np.array([self.controls[0], 0.0, 0.0])
             self.thr = self.controls[1]
             self._event("САУ выкл", "gray")
             return
+        self.ap = True
         s = self.state
         Va, _, _ = air_data(s, self.wind_call(s[H], self.t))
         Vx, Vy, _ = earth_velocity(s)
-        self.theta_ref = float(np.clip(s[THETA], -THETA_LIM, THETA_LIM))
-        self.Va_ref = float(np.clip(Va, VA_MIN, VA_MAX))
-        self.chi_ref = float(np.arctan2(Vy, Vx))
-        self.pitch.reset({"theta": s[THETA], "q": s[Q], "h": s[H]})
-        self.pitch.set_pitch_setpoint(self.theta_ref)
-        self.speed.set_Va_ref(self.Va_ref)
-        self.speed.reset()
-        self.lat.reset()
+        self.sau.set_mode(Mode.PITCH)
+        self.sau.engage(theta=float(np.clip(s[THETA], -THETA_LIM, THETA_LIM)), h=float(s[H]),
+                        Va=float(np.clip(Va, VA_MIN, VA_MAX)), chi=float(np.arctan2(Vy, Vx)))
         self._event("САУ вкл", "dodgerblue")
 
     # --- навигация по маршруту ----------------------------------------------
@@ -194,29 +196,18 @@ class Game(Entity):
         if not self.ap:
             self._toggle_ap()
         s = self.state
-        self.nav.set_route(self.route, start=(s[X], s[Y], s[H]))
-        self.nav_on, self.h_hold = True, True
-        self.alt.reset()
+        self.sau.fly_route(self.route, start=(s[X], s[Y], s[H]))
         self._event("маршрут: старт", "dodgerblue")
 
     def _nav_off(self, why="маршрут: стоп"):
         """Навигация выкл: САУ держит текущие путевой угол и высоту."""
         if not self.nav_on:
             return
-        self.nav_on = False
         Vx, Vy, _ = earth_velocity(self.state)
-        self.chi_ref = float(np.arctan2(Vy, Vx))
-        self.h_hold, self.h_ref = True, float(np.clip(self.state[H], H_MIN, H_MAX))
-        self.alt.reset()
+        self.sau.refs.chi = float(np.arctan2(Vy, Vx))
+        self.sau.refs.h = float(np.clip(self.state[H], H_MIN, H_MAX))
+        self.sau.set_mode(Mode.ALTITUDE)
         self._event(why, "gray")
-
-    def _nav_ref(self, s):
-        """Уставки χ_ref, h_ref от навигатора на шаг (если навигация включена)."""
-        if self.nav_on:
-            Vx, Vy, _ = earth_velocity(s)
-            self.chi_ref, h_ref = self.nav.step(s[X], s[Y], np.arctan2(Vy, Vx))
-            self.h_ref = float(np.clip(h_ref, H_MIN, H_MAX))
-        self.kappa = self.nav.kappa if self.nav_on else 0.0
 
     def _poll_map(self):
         if self.q_map is None:
@@ -274,30 +265,31 @@ class Game(Entity):
                 self._nav_off()
             else:
                 self._nav_go()
-        elif key == "h" and self.ap:
-            self.h_hold = not self.h_hold
-            self.h_ref = float(self.state[H])
-            self.alt.reset()
-            self._event("удержание h" if self.h_hold else "θ_ref", "dodgerblue")
+        elif key == "h" and self.ap:                        # высота ⇄ тангаж (маршрут — стоп)
+            self._nav_off("маршрут: ручная уставка")
+            to_alt = self.sau.mode is Mode.PITCH
+            self.sau.refs.h = float(self.state[H])
+            self.sau.set_mode(Mode.ALTITUDE if to_alt else Mode.PITCH)
+            self._event("удержание h" if to_alt else "θ_ref", "dodgerblue")
         elif base in ("x", "z"):
             sgn = 1 if base == "x" else -1
             if self.ap:
-                self.Va_ref = float(np.clip(self.Va_ref + sgn * VA_STEP, VA_MIN, VA_MAX))
-                self.speed.set_Va_ref(self.Va_ref)
+                refs = self.sau.refs
+                refs.Va = float(np.clip(refs.Va + sgn * VA_STEP, VA_MIN, VA_MAX))
             else:
                 self.thr = float(np.clip(self.thr + sgn * THR_STEP, 0.0, 1.0))
         elif self.ap and base in ("w", "s"):
             self._nav_off("маршрут: ручная уставка")
-            sgn = 1 if base == "s" else -1                  # S — вверх
+            sgn, refs = (1 if base == "s" else -1), self.sau.refs     # S — вверх
             if self.h_hold:
-                self.h_ref = float(np.clip(self.h_ref + sgn * H_STEP, H_MIN, H_MAX))
+                refs.h = float(np.clip(refs.h + sgn * H_STEP, H_MIN, H_MAX))
             else:
-                self.theta_ref = float(np.clip(self.theta_ref + sgn * THETA_STEP,
-                                               -THETA_LIM, THETA_LIM))
+                refs.theta = float(np.clip(refs.theta + sgn * THETA_STEP,
+                                           -THETA_LIM, THETA_LIM))
         elif self.ap and base in ("a", "d"):
             self._nav_off("маршрут: ручная уставка")
             sgn = 1 if base == "d" else -1                  # D — вправо
-            self.chi_ref = wrap_angle(self.chi_ref + sgn * CHI_STEP)
+            self.sau.refs.chi = wrap_angle(self.sau.refs.chi + sgn * CHI_STEP)
         elif not self.ap and base in ("up arrow", "down arrow"):
             sgn = 1 if base == "up arrow" else -1           # ↑ — нос вниз (δe > 0)
             self.de_trim_man = float(np.clip(self.de_trim_man + sgn * TRIM_STEP,
@@ -316,18 +308,8 @@ class Game(Entity):
         self.surf += np.clip(cmd - self.surf, -SURF_RATE * dt, SURF_RATE * dt)
         return np.array([self.surf[0], self.thr, self.surf[1], self.surf[2]])
 
-    def _sau(self, s, Va, beta, dt):
-        self._nav_ref(s)
-        if self.h_hold:
-            self.theta_ref = float(self.alt.step(self.h_ref, s[H], dt))
-        self.pitch.set_pitch_setpoint(self.theta_ref)
-        de = self.pitch.step(self.t, {"q": s[Q], "theta": s[THETA], "h": s[H], "Va": Va}, dt)[0]
-        thr = self.speed.step(Va, dt)
-        Vx, Vy, _ = earth_velocity(s)
-        self.lat.set_course(self.chi_ref, self.kappa)
-        da, dr = self.lat.step({"chi": np.arctan2(Vy, Vx), "Vg": np.hypot(Vx, Vy),
-                                "phi": s[PHI], "p": s[P], "Va": Va, "beta": beta}, dt)
-        return np.array([de, thr, da, dr])
+    def _sau(self, s, Va, alpha, beta, dt):
+        return self.sau.step(self.t, s, Va, alpha, beta, dt)
 
     # --- кадр -------------------------------------------------------------------
     def _focus_check(self):
@@ -372,7 +354,7 @@ class Game(Entity):
         s, dt = self.state, self.cfg.dt
         w_vec = self.wind_call(s[H], self.t)
         Va, alpha, beta = air_data(s, w_vec)
-        self.controls = full_controls(self._sau(s, Va, beta, dt) if self.ap
+        self.controls = full_controls(self._sau(s, Va, alpha, beta, dt) if self.ap
                                       else self._manual(dt))
         self.rec.append((self.t, s.copy(), self.controls.copy(), Va, alpha, beta,
                          np.asarray(w_vec, float)))
@@ -419,22 +401,23 @@ class Game(Entity):
         Va, alpha, beta = air_data(s, w_vec)
         Vx, Vy, _ = earth_velocity(s)
         deg = np.degrees
+        refs = self.sau.refs
         if self.ap:
-            ref = (f"h_ref {self.h_ref:6.0f} м" if self.h_hold
-                   else f"θ_ref {deg(self.theta_ref):5.1f}°")
+            ref = (f"h_ref {refs.h:6.0f} м" if self.h_hold
+                   else f"θ_ref {deg(refs.theta):5.1f}°")
             nav = ""
             if self.nav_on:
                 nav = ("  НАВ: кружение" if self.nav.mode == "orbit" else
                        f"  НАВ → точка {self.nav.idx + 1}/{len(self.route)}")
-            mode = (f"САУ  {ref}  Va_ref {self.Va_ref:4.1f}\n"
-                    f"     χ_ref {deg(self.chi_ref) % 360:5.1f}°{nav}")
+            mode = (f"САУ  {ref}  Va_ref {refs.Va:4.1f}\n"
+                    f"     χ_ref {deg(refs.chi) % 360:5.1f}°{nav}")
         else:
             mode = f"РУЧНОЙ  трим δe {deg(self.de_trim_man):5.2f}°\n"
         state = "ПАУЗА" if self.paused else ("НА ЗЕМЛЕ" if self.on_ground else "")
         text = (
             f"{mode}\n"
             f"t   {self.t:7.2f} с   {state}\n"
-            f"Va  {Va:7.2f} м/с" + (f"   уставка {self.Va_ref:4.1f}\n" if self.ap else "\n") +
+            f"Va  {Va:7.2f} м/с" + (f"   уставка {refs.Va:4.1f}\n" if self.ap else "\n") +
             f"газ δt {c[1]:5.2f}  ({100 * c[1]:3.0f} %)\n"
             f"h   {s[H]:7.1f} м\n"
             f"α   {deg(alpha):7.2f}°    β  {deg(beta):6.2f}°\n"
