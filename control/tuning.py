@@ -6,6 +6,7 @@
     d      = design_sau(aircraft, Va, specs)   — коэффициенты регуляторов
     d.pitch, d.speed, d.lateral, d.roll, d.KH — готовые параметры классов
                                                  control/controllers.py
+    d.tecs                                     — параметры TECS (control/tecs.py)
 
 Передаточные функции (линеаризация около горизонтального полёта на Va):
     крен      φ̈ = −a_φ1·φ̇ + a_φ2·δa                 (B&M ур. 5.26)
@@ -26,6 +27,7 @@
     θc = α* + kp_h·(hc − h) + ki_h·∫     ← AltitudeHold (B&M 6.4.3), полоса ω_h, ζ_h
     θc = α* + KH·(hc − h)                ← упрощённый П-контур сценариев s5–s10
     δt = δt* + kp_V·(Vc − Va) + ki_V·∫
+    TECS (control/tecs.py): газ ← Ė = γ + V̇/g,  тангаж ← Ḃ = wγ − (2−w)V̇/g
 """
 
 from dataclasses import dataclass, field
@@ -33,8 +35,10 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from sim.dynamics import thrust, _gammas
+from sim.aero import coef_CL
 from .controllers import (PitchControlParams, SpeedControlParams,
                           LateralControlParams, RollControlParams, AltitudeHoldParams)
+from .tecs import TECSParams
 
 
 @dataclass
@@ -59,6 +63,17 @@ class SAUSpecs:
     theta_max: float = 15.0   # град, предел θ_ref контура высоты
     wn_V: float = 1.0         # скорость газом
     zeta_V: float = 0.8
+    # TECS (control/tecs.py)
+    tecs_K_h: float = 0.5     # 1/с, контур высоты (как ω_h раздельных контуров)
+    tecs_K_V: float = 0.5     # 1/с, контур скорости
+    tecs_w_T: float = 2.0     # рад/с, полоса контура полной энергии (газ)
+    tecs_w_B: float = 2.0     # рад/с, полоса контура баланса (тангаж)
+    tecs_tau_f: float = 0.15  # с, фильтр Va перед дифференцированием (шум ПВД 0.2 м/с)
+    tecs_w: float = 1.0       # вес высоты в балансе
+    tecs_margin: float = 0.7  # доля располагаемой тяги на набор/разгон и газа на снижение
+    tecs_Va_min: float = 1.25 # начало защиты от потери скорости, доля Va_stall
+    tecs_Va_band: float = 1.5 # м/с
+    tecs_Va_tab: tuple = (10.0, 13.0, 16.0, 19.0, 22.0, 25.0, 28.0)  # таблица балансировок
 
 
 @dataclass
@@ -72,6 +87,7 @@ class SAUDesign:
     lateral: LateralControlParams
     roll: RollControlParams
     altitude: AltitudeHoldParams
+    tecs: TECSParams
     KH: float
     specs: SAUSpecs = field(default_factory=SAUSpecs)
 
@@ -109,10 +125,18 @@ def plant_coeffs(aircraft, Va: float) -> dict:
     a_V1 = ac.rho * Va * ac.S * CD_t / ac.mass - dT_dVa / ac.mass
     a_V2 = dT_ddt / ac.mass
 
+    # Располагаемые темпы энергии: Ė = (T − D)/(m·g), D = T(δt*) в горизонтальном полёте
+    E_max = (thrust(1.0, Va, ac) - thrust(dt_t, Va, ac)) / (ac.mass * ac.g)
+    E_min = (thrust(0.0, Va, ac) - thrust(dt_t, Va, ac)) / (ac.mass * ac.g)
+    al = np.radians(np.linspace(0.0, 30.0, 601))
+    CL_max = max(coef_CL(a, 0.0, 0.0, Va, ac) for a in al)
+    Va_stall = np.sqrt(2 * ac.mass * ac.g / (ac.rho * ac.S * CL_max))
+
     return dict(Va=Va, alpha_trim=alpha_t, de_trim=de_t, thr_trim=dt_t,
                 a_phi1=a_phi1, a_phi2=a_phi2, a_beta1=a_beta1, a_beta2=a_beta2,
                 a_theta1=a_theta1, a_theta2=a_theta2, a_theta3=a_theta3,
-                a_V1=a_V1, a_V2=a_V2)
+                a_V1=a_V1, a_V2=a_V2, E_max=E_max, E_min=E_min,
+                CL_max=CL_max, Va_stall=Va_stall)
 
 
 def design_sau(aircraft, Va: float, specs: SAUSpecs = None) -> SAUDesign:
@@ -169,12 +193,44 @@ def design_sau(aircraft, Va: float, specs: SAUSpecs = None) -> SAUDesign:
     kp_V = (2 * sp.zeta_V * sp.wn_V - k["a_V1"]) / k["a_V2"]
     ki_V = sp.wn_V**2 / k["a_V2"]
 
+    # --- TECS (control/tecs.py) ---
+    # Газ: Ė = (T − D)/(m·g) → ∂Ė/∂δt = a_V2/g, упреждение K_E = g/a_V2. Измерение Ė
+    # запаздывает на фильтр τ_f: объект (a_V2/g)/(τ_f s + 1). Регулятор — И:
+    # L = ω_T/(s(τ_f s + 1)), срез ω_T, запас по фазе 90° − atan(ω_T·τ_f) = 73°.
+    # П-часть (PX4 FW_T_THR_DAMP) не берём: шум ПВД проходит через дифференцирование
+    # V̇ с усилением ω_T·K_E·σ_V/g независимо от τ_f (σ_газ 0.049 против 0.018 без
+    # шума ПВД); интеграл V̇ — сама отфильтрованная Va, почти без шума.
+    # Тангаж: Ḃ = 2γ − (2 − w)Ė → ∂Ḃ/∂θ ≈ 2 (γ ≈ θ − α*), так же: И с полосой ω_B.
+    K_E = g / k["a_V2"]
+    tf = sp.tecs_tau_f
+    from runner import compute_trim
+    trims = [compute_trim(aircraft, v) for v in sp.tecs_Va_tab]
+    W, sin_th = aircraft.mass * g, np.sin(np.radians(sp.theta_max))
+    E_max_tab = [(thrust(1.0, v, aircraft) - thrust(t[2], v, aircraft)) / W
+                 for v, t in zip(sp.tecs_Va_tab, trims)]
+    E_min_tab = [(thrust(0.0, v, aircraft) - thrust(t[2], v, aircraft)) / W
+                 for v, t in zip(sp.tecs_Va_tab, trims)]
+    tecs = TECSParams(
+        K_h=sp.tecs_K_h, K_V=sp.tecs_K_V,
+        acc_max=sp.tecs_margin * k["E_max"] * g,
+        w=sp.tecs_w, tau_f=tf, K_E=K_E,
+        thr_Kp=0.0, thr_Ki=sp.tecs_w_T * K_E,
+        pit_Kp=0.0, pit_Ki=sp.tecs_w_B / 2,
+        theta_max=np.radians(sp.theta_max), theta_min=-np.radians(sp.theta_max),
+        Va_min=sp.tecs_Va_min * k["Va_stall"], Va_band=sp.tecs_Va_band,
+        Va_tab=tuple(sp.tecs_Va_tab), thr_tab=tuple(float(t[2]) for t in trims),
+        alpha_tab=tuple(float(t[0]) for t in trims),
+        # Пределы угла траектории на каждой скорости: набор — по тяге на газе 1 и
+        # пределу тангажа, снижение — по газу 0 (при постоянной скорости γ = Ė) и пределу
+        gamma_climb_tab=tuple(sp.tecs_margin * min(Ex, sin_th) for Ex in E_max_tab),
+        gamma_sink_tab=tuple(sp.tecs_margin * min(-En, sin_th) for En in E_min_tab))
+
     gains = dict(tau_phi=sp.tau_phi, FF_p=FF_p, kp_p=kp_p, ki_p=ki_p, K_chi=K_chi,
                  k_mix=k_mix,
                  kp_beta=kp_beta, ki_beta=ki_beta,
                  kp_theta=kp_theta, kd_theta=kd_theta, K_theta_DC=K_theta_DC,
                  Kq=Kq, Ktheta=Ktheta, w_h=w_h, KH=KH, kp_h=kp_h, ki_h=ki_h,
-                 kp_V=kp_V, ki_V=ki_V)
+                 kp_V=kp_V, ki_V=ki_V, K_E=K_E)
 
     # Предел q_ref каскада не должен отрезать руль: при Kq·q_max < δe_max каскад
     # перестаёт быть ПД-законом B&M (ЛА «застревал» в наборе — полёт 2026-10-07).
@@ -196,7 +252,7 @@ def design_sau(aircraft, Va: float, specs: SAUSpecs = None) -> SAUDesign:
                                    phi_ref_rate=np.radians(sp.phi_ref_rate),
                                    beta_Kp=kp_beta, beta_Ki=ki_beta, da_dr_mix=k_mix)
     return SAUDesign(Va=Va, coeffs=k, gains=gains, pitch=pitch, speed=speed,
-                     lateral=lateral, roll=roll, altitude=altitude, KH=KH,
+                     lateral=lateral, roll=roll, altitude=altitude, tecs=tecs, KH=KH,
                      specs=sp)
 
 
@@ -207,9 +263,10 @@ def print_design(d: SAUDesign):
           f"δe* = {np.degrees(k['de_trim']):.2f}°  δt* = {k['thr_trim']:.3f}")
     print("Объект:  " + "  ".join(f"{n}={k[n]:.4g}" for n in
           ("a_phi1", "a_phi2", "a_beta1", "a_beta2", "a_theta1", "a_theta2",
-           "a_theta3", "a_V1", "a_V2")))
+           "a_theta3", "a_V1", "a_V2", "E_max", "E_min", "Va_stall")))
     for n, v in gn.items():
         print(f"  {n:<14} {v:10.4f}")
+    print("TECS:", d.tecs)
 
 
 if __name__ == "__main__":

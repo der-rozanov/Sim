@@ -208,7 +208,9 @@ class Bench(Game):
         self.sau.pitch.aircraft = dataclasses.replace(aircraft)
 
     def _make_sau(self):
-        params = SAUParams(pitch=PitchControlParams(Va_ref=self.cfg.Va0),
+        # Блок-схемы окна стенда — раздельные контуры высоты и скорости (lon = "split");
+        # вкладка TECS — отдельной доработкой
+        params = SAUParams(lon="split", pitch=PitchControlParams(Va_ref=self.cfg.Va0),
                            h_min=H_MIN, h_max=H_MAX)
         return BenchSAU(self.ac, (self.alpha_trim, self.de_trim, self.thr_trim),
                         TruthSensors(), params, nav=self.nav, prot=self.prot)

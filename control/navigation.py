@@ -85,6 +85,7 @@ class WaypointNavigator:
         self.chi_q = 0.0         # направление участка (касательной к окружности), рад
         self.kappa = 0.0         # кривизна участка λ/ρ, 1/м (0 — прямая): упреждение
                                  # крена в LateralController.set_course (как L1 / NPFG)
+        self.h_slope = 0.0       # уклон h_ref вдоль участка dh/ds (0 — на дугах): упреждение ḣ
         self.chi_ref = 0.0
         self.h_ref = 0.0
 
@@ -215,6 +216,7 @@ class WaypointNavigator:
             chi_ref = chi_q - pr.chi_inf * (2.0 / np.pi) * np.arctan(pr.k_path * self.e_py)
             s = np.clip(r @ q / L, 0.0, 1.0)                  # доля пройденного участка
             self.h_ref = a[2] + s * (b[2] - a[2])
+            self.h_slope = (b[2] - a[2]) / L if 0.0 < r @ q < L else 0.0
             self.kappa = 0.0
         else:                                                 # дуга или кружение
             cn, ce, rho, lam = self.circle
@@ -224,6 +226,7 @@ class WaypointNavigator:
             chi_ref = varphi + lam * (np.pi / 2 + np.arctan(pr.k_orbit * (d - rho) / rho))
             self.e_py = d - rho
             self.kappa = lam / rho
+            self.h_slope = 0.0
             self.h_ref = (self.wps[-1] if self.mode == "orbit" else self.wps[self.idx])[2]
         self.chi_ref = wrap_angle(chi_ref)
         return self.chi_ref, self.h_ref
