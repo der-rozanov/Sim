@@ -160,7 +160,7 @@ docs/       документация
 | | |
 |---|---|
 | [docs/README.md](docs/README.md) | карта документации |
-| [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | руководство пользователя (в работе) |
+| [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | руководство пользователя |
 | [docs/physics.md](docs/physics.md) | уравнения 6DOF, системы координат, знаки |
 | [docs/aerodynamics.md](docs/aerodynamics.md) | аэродинамические коэффициенты, собственные движения |
 | [docs/control.md](docs/control.md) | САУ и навигация: структура, расчёт коэффициентов |
