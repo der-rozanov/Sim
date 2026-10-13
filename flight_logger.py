@@ -24,25 +24,16 @@
 
     log = run(controls_fn, aircraft, wind_params, cfg, state0=s0)
 
-    logger.save(
-        log,
-        path="results/s4.flightlog",
-        # Опциональные каналы — NaN, если не переданы
-        alpha_probe=alpha_probe_buf,   # list или array, рад
-        alpha_est=alpha_est_buf,       # list или array, рад
-        h_ref=h_ref_buf,               # list или array, м
-        theta_ref=theta_ref_buf,       # list или array, рад
-        # Парный прогон (второй агент, те же индексы t)
-        paired={
-            "label": "без зонда",
-            "alpha_probe": ...,
-            "alpha_est":   ...,
-            "delta_e":     ...,
-            "throttle":    ...,
-            "h":           ...,
-            "Va":          ...,
-        },
+    path = logger.save(
+        log,                           # path=None — results/Sim_{сценарий}_{время}.flightlog
+        # Опциональные каналы уставок — list/array по шагам или число; NaN, если не переданы
+        h_ref=h_ref_buf,               # м
+        theta_ref=theta_ref_buf,       # рад
+        Va_ref=16.0,                   # м/с
+        chi_ref=chi_ref_buf,           # рад, путевой угол
+        waypoints=[(N, E, h), ...],    # точки маршрута, м (в метаданные)
     )
+    # Показ: viz/viewer.py — show_flightlog(path)
 
 Загрузка:
     from flight_logger import load_log
@@ -59,7 +50,8 @@ import numpy as np
 
 from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
 from runner import Log
-from sim.state import THETA, Q, H, X, U, W, V, P, R, PHI, PSI, Y, DE, DA, DR
+from sim.state import THETA, Q, H, X, U, W, V, P, R, PHI, PSI, Y, DE, DT, DA, DR, earth_velocity
+from sim.dynamics import thrust
 
 # Папка для логов по умолчанию — results/ рядом с flight_logger.py
 _DEFAULT_RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
@@ -116,9 +108,11 @@ def _compute_alert(alpha_rad: np.ndarray, aircraft: AircraftParams) -> np.ndarra
 
 
 def _pad_or_slice(buf, n: int, fill=np.nan) -> np.ndarray:
-    """Привести список/массив к длине n (обрезать или дополнить NaN)."""
+    """Привести список/массив к длине n (обрезать или дополнить NaN); число — постоянный канал."""
     if buf is None:
         return np.full(n, fill)
+    if np.ndim(buf) == 0:
+        return np.full(n, float(buf))
     arr = np.asarray(buf, dtype=float)
     if len(arr) >= n:
         return arr[:n]
@@ -164,7 +158,10 @@ class FlightLogger:
         alpha_est=None,
         h_ref=None,
         theta_ref=None,
-        paired: dict = None,
+        Va_ref=None,
+        chi_ref=None,
+        phi_ref=None,
+        waypoints=None,
     ) -> str:
         """
         Сохранить лог в файл.
@@ -174,11 +171,15 @@ class FlightLogger:
         log          : Log из runner.run()
         path         : путь к файлу; если None — генерируется автоматически:
                        results/Sim_{сценарий}_{ЧЧ-ММ-СС}_{ГГГГ-ММ-ДД}.flightlog
-        alpha_probe  : list/array, измерения зонда, рад  (опционально)
-        alpha_est    : list/array, косвенная оценка УА, рад (опционально)
-        h_ref        : list/array, уставка высоты, м (опционально)
-        theta_ref    : list/array, уставка тангажа, рад (опционально)
-        paired       : dict с данными второго агента парного прогона (опционально)
+        Уставки и измерения (опционально; list/array по шагам или одно число):
+        h_ref        : уставка высоты, м
+        theta_ref    : уставка тангажа, рад
+        Va_ref       : уставка воздушной скорости, м/с
+        chi_ref      : уставка путевого угла, рад
+        phi_ref      : уставка крена, рад
+        alpha_probe  : измерения зонда УА, рад (архивные сценарии archive/probe)
+        alpha_est    : косвенная оценка УА, рад (архивные сценарии archive/probe)
+        waypoints    : точки маршрута [(N, E, h), ...], м — в метаданные
 
         Returns
         -------
@@ -188,14 +189,17 @@ class FlightLogger:
             path = _auto_path(self._scenario, self._results_dir)
         n = len(log.t)
         ac = self._aircraft
-        dt = log.t[1] - log.t[0] if n > 1 else self._cfg.dt
 
         # ---- Производные каналы ----------------------------------------
         alpha_true = log.alpha                         # рад
         gamma      = log.state[:, THETA] - alpha_true  # угол траектории по воздуху
 
-        P_thrust = log.controls[:, 1] * log.Va        # нормированная мощность [о.е.*м/с]
-        E_thrust  = np.cumsum(P_thrust) * dt           # нарастающий итог
+        # путевой угол χ = atan2(V_восток, V_север) по земной скорости
+        V_earth = np.array([earth_velocity(s) for s in log.state])
+        chi     = np.arctan2(V_earth[:, 1], V_earth[:, 0])
+        # полезная мощность винта P = T·Va, Вт (тяга — модель ВМГ sim.dynamics)
+        T_prop = np.array([thrust(c[DT], Va, ac) for c, Va in zip(log.controls, log.Va)])
+        P_prop = T_prop * log.Va
 
         alert = _compute_alert(alpha_true, ac)
 
@@ -204,6 +208,9 @@ class FlightLogger:
         ae_arr  = _pad_or_slice(alpha_est,   n)
         hr_arr  = _pad_or_slice(h_ref,       n)
         thr_arr = _pad_or_slice(theta_ref,   n)
+        var_arr = _pad_or_slice(Va_ref,      n)
+        chr_arr = _pad_or_slice(chi_ref,     n)
+        phr_arr = _pad_or_slice(phi_ref,     n)
 
         # ---- Метаданные (JSON) -----------------------------------------
         trim_alpha, trim_de, trim_thr = (
@@ -258,6 +265,7 @@ class FlightLogger:
                 "throttle":  float(trim_thr)               if trim_thr   is not None else None,
             },
             "events": self._events,
+            "waypoints": [[float(c) for c in wp] for wp in (waypoints or [])],
             "alert_levels": {
                 "NORM": 0, "WARN": 1, "CRIT": 2, "STALL": 3,
                 "thresholds_deg": {
@@ -297,19 +305,25 @@ class FlightLogger:
                 "E_kin":      "кинетическая энергия, Дж",
                 "E_pot":      "потенциальная энергия, Дж",
                 "E_mech":     "полная механическая энергия, Дж",
-                "P_thrust":   "нормированная мощность двигателя, о.е.*м/с",
-                "E_thrust":   "накопленная энергия двигателя, о.е.*м",
+                "chi":        "путевой угол (по земной скорости), рад",
+                "T_prop":     "тяга винта, Н",
+                "P_prop":     "полезная мощность винта T·Va, Вт",
                 "alert":      "индикатор УА: 0=НОРМ 1=ПРЕД 2=КРИТ 3=СРЫВ",
                 "alpha_probe":"измерение зонда, рад (NaN если нет зонда)",
                 "alpha_est":  "косвенная оценка УА (ИНС+GPS), рад (NaN если нет)",
                 "h_ref":      "уставка высоты, м (NaN если нет контура высоты)",
                 "theta_ref":  "уставка тангажа, рад (NaN если нет)",
+                "Va_ref":     "уставка воздушной скорости, м/с (NaN если нет)",
+                "chi_ref":    "уставка путевого угла, рад (NaN если нет)",
+                "phi_ref":    "уставка крена, рад (NaN если нет)",
             },
             "has_probe":    not np.all(np.isnan(ap_arr)),
             "has_est":      not np.all(np.isnan(ae_arr)),
             "has_h_ref":    not np.all(np.isnan(hr_arr)),
             "has_theta_ref":not np.all(np.isnan(thr_arr)),
-            "has_paired":   paired is not None,
+            "has_Va_ref":   not np.all(np.isnan(var_arr)),
+            "has_chi_ref":  not np.all(np.isnan(chr_arr)),
+            "has_phi_ref":  not np.all(np.isnan(phr_arr)),
         }
 
         # ---- Сборка массивов -------------------------------------------
@@ -342,28 +356,23 @@ class FlightLogger:
             E_kin       = log.E_kin,
             E_pot       = log.E_pot,
             E_mech      = log.E_total,
-            P_thrust    = P_thrust,
-            E_thrust    = E_thrust,
+            chi         = chi,
+            T_prop      = T_prop,
+            P_prop      = P_prop,
             alert       = alert,
             alpha_probe = ap_arr,
             alpha_est   = ae_arr,
             h_ref       = hr_arr,
             theta_ref   = thr_arr,
+            Va_ref      = var_arr,
+            chi_ref     = chr_arr,
+            phi_ref     = phr_arr,
         )
 
         if getattr(log, "controls_cmd", None) is not None:   # команды до приводов рулей
             arrays["delta_e_cmd"] = log.controls_cmd[:, DE]
             arrays["delta_a_cmd"] = log.controls_cmd[:, DA]
             arrays["delta_r_cmd"] = log.controls_cmd[:, DR]
-
-        # ---- Парный прогон ---------------------------------------------
-        if paired is not None:
-            for key, val in paired.items():
-                if key == "label":
-                    continue
-                arr = _pad_or_slice(val, n) if not isinstance(val, np.ndarray) else val[:n]
-                arrays[f"paired_{key}"] = arr
-            meta["paired_label"] = paired.get("label", "парный прогон")
 
         # np.savez_compressed добавляет .npz если расширение не .npz —
         # сохраняем в tmp-путь и переименовываем в запрошенный path.
@@ -427,7 +436,8 @@ def print_log_info(data: dict) -> None:
         print(f"События :")
         for ev in events:
             print(f"  t={ev['t']:.1f} с — {ev['label']}")
-    flags = ["has_probe", "has_est", "has_h_ref", "has_theta_ref", "has_paired"]
+    flags = ["has_probe", "has_est", "has_h_ref", "has_theta_ref",
+             "has_Va_ref", "has_chi_ref", "has_phi_ref"]
     active = [f for f in flags if m.get(f)]
     if active:
         print(f"Доп. каналы : {active}")
@@ -476,7 +486,9 @@ def _cli_inspect(path: str, show_stats: bool = False) -> None:
         "has_est":       "ИНС+GPS оценка",
         "has_h_ref":     "уставка высоты",
         "has_theta_ref": "уставка тангажа",
-        "has_paired":    "парный прогон",
+        "has_Va_ref":    "уставка скорости",
+        "has_chi_ref":   "уставка курса",
+        "has_phi_ref":   "уставка крена",
     }
     active = [lbl for f, lbl in flags.items() if m.get(f)]
     print(f"  Доп. данные: {', '.join(active) if active else 'нет'}")

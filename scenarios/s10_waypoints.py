@@ -30,6 +30,7 @@ from sim.wind import wind
 from runner import run, trim_state
 from control.navigation import WaypointNavigator, NavParams
 from flight_logger import FlightLogger
+from viz.viewer import show_flightlog
 from lateral_common import FullSAU
 
 # ------------------------------------------------------------------
@@ -68,10 +69,12 @@ def simulate(wind_params, label, nav_params=None):
     passed = [int(np.argmax((idx > k) | (mode == "orbit"))) for k in range(len(WAYPOINTS))]
     events = [{"t": round(log.t[i], 2), "label": f"точка {k + 1}", "color": "dodgerblue"}
               for k, i in enumerate(passed) if i > 0]
-    FlightLogger(scenario="С10", description=f"полёт по точкам — {label}",
-                 aircraft=aircraft, wind_params=wind_params, cfg=cfg,
-                 events=events).save(log)
-    return log, sau, np.array(epy), mode, idx
+    path = FlightLogger(scenario="С10", description=f"полёт по точкам — {label}",
+                        aircraft=aircraft, wind_params=wind_params, cfg=cfg,
+                        events=events).save(log, h_ref=sau.h_ref_buf, theta_ref=sau.theta_ref_buf,
+                                            Va_ref=cfg.Va0, chi_ref=sau.chi_ref_buf,
+                                            phi_ref=sau.phi_ref_buf, waypoints=WAYPOINTS)
+    return path, log, sau, np.array(epy), mode, idx
 
 
 def report(label, log, sau, epy, mode, idx):
@@ -115,6 +118,10 @@ def report(label, log, sau, epy, mode, idx):
 
 
 if __name__ == "__main__":
+    paths = []
     for wp, label in [(WindParams(), "штиль"),
                       (WindParams(Vw_cross=VW), f"ветер {VW:.0f} м/с на восток")]:
-        report(label, *simulate(wp, label))
+        path, *res = simulate(wp, label)
+        report(label, *res)
+        paths.append(path)
+    show_flightlog(*paths, speed=10.0)   # два окна: штиль и ветер

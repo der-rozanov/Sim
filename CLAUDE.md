@@ -75,11 +75,11 @@ runner.py             — главный цикл: run(), Log, compute_trim(), t
 flight_logger.py      — FlightLogger, load_log(), print_log_info()
 
 viz/                  — отображение (принимает Log, не знает физики)
-    plotting.py       — plot_dynamics/trajectory/energy/integrator_check()
-    animate.py        — animate_log()  [силуэт ЛА, анимация по Log]
     aircraft3d.py     — 3D-модели ЛА (процедурный low-poly, по мотивам Cessna 172);
                         реестр MODELS: тип ЛА (AircraftParams.name) → модель
-    viewer.py         — FlightLogViewer; CLI: python viz/viewer.py [файл.flightlog]
+    viewer.py         — ЕДИНСТВЕННЫЙ 2D-показ: show_flightlog(path, ...) / FlightLogViewer;
+                        панели по логу (продольные; + вид сверху, χ, φ, β, δa, δr при манёвре
+                        по курсу); CLI: python viz/viewer.py [файл.flightlog] [--static] [--save]
     world3d.py        — мир 3D: карты default (10×10 км: ВПП, река, озеро, деревня, холм,
                         леса), kainki (спутниковый снимок 4×4 км на рельефе SRTM) и
                         kainki_osm (те же 4×4 км в стиле default по контурам OSM),
@@ -172,8 +172,7 @@ from control.controllers import PitchController, PitchControlParams
 from control.sensors     import measure_gyro, measure_airspeed, ...
 from runner       import run, compute_trim, trim_state, print_summary
 from flight_logger import FlightLogger
-from viz.animate  import animate_log
-from viz.plotting import plot_dynamics
+from viz.viewer   import show_flightlog
 ```
 
 ## Опорные файлы (в репозитории)
@@ -218,9 +217,9 @@ from viz.plotting import plot_dynamics
    `runner.py` / `flight_logger.py` → `viz/` (отображение) → `scenarios/` (прогоны).
    Каждый слой знает только о нижележащих. `viz/` не импортирует `control/`.
    Боковой канал добавляется расширением вектора состояния, не переписыванием продольного.
-6. Визуализация полностью отделена от прогона: сценарий отдаёт `Log` в `viz.*`
-   или сохраняет `.flightlog` через `FlightLogger`. Анимацию и графики менять
-   только в `viz/`, не трогая сценарии.
+6. Визуализация полностью отделена от прогона: сценарий сохраняет `.flightlog`
+   через `FlightLogger` (с уставками *_ref) и показывает его `viz.viewer.show_flightlog`.
+   Своих графиков в сценариях нет; панели и анимацию менять только в `viz/viewer.py`.
 
 ## Терминология (глоссарий проекта — единообразно в коде и комментариях)
 
@@ -283,8 +282,7 @@ from viz.plotting import plot_dynamics
   `delta_e *= clip((Va_ref/Va_meas)², gs_scale_min, gs_scale_max)` — компенсирует
   падение эффективности руля высоты при Va ≠ Va_ref. Va_ref = скорость НАСТРОЙКИ ПИД
   (не полёта!). По умолчанию ВКЛЮЧЁН (`gain_scheduling: bool = True` в коде).
-- Инфраструктура: `runner.py`, `flight_logger.py` (.flightlog / npz), `viz/` (plotting,
-  animate, viewer)
+- Инфраструктура: `runner.py`, `flight_logger.py` (.flightlog / npz), `viz/viewer.py`
 - Сценарии s1–s9, p7–p10: балансировка, кабрирование, пикирование, срыв с индикацией,
   контроль высоты, контроль Va, сравнение оценок УА, метрика энергии, парный
   прогон, АУА, LQR, координированный разворот, боковой ветер
@@ -426,8 +424,7 @@ git checkout -- checks/*.png      # check_*.py перегенерируют PNG 
   φ_ref = atan(Vg·(Vg·κ + K_χ·e_χ)/g), κ — кривизна от навигатора. Коэффициенты — расчёт
   tuning.py (docs/control.md 11.4). meas LateralController требует 'Vg' и 'Va';
   RollHold.step(phi, p, Va, dt).
-- Сценарии s8/s9 выводят только текст + .flightlog; графиков бокового канала
-  в viz/ пока нет (по указанию автора графику не трогали).
+- Графики бокового канала (вид сверху, χ, φ, β, δa, δr) — viz/viewer.py (2026-10-13).
 - `CY_dr = +0.19` (2-е изд. B&M; в табл. E.2 1-го изд. было −0.17 — РЕШ-15).
 - Блок Б2 (открытый контур) закрыт проверкой `checks/check_lateral.py`.
 - Блок Б3 (боковая САУ) — s8, s9. Дальше (Б4, по решению автора): УС зонд vs
@@ -466,4 +463,3 @@ git checkout -- checks/*.png      # check_*.py перегенерируют PNG 
 - `Log.E_kin` считается по скорости без ветра (`total_energy(state, aircraft)` в runner)
   — при ветре это кинетическая энергия по земной, а не воздушной скорости.
 - `control/lqr.py` использует scipy (DARE) — исключение из правила «только numpy».
-- `viz/` не знает о боковом канале (графиков φ, ψ, β, δa, δr, вида сверху нет).
