@@ -216,10 +216,6 @@ class SensorParams:
     gyro_noise: float = 0.002   # рад/с, СКО (ADXRS-450)
     gyro_bias:  float = 0.0     # рад/с
 
-    # Акселерометр
-    accel_noise: float = 0.025  # м/с² (ADXL-325, ~0.0025g)
-    accel_bias:  float = 0.0
-
     # Барометр (высота)
     baro_noise: float = 0.5     # м
     baro_bias:  float = 0.0
