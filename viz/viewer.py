@@ -283,6 +283,20 @@ class FlightLogViewer:
         self._info.set_text(text)
         self._info.get_bbox_patch().set_facecolor(ALERT_BG[lv])
 
+    def _draw_at(self, i):
+        """Кадр анимации: всё, что пройдено к отсчёту i."""
+        ts = self.t[:i + 1]
+        self._show_frame(i)
+        for line, point, y in self._dyn:
+            line.set_data(ts, y[:i + 1])
+            point.set_data([self.t[i]], [y[i]])
+        for c in self._cursors:
+            c.set_xdata([self.t[i]])
+
+    def goto(self, t: float):
+        """Показать момент t, с (для снимков: build(animated=True), goto(t), fig.savefig)."""
+        self._draw_at(int(np.searchsorted(self.t, t)))
+
     def _start_animation(self):
         dt = self.t[1] - self.t[0] if len(self.t) > 1 else 0.01
         stride = max(1, int(round(self.speed / self.fps / dt)))
@@ -291,16 +305,8 @@ class FlightLogViewer:
             + [a for line, point, _ in self._dyn for a in (line, point)]
 
         def update(fn):
-            if self._paused:
-                return artists
-            i = frames[fn]
-            ts = self.t[:i + 1]
-            self._show_frame(i)
-            for line, point, y in self._dyn:
-                line.set_data(ts, y[:i + 1])
-                point.set_data([self.t[i]], [y[i]])
-            for c in self._cursors:
-                c.set_xdata([self.t[i]])
+            if not self._paused:
+                self._draw_at(frames[fn])
             return artists
 
         def on_key(event):
