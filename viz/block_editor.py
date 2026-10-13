@@ -12,7 +12,12 @@ scenarios/BlockLab3D.py). Работает в ОТДЕЛЬНОМ процесс�
               снова автоматически;
               двойной щелчок по блоку — параметры; Delete — удалить выделенное;
               правая кнопка — меню блока; на проводах — живые значения сигналов;
+              масштаб — Ctrl+колесо (вокруг курсора), Ctrl+= / Ctrl+− / Ctrl+0,
+              кнопки «−», «+», «Вписать»; средняя кнопка — сдвиг схемы;
     снизу   — осциллограф: по полосе на каждый блок «Осциллограф» (до 4).
+
+Масштаб: модель схемы (места блоков, изломы проводов) — в координатах схемы,
+холст рисуется в них и умножается на z (canvas.scale); мышь — обратно делением на z.
 
 Связь — две очереди multiprocessing (см. scenarios/BlockLab3D.py):
     q_cmd  (окно → 3D): ("scheme", схема) | ("on", bool) | уставки и толчки
@@ -31,15 +36,19 @@ from tkinter import ttk, filedialog, messagebox
 from collections import deque
 
 W_SCHEME, H_SCHEME = 960, 460          # видимая часть схемы, пикс
-SCROLL = (0, 0, 1900, 1200)             # размер холста схемы, пикс
+SCROLL = (0, 0, 1900, 1200)             # мин. размер холста схемы (при z = 1), пикс
+SCROLL_PAD = 400                        # запас холста за крайними блоками, пикс
+Z_MIN, Z_MAX, Z_STEP = 0.25, 3.0, 1.2   # пределы и шаг масштаба
 W_SCOPE, H_SCOPE = 960, 290
 SCOPE_WIN = 20.0                        # окно осциллографа, с
 TICK_MS = 40                            # период обновления окна, мс (~25 Гц)
 GRID = 10                               # шаг привязки блоков, пикс
 
-BW = 112                                # ширина блока, пикс
-BW_TYPE = {"Sum": 46, "Product": 56, "Gain": 80, "Input": 100, "Output": 100, "Const": 90,
-           "AngleErr": 128, "VaScale": 116, "LeadLag": 128}
+BW = 112                                # ширина блока, пикс (по длине названия)
+BW_TYPE = {"Sum": 46, "Product": 56, "Gain": 140, "Input": 100, "Output": 100, "Const": 90,
+           "Sine": 100, "D": 120, "AngleErr": 120, "VaScale": 136, "TurnBank": 128,
+           "DeadZone": 176, "RateLim": 176, "Aperiodic": 156, "Washout": 160,
+           "LeadLag": 156, "Delay": 140}
 # Трассировка проводов
 STUB = 6                                # мин. отступ излома от порта, пикс
 CLEAR = 4                               # зазор провода до блока, пикс
@@ -52,8 +61,9 @@ FONT_B = ("Segoe UI", 9, "bold")
 FONT_S = ("Segoe UI", 8)
 FONT_V = ("Consolas", 8)
 C_LINE, C_SEL, C_WIRE = "#333", "#d62728", "#555"
-C_GROUP = {"Источники": "#e3f1e3", "Регуляторы": "#e6eefb", "Математика": "#f4f4f4",
-           "Нелинейности": "#fff4e0", "Динамические звенья": "#f3e8fb", "Приёмники": "#fde8e8"}
+C_GROUP = {"Источники сигналов": "#e3f1e3", "Регуляторы": "#e6eefb",
+           "Математические операции": "#f4f4f4", "Нелинейные звенья": "#fff4e0",
+           "Линейные звенья": "#f3e8fb", "Приёмники": "#fde8e8"}
 C_TRACE = ["#d62728", "#1f77b4", "#2ca02c"]
 
 
@@ -82,6 +92,8 @@ class Editor:
         self.data = deque()                 # (t, {id осциллографа: [входы]})
         self.val_items = {}                 # id блока → подпись значения на выходе
         self.file = None
+        self.z = 1.0                        # масштаб схемы
+        self.region = SCROLL
 
         root.title("Конструктор САУ — редактор схемы")
         self._build()
@@ -100,11 +112,26 @@ class Editor:
         self.btn_on = tk.Button(bar, text="Схема: ВЫКЛ", font=FONT_B, width=14, command=self._toggle_on)
         self.btn_on.pack(side="left", padx=6)
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=6)
-        for name in self.templates:
-            tk.Button(bar, text=name, font=FONT, command=lambda n=name: self._template(n)).pack(side="left")
-        ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=6)
-        tk.Button(bar, text="Открыть…", font=FONT, command=self._open).pack(side="left")
+        mb = tk.Menubutton(bar, text="Шаблоны ▾", font=FONT, relief="raised", bd=1, padx=6)
+        menu = tk.Menu(mb, tearoff=0, font=FONT)
+        group = None
+        for name in self.templates:                      # «Заготовка: …» | «Штатная САУ: …»
+            g = name.split(":")[0]
+            if group is not None and g != group:
+                menu.add_separator()
+            group = g
+            menu.add_command(label=name, command=lambda n=name: self._template(n))
+        mb.configure(menu=menu)
+        mb.pack(side="left")
+        tk.Button(bar, text="Открыть…", font=FONT, command=self._open).pack(side="left", padx=(6, 0))
         tk.Button(bar, text="Сохранить…", font=FONT, command=self._save).pack(side="left", padx=2)
+        ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=6)
+        tk.Button(bar, text="−", font=FONT_B, width=2, command=lambda: self._zoom(1 / Z_STEP)).pack(side="left")
+        self.lbl_zoom = tk.Label(bar, text="100 %", font=FONT, bg="white", width=6)
+        self.lbl_zoom.pack(side="left")
+        self.lbl_zoom.bind("<Button-1>", lambda e: self._zoom(1 / self.z))
+        tk.Button(bar, text="+", font=FONT_B, width=2, command=lambda: self._zoom(Z_STEP)).pack(side="left")
+        tk.Button(bar, text="Вписать", font=FONT, command=self._fit).pack(side="left", padx=2)
         self.lbl_status = tk.Label(bar, text="", font=FONT_B, bg="white", anchor="w")
         self.lbl_status.pack(side="left", padx=10, fill="x", expand=True)
 
@@ -114,9 +141,13 @@ class Editor:
         for text, kind, val in [("θ_ref −5°", "theta", -5.0), ("θ_ref +5°", "theta", 5.0),
                                 ("h_ref −10 м", "h", -10.0), ("h_ref +10 м", "h", 10.0),
                                 ("Va_ref −1", "va", -1.0), ("Va_ref +1", "va", 1.0),
-                                ("χ_ref −30°", "chi", -30.0), ("χ_ref +30°", "chi", 30.0),
-                                ("Толчок δe", "kick", "de")]:
+                                ("χ_ref −30°", "chi", -30.0), ("χ_ref +30°", "chi", 30.0)]:
             tk.Button(bar2, text=text, font=FONT, command=lambda k=kind, v=val: self._send(k, v)
+                      ).pack(side="left", padx=1)
+        ttk.Separator(bar2, orient="vertical").pack(side="left", fill="y", padx=6)
+        tk.Label(bar2, text="Импульс:", font=FONT, bg="white").pack(side="left")
+        for text, act in [("δe 3°·1 с", "de"), ("δa 5°·0.5 с", "da"), ("δr 5°·1 с", "dr")]:
+            tk.Button(bar2, text=text, font=FONT, command=lambda a=act: self._send("kick", a)
                       ).pack(side="left", padx=1)
         ttk.Separator(bar2, orient="vertical").pack(side="left", fill="y", padx=6)
         tk.Label(bar2, text="Режим САУ:", font=FONT, bg="white").pack(side="left")
@@ -145,7 +176,8 @@ class Editor:
             "Блок — перетащить мышью · провод — от выхода ● к входу ▶ (провод за вход — перенести) · "
             "участок провода — перетащить (пунктир — проложен вручную), двойной щелчок — снова авто · "
             "двойной щелчок по блоку — параметры · Delete — удалить · правая кнопка — меню · "
-            "колесо / Shift+колесо — прокрутка")).grid(row=2, column=0, sticky="w")
+            "колесо / Shift+колесо — прокрутка · Ctrl+колесо — масштаб · средняя кнопка — сдвиг"
+        )).grid(row=2, column=0, sticky="w")
 
         self.sc = tk.Canvas(r, width=W_SCOPE + 190, height=H_SCOPE, bg="white", highlightthickness=0)
         self.sc.pack(fill="x")
@@ -159,6 +191,15 @@ class Editor:
         cv.bind("<Motion>", self._hover)
         cv.bind("<MouseWheel>", lambda e: cv.yview_scroll(-e.delta // 120, "units"))
         cv.bind("<Shift-MouseWheel>", lambda e: cv.xview_scroll(-e.delta // 120, "units"))
+        cv.bind("<Control-MouseWheel>",
+                lambda e: self._zoom(Z_STEP if e.delta > 0 else 1 / Z_STEP, e.x, e.y))
+        cv.bind("<ButtonPress-2>", lambda e: cv.scan_mark(e.x, e.y))
+        cv.bind("<B2-Motion>", lambda e: cv.scan_dragto(e.x, e.y, gain=1))
+        for key in ("<Control-plus>", "<Control-equal>", "<Control-KP_Add>"):
+            r.bind(key, lambda e: self._zoom(Z_STEP))
+        for key in ("<Control-minus>", "<Control-KP_Subtract>"):
+            r.bind(key, lambda e: self._zoom(1 / Z_STEP))
+        r.bind("<Control-0>", lambda e: self._zoom(1 / self.z))
         r.bind("<Delete>", lambda e: self._delete_sel())
         r.bind("<Escape>", lambda e: self._cancel_place())
         r.bind("<Control-Return>", lambda e: self._apply())
@@ -166,22 +207,29 @@ class Editor:
         r.bind("<Control-o>", lambda e: self._open())
 
     def _palette(self, parent):
-        f = tk.Frame(parent, bg="white")
-        f.pack(side="left", fill="y", padx=(4, 2))
+        """Библиотека — дерево: группа → блоки; щелчок по блоку — ставить на схему."""
+        st = ttk.Style(self.root)
+        st.configure("Lib.Treeview", font=FONT_S, rowheight=19, indent=10)
+        st.configure("Lib.Treeview.Heading", font=FONT_B)
+        n_rows = len(self.lib) + len({d["group"] for d in self.lib.values()})
+        tree = ttk.Treeview(parent, show="tree", style="Lib.Treeview", selectmode="none",
+                            height=n_rows)
+        tree.column("#0", width=190, stretch=False)
+        tree.pack(side="left", fill="y", padx=(4, 2), pady=(2, 0))
         groups = {}
+        for grp, color in C_GROUP.items():
+            groups[grp] = tree.insert("", "end", text=grp, open=True, tags=("grp",))
+            tree.tag_configure(grp, background=color)
+        tree.tag_configure("grp", font=FONT_B)
         for name, d in self.lib.items():
-            groups.setdefault(d["group"], []).append(name)
-        row = 0
-        for grp, names in groups.items():                # группа — заголовок и кнопки в 2 колонки
-            tk.Label(f, text=grp, font=FONT_B, bg="white", anchor="w").grid(
-                row=row, column=0, columnspan=2, sticky="w", pady=(4, 0))
-            row += 1
-            for k, name in enumerate(names):
-                tk.Button(f, text=self.lib[name]["title"], font=FONT_S, anchor="w", pady=0,
-                          bg=C_GROUP.get(grp, "white"), relief="groove", width=13,
-                          command=lambda n=name: self._start_place(n)
-                          ).grid(row=row + k // 2, column=k % 2, sticky="ew")
-            row += (len(names) + 1) // 2
+            parent_id = groups.get(d["group"]) or tree.insert("", "end", text=d["group"], open=True)
+            tree.insert(parent_id, "end", iid=name, text=d["title"], tags=(d["group"],))
+
+        def click(e):
+            item = tree.identify_row(e.y)
+            if item in self.lib:
+                self._start_place(item)
+        tree.bind("<ButtonRelease-1>", click)
 
     # =====================================================================
     # Модель схемы
@@ -209,7 +257,17 @@ class Editor:
 
     def _size(self, b):
         n = self._n_in(b)
-        return BW_TYPE.get(b["type"], BW), max(48, PORT * n + 20)
+        w = BW_TYPE.get(b["type"], BW)
+        per_line = max(1, int((w - 8) / 5.5))           # ~символов в строке подписи (8 pt)
+        lines = sum(-(-max(len(s), 1) // per_line) for s in self._summary(b).split("\n"))
+        return w, max(48, PORT * n + 20, 24 + 12 * lines)
+
+    def _signal_name(self, key):
+        """Подпись сигнала «X — описание, ед.» → (обозначение с ед. «X, ед.», описание)."""
+        label = self.cat["inputs"].get(key, key)
+        sym, _, rest = label.partition(" — ")
+        desc, _, unit = rest.rpartition(", ") if ", " in rest else (rest, "", "")
+        return (f"{sym}, {unit}" if unit else sym), desc
 
     def _in_pos(self, b, i):
         w, h = self._size(b)
@@ -237,6 +295,7 @@ class Editor:
                       if w["src"] in self.blocks and w["dst"] in self.blocks]
         self.sel = None
         self._changed()
+        self.root.after(50, lambda: self._fit(z_max=1.0))   # большая схема — целиком
 
     def _scheme(self):
         return {"blocks": [{"id": bid, **copy.deepcopy(b)} for bid, b in self.blocks.items()],
@@ -275,12 +334,15 @@ class Editor:
     def _summary(self, b):
         t, p, lib = b["type"], b["p"], self.lib[b["type"]]
         if t == "Input":
-            return self.cat["inputs"].get(p["signal"], p["signal"])
+            return self._signal_name(p["signal"])[1]
         if t == "Output":
             return "→ " + self.cat["outputs"].get(p["act"], p["act"]).split(" — ")[0]
         if t == "Sat":
-            return f"[{_fmt(float(p['min']))} … {_fmt(float(p['max']))}]"
-        if t in ("Sum", "Product", "AngleErr"):
+            try:
+                return f"[{_fmt(float(p['min']))} … {_fmt(float(p['max']))}]"
+            except (TypeError, ValueError):
+                return "[? … ?]"
+        if t in ("Sum", "Product"):
             return ""
         if t == "Scope":
             return str(p.get("title", ""))
@@ -292,10 +354,14 @@ class Editor:
                 v = float(p[key])
             except (TypeError, ValueError):
                 v = None
-            if key == "y_max" and not v:
+            if key in ("y_max", "i_max") and not v:        # 0 — предела нет
                 continue
+            if key == "rate":                              # обозначение из формулы |dy/dt| ≤ R
+                key = "R"
             items.append(f"{key}={_fmt(v)}")
         lines = [" ".join(items[i:i + 2]) for i in range(0, len(items), 2)]
+        if lib.get("formula"):
+            lines.insert(0, lib["formula"])
         return "\n".join(lines)
 
     # --- трассировка проводов ------------------------------------------------
@@ -463,8 +529,13 @@ class Editor:
                     dots.append((px, py))
         return routes, dots
 
+    def _f(self, font):
+        """Шрифт в масштабе схемы."""
+        return (font[0], max(4, round(font[1] * self.z))) + tuple(font[2:])
+
     def _redraw(self):
-        cv = self.cv
+        """Всё — в координатах схемы, затем canvas.scale на z (шрифты, толщины — сразу в z)."""
+        cv, z = self.cv, self.z
         cv.delete("all")
         self.val_items = {}
         self.routes, dots = self._route_all()
@@ -472,18 +543,61 @@ class Editor:
             kind, pts = self.routes[i]
             sel = self.sel == ("wire", i)
             manual = any(k in w for k in ("xm", "xa", "yb", "xb"))
-            cv.create_line(*pts, fill=C_SEL if sel else C_WIRE, width=3 if sel else 1.5,
+            cv.create_line(*pts, fill=C_SEL if sel else C_WIRE, width=(3 if sel else 1.5) * z,
                            dash=(6, 2) if manual and not sel else (), arrow=tk.LAST,
-                           arrowshape=(8, 10, 4), tags=(f"wire:{i}",))
+                           arrowshape=(8 * z, 10 * z, 4 * z), tags=(f"wire:{i}",))
             # по участку — широкая невидимая линия: легче попасть мышью, участок тянется
             for k in range(0, len(pts) - 2, 2):
-                cv.create_line(*pts[k:k + 4], fill="", width=9,
+                cv.create_line(*pts[k:k + 4], fill="", width=max(9, 9 * z),
                                tags=(f"wire:{i}", f"seg:{i}:{k // 2}"))
         for x, y in dots:
             cv.create_oval(x - 3.5, y - 3.5, x + 3.5, y + 3.5, fill=C_WIRE, outline="")
         for bid, b in self.blocks.items():
             self._draw_block(bid, b)
+        cv.scale("all", 0, 0, z, z)
+        rects = self._rects().values()
+        x1 = max([SCROLL[2]] + [r[2] + SCROLL_PAD for r in rects])
+        y1 = max([SCROLL[3]] + [r[3] + SCROLL_PAD for r in rects])
+        self.region = (0, 0, x1 * z, y1 * z)
+        cv.configure(scrollregion=self.region)
         self._status()
+
+    # --- масштаб --------------------------------------------------------------
+    def _zoom(self, factor, sx=None, sy=None):
+        """Масштаб ×factor; точка окна (sx, sy) (по умолчанию центр) остаётся на месте."""
+        cv = self.cv
+        z = min(max(self.z * factor, Z_MIN), Z_MAX)
+        if abs(z - self.z) < 1e-9:
+            return
+        if sx is None:
+            sx, sy = cv.winfo_width() / 2, cv.winfo_height() / 2
+        mx, my = cv.canvasx(sx) / self.z, cv.canvasy(sy) / self.z    # точка схемы под (sx, sy)
+        self.z = z
+        self._redraw()
+        self._scroll_to(mx * z - sx, my * z - sy)
+
+    def _scroll_to(self, left, top):
+        """Левый верхний угол окна — в точку холста (left, top), пикс."""
+        _, _, w, h = self.region
+        self.cv.xview_moveto(max(0.0, left) / w)
+        self.cv.yview_moveto(max(0.0, top) / h)
+        self.lbl_zoom.configure(text=f"{100 * self.z:.0f} %")
+
+    def _fit(self, z_max=Z_MAX):
+        """Масштаб, при котором схема целиком в окне (не крупнее z_max)."""
+        if not self.blocks:
+            return
+        if self.cv.winfo_height() < 50:              # окно ещё не разложено — позже
+            self.root.after(100, lambda: self._fit(z_max))
+            return
+        rects = list(self._rects().values())
+        x0, y0 = min(r[0] for r in rects) - 20, min(r[1] for r in rects) - 20
+        x1, y1 = max(r[2] for r in rects) + 60, max(r[3] for r in rects) + 30   # + подписи
+        cv = self.cv
+        w, h = max(cv.winfo_width(), 100), max(cv.winfo_height(), 100)
+        self.z = min(max(min(w / (x1 - x0), h / (y1 - y0), z_max), Z_MIN), Z_MAX)
+        self._redraw()
+        self._scroll_to(x0 * self.z, y0 * self.z)
 
     def _seg_key(self, i, k):
         """Какой параметр трассы меняет перетаскивание участка k провода i:
@@ -494,53 +608,58 @@ class Editor:
         return {1: ("xa", "x"), 2: ("yb", "y"), 3: ("xb", "x")}.get(k)
 
     def _draw_block(self, bid, b):
-        cv, lib = self.cv, self.lib[b["type"]]
+        cv, lib, z, f = self.cv, self.lib[b["type"]], self.z, self._f
         w, h = self._size(b)
         x, y = b["x"], b["y"]
         sel = self.sel == ("blk", bid)
         tag = (f"blk:{bid}",)
         cv.create_rectangle(x, y, x + w, y + h, fill=C_GROUP.get(lib["group"], "white"),
-                            outline=C_SEL if sel else C_LINE, width=2.5 if sel else 1.2, tags=tag)
+                            outline=C_SEL if sel else C_LINE, width=(2.5 if sel else 1.2) * z, tags=tag)
         title = lib["title"]
         if b["type"] == "Sum":
             title = "Σ"
         elif b["type"] == "Product":
             title = "×"
-        cv.create_text(x + w / 2, y + 11, text=title, font=FONT_B, tags=tag)
-        cv.create_text(x + w / 2, y + 13 + (h - 13) / 2, text=self._summary(b), font=FONT_S,
-                       fill="#333", width=w - 14, justify="center", tags=tag)
-        cv.create_text(x + w - 3, y + h + 7, text=bid, font=FONT_S, fill="#aaa", anchor="e", tags=tag)
+        elif b["type"] == "Input":                  # «Вход» видно по цвету — пишем сигнал
+            title = self._signal_name(b["p"]["signal"])[0]
+        cv.create_text(x + w / 2, y + 11, text=title, font=f(FONT_B), tags=tag)
+        cv.create_text(x + w / 2, y + 13 + (h - 13) / 2, text=self._summary(b), font=f(FONT_S),
+                       fill="#333", width=(w - 8) * z, justify="center", tags=tag)
+        cv.create_text(x + w - 3, y + h + 7, text=bid, font=f(FONT_S), fill="#aaa", anchor="e", tags=tag)
         if not lib["feedthrough"]:                  # разрывает петли — пометка
-            cv.create_text(x + 4, y + h + 7, text="⟳", font=FONT_S, fill="#aaa", anchor="w", tags=tag)
+            cv.create_text(x + 4, y + h + 7, text="⟳", font=f(FONT_S), fill="#aaa", anchor="w", tags=tag)
         for i in range(self._n_in(b)):
             px, py = self._in_pos(b, i)
             cv.create_polygon(px - 7, py - 5, px, py, px - 7, py + 5, fill="#555",
                               outline="", tags=(f"in:{bid}:{i}",))
             lab = self._in_label(b, i)
             if lab:
-                cv.create_text(px + 4, py, text=lab, font=FONT_S, fill="#555", anchor="w",
+                cv.create_text(px + 4, py, text=lab, font=f(FONT_S), fill="#555", anchor="w",
                                tags=(f"in:{bid}:{i}",))
         if self._has_out(b):
             px, py = self._out_pos(b)
             cv.create_oval(px - 5, py - 5, px + 5, py + 5, fill="#555", outline="",
                            tags=(f"out:{bid}",))
-            self.val_items[bid] = cv.create_text(px + 7, py - 4, text="", font=FONT_V,
+            self.val_items[bid] = cv.create_text(px + 7, py - 4, text="", font=f(FONT_V),
                                                  fill="#0a6", anchor="sw")
         elif b["type"] == "Output":
-            self.val_items[bid] = cv.create_text(x + w + 6, y + h / 2, text="", font=FONT_V,
+            self.val_items[bid] = cv.create_text(x + w + 6, y + h / 2, text="", font=f(FONT_V),
                                                  fill="#0a6", anchor="w")
 
     # =====================================================================
     # Мышь и клавиши
     # =====================================================================
     def _xy(self, e):
-        return self.cv.canvasx(e.x), self.cv.canvasy(e.y)
+        """Точка мыши в координатах схемы."""
+        return self.cv.canvasx(e.x) / self.z, self.cv.canvasy(e.y) / self.z
 
     def _hit(self, x, y, r=5):
-        """Что под мышью: ("out", id) | ("in", id, порт) | ("blk", id) |
-        ("wire", i, участок) | None. Порты важнее блока, блок важнее провода."""
+        """Что под мышью (x, y — координаты схемы, r — пикс экрана):
+        ("out", id) | ("in", id, порт) | ("blk", id) | ("wire", i, участок) | None.
+        Порты важнее блока, блок важнее провода."""
         found, segs = {}, []
-        for item in reversed(self.cv.find_overlapping(x - r, y - r, x + r, y + r)):
+        cx, cy = x * self.z, y * self.z
+        for item in reversed(self.cv.find_overlapping(cx - r, cy - r, cx + r, cy + r)):
             for tag in self.cv.gettags(item):
                 kind, _, rest = tag.partition(":")
                 if kind in ("out", "in", "blk"):
@@ -588,9 +707,11 @@ class Editor:
                 self.cv.configure(cursor=cur)
             return
         x, y = self._xy(e)
+        z = self.z
         self.cv.delete("ghost")
         w = BW_TYPE.get(self.placing, BW)
-        self.cv.create_rectangle(x, y, x + w, y + 48, outline="#888", dash=(4, 3), tags=("ghost",))
+        self.cv.create_rectangle(x * z, y * z, (x + w) * z, (y + 48) * z, outline="#888",
+                                 dash=(4, 3), tags=("ghost",))
 
     def _press(self, e):
         x, y = self._xy(e)
@@ -667,8 +788,10 @@ class Editor:
                 x0, y0 = self._out_pos(self.blocks[self.drag[1]])
             else:
                 x0, y0 = self._in_pos(self.blocks[self.drag[1]], self.drag[2])
+            z = self.z
             self.cv.delete("rubber")
-            self.cv.create_line(x0, y0, x, y, fill=C_SEL, dash=(4, 2), width=1.5, tags=("rubber",))
+            self.cv.create_line(x0 * z, y0 * z, x * z, y * z, fill=C_SEL, dash=(4, 2), width=1.5,
+                                tags=("rubber",))
 
     def _release(self, e):
         if not self.drag:
@@ -779,10 +902,22 @@ class Editor:
                 widgets[key] = (var, kind)
         hint = {"Sum": "знаки входов: например «+−» или «++−» (число знаков = число входов)",
                 "P": "ошибку e = уставка − измерение собирает сумматор перед регулятором",
-                "PI": "анти-виндап: при упоре в ±y_max интеграл не копится",
-                "PID": "Tf — постоянная фильтра производной (шум!)",
+                "PI": "I_max ограничивает И-составляющую Ki·∫e; анти-виндап: при упоре "
+                      "в ±y_max интеграл не копится",
+                "PID": "Tf — постоянная фильтра производной (шум!); I_max — предел Ki·∫e",
                 "Output": "приводы, к которым схема не подключена, ведёт штатная САУ",
-                "VaScale": "y = u·(V0/Va)², в пределах [k_min, k_max] — gain scheduling"}.get(b["type"])
+                "VaScale": "перестройка коэффициента по скорости (gain scheduling): "
+                           "y = u·(V0/Va)ⁿ, множитель в пределах [k_min, k_max]. "
+                           "n = 2 — эффективность руля ∝ Va²",
+                "TurnBank": "крен координированного разворота: tg φ = V·ω/g; "
+                            "вход ω — заданная скорость разворота χ̇, °/с; V — путевая скорость, м/с",
+                "AngleErr": "a − b, приведённая к [−180°, 180°): разворот кратчайшим путём",
+                "RateLim": "выход следует за входом, но не быстрее R единиц сигнала в секунду "
+                           "(для углов — °/с); сам сигнал не ограничивает",
+                "Washout": "пропускает изменения сигнала, постоянную составляющую срезает "
+                           "за время ~3T (демпфер рыскания: не мешает установившемуся развороту)",
+                "LeadLag": "T1 > T2 — опережение по фазе, T1 < T2 — отставание",
+                "Delay": "запаздывание τ = n·Δt, Δt = 0.01 с — такт САУ"}.get(b["type"])
         n = len(lib["params"])
         if hint:
             tk.Label(dlg, text=hint, font=FONT_S, fg="#777", wraplength=330, justify="left"
@@ -844,6 +979,7 @@ class Editor:
                 "Шаблон", f"Заменить текущую схему шаблоном «{name}»?", parent=self.root):
             return
         self._load(copy.deepcopy(self.templates[name]))
+        self.root.title(f"Конструктор САУ — {name}")
 
     def _open(self):
         fn = filedialog.askopenfilename(parent=self.root, title="Открыть схему",
@@ -921,7 +1057,9 @@ class Editor:
         self.lbl_flight.configure(text=(
             f"t {tel['t']:6.1f} с  режим: {tel['mode']}{state}   θ_ref {tel['theta_ref']:5.1f}°  "
             f"h_ref {tel['h_ref']:5.0f} м  Va_ref {tel['Va_ref']:4.1f}   │  "
-            f"θ {tel['theta']:5.1f}°  h {tel['h']:5.0f} м  Va {tel['Va']:4.1f}  α {tel['alpha']:4.1f}°"))
+            f"θ {tel['theta']:5.1f}°  h {tel['h']:5.0f} м  Va {tel['Va']:4.1f}  α {tel['alpha']:4.1f}°\n"
+            f"{'':27}χ_ref {tel['chi_ref']:5.0f}°  φ_ref {tel['phi_ref']:5.1f}°{'':17}│  "
+            f"χ {tel['chi']:5.0f}°  φ {tel['phi']:5.1f}°  β {tel['beta']:4.1f}°"), justify="left")
         vals = tel.get("values", {})
         for bid, item in self.val_items.items():
             self.cv.itemconfigure(item, text=_fmt(vals[bid]) if bid in vals else "")

@@ -19,12 +19,16 @@ h — м, Va — м/с, газ δt — 0…1. Коэффициенты «уго�
 (Kq = 0.0381 с одинаков в рад/(рад/с) и °/(°/с)).
 
 Порядок счёта на такт:
-    1. блоки без прямого прохода (z⁻¹, интегратор I, апериодическое звено) выдают
-       выход из своего состояния — входы им на этом такте не нужны;
+    1. блоки без прямого прохода (запаздывание z⁻ⁿ, интегратор, апериодическое
+       звено) выдают выход из своего состояния — входы им на этом такте не нужны;
     2. остальные блоки — по топологическому порядку проводов;
     3. блоки без прямого прохода обновляют состояние по входам такта.
 Петля только из блоков с прямым проходом — алгебраическая: схема не принимается
-(разорвать её — звеном z⁻¹, I или апериодическим).
+(разорвать её — звеном запаздывания, интегратором или апериодическим звеном).
+
+Шаблоны (заготовки и штатные каналы) — все каналы САУ: тангаж, высота, скорость,
+крен, курс + скольжение; штатные совпадают с регуляторами control/controllers.py
+(проверка — checks/check_blocks.py).
 
 Модуль — только numpy; редактор (viz/block_editor.py) получает описание
 библиотеки через catalog() — словарь из простых типов.
@@ -38,25 +42,60 @@ import numpy as np
 # Сигналы ЛА: входы и выходы схемы
 # ---------------------------------------------------------------------------
 
-# Входы: ключ → подпись (с единицей). Значения даёт сценарий (BlockLab3D._signals).
+# Входы: ключ → подпись (с единицей). Значения даёт sau_signals(): уставки —
+# от штатной САУ, измерения — её датчики. Ключи — часть формата схемы (JSON).
 INPUT_SIGNALS = {
-    "theta_ref": "θ_ref, °",      "theta": "θ, °",          "q": "q, °/с",
-    "h_ref": "h_ref, м",          "h": "h, м",              "hdot": "ḣ, м/с",
-    "Va_ref": "Va_ref, м/с",      "Va": "Va, м/с",
-    "alpha": "α, °",              "beta": "β, °",
-    "phi_ref": "φ_ref, °",        "phi": "φ, °",            "p": "p, °/с",
-    "r": "r, °/с",                "psi": "ψ, °",
-    "chi_ref": "χ_ref, °",        "chi": "χ, °",
-    "de_trim": "δe_трим, °",      "dt_trim": "δt_трим",
+    "theta_ref": "θ_ref — тангаж заданный, °",     "theta": "θ — тангаж, °",
+    "q": "q — угл. скорость тангажа, °/с",
+    "h_ref": "h_ref — высота заданная, м",         "h": "h — высота, м",
+    "hdot": "ḣ — вертикальная скорость, м/с",
+    "Va_ref": "Va_ref — возд. скорость заданная, м/с",
+    "Va": "Va — воздушная скорость, м/с",
+    "alpha": "α — угол атаки, °",                  "beta": "β — угол скольжения, °",
+    "phi_ref": "φ_ref — крен заданный, °",         "phi": "φ — крен, °",
+    "p": "p — угл. скорость крена, °/с",           "r": "r — угл. скорость рыскания, °/с",
+    "psi": "ψ — угол рыскания, °",
+    "chi_ref": "χ_ref — путевой угол заданный, °", "chi": "χ — путевой угол, °",
+    "Vg": "Vg — путевая скорость, м/с",
+    "chidot_ff": "χ̇_уп — упреждение скорости разворота, °/с",
+    "alpha_trim": "α_бал — балансировочный угол атаки, °",
+    "de_trim": "δe_бал — балансировочный δe, °",
+    "dt_trim": "δt_бал — балансировочный газ",
 }
 
 # Выходы: ключ → (подпись, индекс в векторе управления [δe, δt, δa, δr], в радианы?)
 OUTPUT_SIGNALS = {
     "de": ("δe — руль высоты, °", 0, True),
-    "dt": ("δt — газ, 0…1", 1, False),
+    "dt": ("δt — газ (тяга), 0…1", 1, False),
     "da": ("δa — элероны, °", 2, True),
     "dr": ("δr — руль направления, °", 3, True),
 }
+
+
+def sau_signals(sau, state, alpha, beta):
+    """
+    Входы схемы в единицах схемы (углы — градусы) после шага штатной САУ
+    (control.sau.SAU.step): измерения — оценка САУ (sau.est), уставки — то, что
+    штатная САУ подаёт в свои контуры (θ_ref — после TECS, φ_ref — после контура курса).
+    alpha, beta — истинные (как у TruthSensors).
+    """
+    from sim.state import PSI, R
+    from .controllers import wrap_angle
+    from .sau import Mode
+    e, deg = sau.est, math.degrees
+    return {
+        "theta_ref": deg(sau.theta_ref), "theta": deg(e["theta"]), "q": deg(e["q"]),
+        "h_ref": sau.refs.h if sau.mode is not Mode.PITCH else e["h"],
+        "h": e["h"], "hdot": e["hdot"],
+        "Va_ref": sau.refs.Va, "Va": e["Va"],
+        "alpha": deg(alpha), "beta": deg(beta),
+        "phi_ref": deg(sau.lat.phi_ref), "phi": deg(wrap_angle(e["phi"])), "p": deg(e["p"]),
+        "r": deg(state[R]), "psi": deg(state[PSI]) % 360.0,
+        "chi_ref": deg(sau.refs.chi), "chi": deg(e["chi"]),
+        "Vg": e["Vg"], "chidot_ff": deg(e["Vg"] * sau.refs.kappa),
+        "alpha_trim": deg(sau.alpha_trim),
+        "de_trim": deg(sau.de_trim), "dt_trim": sau.lon.thr_trim,
+    }
 
 
 def _num(x):
@@ -64,7 +103,7 @@ def _num(x):
 
 
 def _lim(x):
-    """Предел выхода: 0 или пусто — без ограничения."""
+    """Предел: 0 или пусто — без ограничения."""
     x = float(x)
     return math.inf if x <= 0.0 else x
 
@@ -106,7 +145,7 @@ class Const(Block):
 
 
 class Sine(Block):
-    """y = смещение + A·sin(2π f t) — для проверки отклика на гармонику."""
+    """Синусоида y = b + A·sin(2π f t) — для частотных испытаний контура."""
     n_in = 0
 
     def step(self, u, ctx):
@@ -127,6 +166,8 @@ class Sum(Block):
 
 
 class Gain(Block):
+    """Усилительное (безынерционное) звено y = K·u."""
+
     def step(self, u, ctx):
         return _num(self.p["K"]) * u[0]
 
@@ -139,6 +180,8 @@ class Product(Block):
 
 
 class Saturation(Block):
+    """Насыщение: y = u в пределах [min, max], за пределами — предел."""
+
     def step(self, u, ctx):
         return min(max(u[0], _num(self.p["min"])), _num(self.p["max"]))
 
@@ -152,7 +195,11 @@ class DeadZone(Block):
 
 
 class RateLimit(Block):
-    """Ограничение скорости изменения сигнала, ед./с."""
+    """
+    Ограничение производной: выход следует за входом, но |dy/dt| ≤ R (ед. сигнала / с).
+    Дискретно: y_k = y_(k−1) + clip(u_k − y_(k−1), −R·Δt, R·Δt); старт — y = u.
+    (В Simulink — Rate Limiter.)
+    """
 
     def reset(self):
         self.y = None
@@ -166,7 +213,7 @@ class RateLimit(Block):
 
 
 class AngleError(Block):
-    """Ошибка угла ref − meas, °, приведённая к [−180, 180) — для курса."""
+    """Разность углов a − b, °, приведённая к [−180, 180): ошибка по курсу кратчайшим путём."""
     n_in = 2
 
     def step(self, u, ctx):
@@ -175,22 +222,37 @@ class AngleError(Block):
 
 class VaScale(Block):
     """
-    Масштаб по скорости (gain scheduling, как в PitchController):
-    y = u·clip((V0/Va)², k_min, k_max). Вход 0 — сигнал, вход 1 — Va, м/с.
-    Эффективность руля ∝ Va² — коэффициент контура сохраняется на любой скорости.
+    Перестройка коэффициента по воздушной скорости (gain scheduling):
+    y = u·clip((V0/Va)ⁿ, k_min, k_max). Вход 0 — сигнал, вход 1 — Va, м/с.
+    n = 2: эффективность руля ∝ Va² — контур сохраняет свойства на любой скорости
+    (PitchController, ПИ скорости крена); n = 1 — упреждение крена (RollController).
     """
     n_in = 2
 
     def step(self, u, ctx):
         p = self.p
-        k = (_num(p["V0"]) / max(u[1], 1.0)) ** 2
+        k = (_num(p["V0"]) / max(u[1], 1.0)) ** _num(p["n"])
         return u[0] * min(max(k, _num(p["k_min"])), _num(p["k_max"]))
+
+
+class TurnBank(Block):
+    """
+    Крен координированного разворота: φ = arctg(V·ω/g).
+    Вход 0 — заданная скорость разворота ω = χ̇, °/с; вход 1 — путевая скорость V, м/с;
+    выход — φ, °. Из равновесия сил в развороте без скольжения: tg φ = V·ω/g.
+    """
+    n_in = 2
+
+    def step(self, u, ctx):
+        return math.degrees(math.atan(u[1] * math.radians(u[0]) / _num(self.p["g"])))
 
 
 class PIDBlock(Block):
     """
     П / ПИ / ПД / ПИД по ошибке на входе (тот же алгоритм, что control.controllers.PID):
         y = Kp·e + Ki·∫e dt + Kd·ė_ф,   ė_ф — производная через фильтр 1-го порядка Tf.
+    И-составляющая Ki·∫e ограничена ±I_max (0 — без ограничения) — как integral_limit
+    у PID: I_max = Ki·integral_limit.
     Выход ограничен ±y_max (0 — без ограничения); при упоре интеграл не копится
     дальше (анти-виндап — условное интегрирование).
     Набор коэффициентов задаёт тип: у П нет Ki, Kd; у ПИ — Kd; у ПД — Ki.
@@ -206,6 +268,7 @@ class PIDBlock(Block):
         p, dt, e = self.p, ctx["dt"], u[0]
         Kp, Ki, Kd = (_num(p.get(k, 0.0)) for k in self.KEYS)
         y_max = _lim(p.get("y_max", 0.0))
+        i_lim = _lim(p.get("i_max", 0.0)) / abs(Ki) if Ki != 0.0 else math.inf
         tf = _num(p.get("Tf", 0.0))
 
         if Kd != 0.0 and dt > 0:
@@ -213,7 +276,7 @@ class PIDBlock(Block):
             self.d_filt += ((e - self.prev) / dt - self.d_filt) * a
         self.prev = e
 
-        i_new = self.integral + e * dt
+        i_new = min(max(self.integral + e * dt, -i_lim), i_lim)
         y = Kp * e + Ki * i_new + Kd * self.d_filt
         if abs(y) > y_max and Ki * e * y > 0:          # упор, и интеграл тянет дальше
             y = Kp * e + Ki * self.integral + Kd * self.d_filt
@@ -223,7 +286,7 @@ class PIDBlock(Block):
 
 
 class Derivative(Block):
-    """Дифференцирующее звено с фильтром: y ≈ Kd·s/(Tf·s + 1)·u."""
+    """Реальное дифференцирующее звено Kd·s/(Tf·s + 1) (идеальное Kd·s с фильтром Tf)."""
 
     def reset(self):
         self.y, self.prev = 0.0, None
@@ -240,7 +303,7 @@ class Derivative(Block):
 
 
 class Integrator(Block):
-    """y = Ki·∫u dt, ограничение ±y_max (0 — без). Без прямого прохода — разрывает петли."""
+    """Интегратор Ki/s: y = Ki·∫u dt, ограничение ±y_max (0 — без). Без прямого прохода."""
     feedthrough = False
 
     def reset(self):
@@ -271,7 +334,10 @@ class Aperiodic(Block):
 
 
 class Washout(Block):
-    """Изодромное (фильтр высоких частот) T·s/(T·s + 1): пропускает изменения, срезает постоянную."""
+    """
+    Фильтр высоких частот 1-го порядка T·s/(T·s + 1) (washout): пропускает изменения,
+    срезает постоянную составляющую. Не путать с изодромным звеном k·(1 + 1/(T·s)).
+    """
 
     def reset(self):
         self.lp = None
@@ -286,7 +352,10 @@ class Washout(Block):
 
 
 class LeadLag(Block):
-    """Форсирующее / запаздывающее звено (T1·s + 1)/(T2·s + 1); метод Тастина."""
+    """
+    Корректирующее звено (T1·s + 1)/(T2·s + 1); дискретизация методом Тастина.
+    T1 > T2 — опережение по фазе, T1 < T2 — отставание по фазе.
+    """
 
     def reset(self):
         self.u1, self.y1 = None, 0.0
@@ -302,7 +371,7 @@ class LeadLag(Block):
 
 
 class Delay(Block):
-    """Задержка на n тактов САУ (z⁻ⁿ). Без прямого прохода."""
+    """Звено запаздывания на n тактов САУ: z⁻ⁿ (τ = n·Δt). Без прямого прохода."""
     feedthrough = False
 
     def reset(self):
@@ -334,67 +403,84 @@ class Scope(Block):
 
 
 # ---------------------------------------------------------------------------
-# Библиотека: тип → (класс, группа, заголовок, параметры, подписи входов)
+# Библиотека: тип → (класс, группа, название, параметры, подписи входов, формула)
 #   параметр: (ключ, подпись, по умолчанию, вид); вид: "num" | "str" | "in" | "out" | "int"
+#   название — технический термин (ТАУ), формула — передаточная функция / закон блока
+#   Ключи типов и параметров — часть формата схемы (JSON), не менять.
 # ---------------------------------------------------------------------------
 
-_PID_COMMON = [("y_max", "огр. выхода ± (0 — нет)", 0.0, "num")]
+_Y_MAX = ("y_max", "y_max — предел выхода ± (0 — без предела)", 0.0, "num")
+_I_MAX = ("i_max", "I_max — предел И-составляющей ± (0 — без предела)", 0.0, "num")
+_TF = ("Tf", "Tf — постоянная фильтра Д-составляющей, с", 0.05, "num")
 LIBRARY = {
-    "Input":   (Input, "Источники", "Вход", [("signal", "сигнал ЛА", "theta", "in")], []),
-    "Const":   (Const, "Источники", "Константа", [("value", "значение", 0.0, "num")], []),
-    "Sine":    (Sine, "Источники", "Синус",
-                [("A", "амплитуда", 2.0, "num"), ("f", "частота, Гц", 0.5, "num"),
-                 ("bias", "смещение", 0.0, "num")], []),
+    "Input":   (Input, "Источники сигналов", "Вход", [("signal", "сигнал ЛА", "theta", "in")], [], ""),
+    "Const":   (Const, "Источники сигналов", "Константа", [("value", "значение", 0.0, "num")], [], ""),
+    "Sine":    (Sine, "Источники сигналов", "Синусоида",
+                [("A", "A — амплитуда", 2.0, "num"), ("f", "f — частота, Гц", 0.5, "num"),
+                 ("bias", "b — постоянная составляющая", 0.0, "num")], [], "b + A·sin 2πft"),
 
-    "P":   (PIDBlock, "Регуляторы", "П", [("Kp", "Kp", 1.0, "num")] + _PID_COMMON, ["e"]),
-    "PI":  (PIDBlock, "Регуляторы", "ПИ",
-            [("Kp", "Kp", 1.0, "num"), ("Ki", "Ki", 0.1, "num")] + _PID_COMMON, ["e"]),
-    "PD":  (PIDBlock, "Регуляторы", "ПД",
-            [("Kp", "Kp", 1.0, "num"), ("Kd", "Kd", 0.1, "num"),
-             ("Tf", "Tf фильтра D, с", 0.05, "num")] + _PID_COMMON, ["e"]),
-    "PID": (PIDBlock, "Регуляторы", "ПИД",
+    "P":   (PIDBlock, "Регуляторы", "П-регулятор", [("Kp", "Kp", 1.0, "num"), _Y_MAX], ["e"], ""),
+    "PI":  (PIDBlock, "Регуляторы", "ПИ-регулятор",
+            [("Kp", "Kp", 1.0, "num"), ("Ki", "Ki", 0.1, "num"), _I_MAX, _Y_MAX], ["e"], ""),
+    "PD":  (PIDBlock, "Регуляторы", "ПД-регулятор",
+            [("Kp", "Kp", 1.0, "num"), ("Kd", "Kd", 0.1, "num"), _TF, _Y_MAX], ["e"], ""),
+    "PID": (PIDBlock, "Регуляторы", "ПИД-регулятор",
             [("Kp", "Kp", 1.0, "num"), ("Ki", "Ki", 0.1, "num"), ("Kd", "Kd", 0.1, "num"),
-             ("Tf", "Tf фильтра D, с", 0.05, "num")] + _PID_COMMON, ["e"]),
-    "I":   (Integrator, "Регуляторы", "И  Ki/s",
-            [("Ki", "Ki", 1.0, "num"), ("y_max", "огр. ± (0 — нет)", 0.0, "num")], [""]),
-    "D":   (Derivative, "Регуляторы", "Д  Kd·s",
-            [("Kd", "Kd", 1.0, "num"), ("Tf", "Tf фильтра, с", 0.05, "num")], [""]),
+             _TF, _I_MAX, _Y_MAX], ["e"], ""),
+    "I":   (Integrator, "Регуляторы", "Интегратор",
+            [("Ki", "Ki", 1.0, "num"), _Y_MAX], [""], "Ki/s"),
+    "D":   (Derivative, "Регуляторы", "Дифференциатор",
+            [("Kd", "Kd", 1.0, "num"), ("Tf", "Tf — постоянная фильтра, с", 0.05, "num")],
+            [""], "Kd·s/(Tf·s+1)"),
 
-    "Sum":      (Sum, "Математика", "Сумматор", [("signs", "знаки входов", "+-", "str")], None),
-    "Gain":     (Gain, "Математика", "Усиление K", [("K", "K", 1.0, "num")], [""]),
-    "Product":  (Product, "Математика", "Произведение ×", [], ["", ""]),
-    "AngleErr": (AngleError, "Математика", "Ошибка угла ±180°", [], ["ref", "изм"]),
-    "VaScale":  (VaScale, "Математика", "Масштаб по Va",
+    "Sum":      (Sum, "Математические операции", "Сумматор",
+                 [("signs", "знаки входов", "+-", "str")], None, ""),
+    "Gain":     (Gain, "Математические операции", "Усилительное звено",
+                 [("K", "K", 1.0, "num")], [""], ""),
+    "Product":  (Product, "Математические операции", "Умножение", [], ["", ""], ""),
+    "AngleErr": (AngleError, "Математические операции", "Разность углов", [], ["a", "b"],
+                 "a − b → [−180°, 180°)"),
+    "VaScale":  (VaScale, "Математические операции", "Перестройка по Va",
                  [("V0", "V0 — скорость настройки, м/с", 16.0, "num"),
-                  ("k_min", "k_min", 0.25, "num"), ("k_max", "k_max", 9.0, "num")], ["u", "Va"]),
+                  ("n", "n — показатель степени", 2.0, "num"),
+                  ("k_min", "k_min — нижний предел множителя", 0.25, "num"),
+                  ("k_max", "k_max — верхний предел множителя", 9.0, "num")], ["u", "Va"],
+                 "u·(V0/Va)ⁿ"),
+    "TurnBank": (TurnBank, "Математические операции", "Крен разворота",
+                 [("g", "g — ускорение свободного падения, м/с²", 9.81, "num")], ["ω", "V"],
+                 "φ = arctg(V·ω/g)"),
 
-    "Sat":      (Saturation, "Нелинейности", "Ограничение",
-                 [("min", "min", -25.0, "num"), ("max", "max", 25.0, "num")], [""]),
-    "DeadZone": (DeadZone, "Нелинейности", "Зона нечувств.", [("w", "±w", 0.5, "num")], [""]),
-    "RateLim":  (RateLimit, "Нелинейности", "Огр. скорости",
-                 [("rate", "макс. скорость, ед./с", 60.0, "num")], [""]),
+    "Sat":      (Saturation, "Нелинейные звенья", "Насыщение",
+                 [("min", "нижний предел", -25.0, "num"), ("max", "верхний предел", 25.0, "num")],
+                 [""], ""),
+    "DeadZone": (DeadZone, "Нелинейные звенья", "Зона нечувствительности",
+                 [("w", "w — полуширина зоны", 0.5, "num")], [""], ""),
+    "RateLim":  (RateLimit, "Нелинейные звенья", "Ограничение производной",
+                 [("rate", "R — предел |dy/dt|, ед./с", 60.0, "num")], [""], "|dy/dt| ≤ R"),
 
-    "Aperiodic": (Aperiodic, "Динамические звенья", "K/(Ts+1)",
-                  [("K", "K", 1.0, "num"), ("T", "T, с", 0.1, "num")], [""]),
-    "Washout":   (Washout, "Динамические звенья", "Ts/(Ts+1)", [("T", "T, с", 1.0, "num")], [""]),
-    "LeadLag":   (LeadLag, "Динамические звенья", "(T1s+1)/(T2s+1)",
-                  [("T1", "T1, с", 0.2, "num"), ("T2", "T2, с", 0.05, "num")], [""]),
-    "Delay":     (Delay, "Динамические звенья", "Задержка z⁻ⁿ",
-                  [("n", "n тактов (по 0.01 с)", 1, "int")], [""]),
+    "Aperiodic": (Aperiodic, "Линейные звенья", "Апериодическое звено",
+                  [("K", "K", 1.0, "num"), ("T", "T, с", 0.1, "num")], [""], "K/(T·s+1)"),
+    "Washout":   (Washout, "Линейные звенья", "Фильтр высоких частот",
+                  [("T", "T, с", 1.0, "num")], [""], "T·s/(T·s+1)"),
+    "LeadLag":   (LeadLag, "Линейные звенья", "Корректирующее звено",
+                  [("T1", "T1, с", 0.2, "num"), ("T2", "T2, с", 0.05, "num")], [""],
+                  "(T1·s+1)/(T2·s+1)"),
+    "Delay":     (Delay, "Линейные звенья", "Звено запаздывания",
+                  [("n", "n — число тактов (такт 0.01 с)", 1, "int")], [""], "z⁻ⁿ"),
 
-    "Output": (Output, "Приёмники", "Выход", [("act", "привод", "de", "out")], [""]),
+    "Output": (Output, "Приёмники", "Выход", [("act", "привод", "de", "out")], [""], ""),
     "Scope":  (Scope, "Приёмники", "Осциллограф",
-               [("title", "заголовок", "", "str"), ("n", "число входов 1–3", 2, "int")], None),
+               [("title", "заголовок", "", "str"), ("n", "число входов 1–3", 2, "int")], None, ""),
 }
 
 
 def catalog():
     """Описание библиотеки для редактора (только простые типы — уходит в другой процесс)."""
     return {
-        "blocks": {name: {"group": grp, "title": title,
+        "blocks": {name: {"group": grp, "title": title, "formula": formula,
                           "params": [list(x) for x in params],
                           "inputs": ins, "feedthrough": cls.feedthrough}
-                   for name, (cls, grp, title, params, ins) in LIBRARY.items()},
+                   for name, (cls, grp, title, params, ins, formula) in LIBRARY.items()},
         "inputs": dict(INPUT_SIGNALS),
         "outputs": {k: v[0] for k, v in OUTPUT_SIGNALS.items()},
     }
@@ -495,8 +581,8 @@ class Diagram:
                         break
                     rest -= tail
                 loop = [_title(self.desc[b]) for b in ft if b in rest]
-                raise SchemeError("алгебраическая петля (контур без z⁻¹, И или K/(Ts+1)): "
-                                  + ", ".join(loop))
+                raise SchemeError("алгебраическая петля (контур без звена запаздывания, "
+                                  "интегратора или апериодического звена): " + ", ".join(loop))
             order += ready
             done.update(ready)
         return order
@@ -535,7 +621,8 @@ class Diagram:
 
 
 # ---------------------------------------------------------------------------
-# Заготовки схем
+# Шаблоны схем: заготовки (входы и выходы канала, без регулятора) и штатные
+# каналы (регуляторы control/controllers.py, собранные из блоков)
 # ---------------------------------------------------------------------------
 
 def _blk(bid, btype, x, y, **p):
@@ -546,64 +633,315 @@ def _w(src, dst, port=0):
     return {"src": src, "dst": dst, "port": port}
 
 
+def _inputs(x, y0, step, *signals):
+    """Столбец блоков «Вход»: id in_<сигнал>."""
+    return [_blk(f"in_{s}", "Input", x, y0 + k * step, signal=s) for k, s in enumerate(signals)]
+
+
+def _blank(signals, acts):
+    return {"blocks": _inputs(20, 30, 80, *signals)
+            + [_blk(f"out_{a}", "Output", 900, 30 + 120 * k, act=a) for k, a in enumerate(acts)],
+            "wires": []}
+
+
 def pitch_blank():
-    """Заготовка лабораторной: входы и выход канала тангажа, без регулятора."""
-    return {"blocks": [
-        _blk("in_tr", "Input", 20, 30, signal="theta_ref"),
-        _blk("in_t", "Input", 20, 110, signal="theta"),
-        _blk("in_q", "Input", 20, 190, signal="q"),
-        _blk("in_Va", "Input", 20, 270, signal="Va"),
-        _blk("in_de0", "Input", 20, 350, signal="de_trim"),
-        _blk("out_de", "Output", 900, 190, act="de"),
-    ], "wires": []}
+    """Заготовка: канал тангажа θ_ref → δe."""
+    return _blank(["theta_ref", "theta", "q", "Va", "de_trim"], ["de"])
 
 
-def _pid_block(bid, x, y, Kp, Ki, Kd, Tf):
+def altitude_blank():
+    """Заготовка: высота h_ref → (θ_ref) → δe."""
+    return _blank(["h_ref", "h", "hdot", "alpha_trim", "theta", "q", "Va", "de_trim"], ["de"])
+
+
+def speed_blank():
+    """Заготовка: воздушная скорость Va_ref → δt."""
+    return _blank(["Va_ref", "Va", "dt_trim"], ["dt"])
+
+
+def roll_blank():
+    """Заготовка: крен φ_ref → δa."""
+    return _blank(["phi_ref", "phi", "p", "Va"], ["da"])
+
+
+def lateral_blank():
+    """Заготовка: курс χ_ref → (φ_ref) → δa; скольжение β → δr."""
+    return _blank(["chi_ref", "chi", "Vg", "chidot_ff", "phi", "p", "Va", "beta", "r"],
+                  ["da", "dr"])
+
+
+def _pid_block(bid, x, y, Kp, Ki, Kd, Tf, **extra):
     """Регулятор того типа (П / ПИ / ПД / ПИД), какие коэффициенты не нулевые."""
     btype = {(False, False): "P", (True, False): "PI",
              (False, True): "PD", (True, True): "PID"}[(Ki != 0.0, Kd != 0.0)]
-    p = {"Kp": Kp, "Ki": Ki, "Kd": Kd, "Tf": Tf}
+    p = {"Kp": Kp, "Ki": Ki, "Kd": Kd, "Tf": Tf, **extra}
     return _blk(bid, btype, x, y, **{k: v for k, v in p.items() if k in default_params(btype)})
+
+
+def _pitch_part(aircraft, pit, dx, theta_ref_src):
+    """
+    Каскад тангажа (PitchController) от сигнала theta_ref_src:
+        θ_ref − θ → [ПИД θ] → [насыщение ±q_max] → q_ref − q → [ПИД q] → [×(−1)]
+        → [перестройка по Va, n = 2] → + δe_бал → [насыщение δe] → δe
+    """
+    deg = math.degrees
+    q_max = deg(pit.q_max)
+    blocks = [
+        _blk("in_theta", "Input", dx + 20, 140, signal="theta"),
+        _blk("in_q", "Input", dx + 20, 270, signal="q"),
+        _blk("in_Va", "Input", dx + 20, 360, signal="Va"),
+        _blk("in_de_trim", "Input", dx + 20, 450, signal="de_trim"),
+        _blk("s_th", "Sum", dx + 170, 50, signs="+-"),
+        _pid_block("k_th", dx + 250, 58, pit.theta_Kp, pit.theta_Ki, pit.theta_Kd, pit.theta_tau),
+        _blk("sat_q", "Sat", dx + 420, 58, min=-q_max, max=q_max),
+        _blk("s_q", "Sum", dx + 170, 220, signs="+-"),
+        _pid_block("k_q", dx + 250, 228, pit.q_Kp, pit.q_Ki, pit.q_Kd, pit.q_tau),
+        _blk("neg_q", "Gain", dx + 420, 228, K=-1.0),
+        _blk("gs_q", "VaScale", dx + 580, 220, V0=pit.Va_ref, n=2.0,
+             k_min=pit.gs_scale_min, k_max=pit.gs_scale_max),
+        _blk("s_de", "Sum", dx + 760, 230, signs="++"),
+        _blk("sat_de", "Sat", dx + 840, 238,
+             min=deg(aircraft.delta_e_min), max=deg(aircraft.delta_e_max)),
+        _blk("out_de", "Output", dx + 1000, 238, act="de"),
+        _blk("sc_q", "Scope", dx + 600, 110, title="угл. скорость тангажа q, °/с"),
+        _blk("sc_de", "Scope", dx + 1000, 340, title="руль высоты δe, °", n=1),
+    ]
+    wires = [
+        _w(theta_ref_src, "s_th", 0), _w("in_theta", "s_th", 1), _w("s_th", "k_th"),
+        _w("k_th", "sat_q"), _w("sat_q", "s_q", 0), _w("in_q", "s_q", 1), _w("s_q", "k_q"),
+        _w("k_q", "neg_q"), _w("neg_q", "gs_q", 0), _w("in_Va", "gs_q", 1),
+        _w("gs_q", "s_de", 0), _w("in_de_trim", "s_de", 1), _w("s_de", "sat_de"),
+        _w("sat_de", "out_de"),
+        _w("sat_q", "sc_q", 0), _w("in_q", "sc_q", 1), _w("sat_de", "sc_de", 0),
+    ]
+    return blocks, wires
 
 
 def pitch_standard(aircraft, pit=None):
     """
-    Штатный канал тангажа (control.controllers.PitchController) из блоков:
-        θ_ref − θ → [ПИД θ] → [огр. ±q_max] → q_ref − q → [ПИД q] → [×(−1)]
-        → [масштаб по Va] → + δe_трим → [огр. δe] → δe
+    Штатный канал тангажа (control.controllers.PitchController) из блоков.
     Знак: δe > 0 — нос вниз, поэтому выход q-контура инвертирован.
     pit — PitchControlParams (по умолчанию — расчёт control/tuning.py).
     """
     from .controllers import PitchControlParams
     pit = pit or PitchControlParams()
+    blocks, wires = _pitch_part(aircraft, pit, 0, "in_theta_ref")
+    blocks += [_blk("in_theta_ref", "Input", 20, 50, signal="theta_ref"),
+               _blk("sc_th", "Scope", 250, 150, title="тангаж θ, °")]
+    wires += [_w("in_theta_ref", "sc_th", 0), _w("in_theta", "sc_th", 1)]
+    return {"blocks": blocks, "wires": wires}
+
+
+def altitude_standard(aircraft, pit=None, alt=None):
+    """
+    Высота + тангаж (AltitudeHold → PitchController, раздельные контуры B&M гл. 6):
+        h_ref − h → [ПИ h, предел И] → + α_бал → [насыщение ±θ_max] → θ_ref → каскад тангажа
+    Отличие от AltitudeHold: анти-виндап ПИ — по его выходу (±θ_max), а не по θ_ref
+    после прибавки α_бал (расхождение — в полосе шириной α_бал у упора).
+    alt — AltitudeHoldParams (по умолчанию — расчёт control/tuning.py).
+    """
+    from .controllers import PitchControlParams, AltitudeHoldParams
+    pit = pit or PitchControlParams()
+    alt = alt or AltitudeHoldParams()
     deg = math.degrees
-    q_max, Va0 = deg(pit.q_max), pit.Va_ref
-    de_min, de_max = deg(aircraft.delta_e_min), deg(aircraft.delta_e_max)
-    return {"blocks": [
-        _blk("in_tr", "Input", 20, 50, signal="theta_ref"),
-        _blk("in_t", "Input", 20, 140, signal="theta"),
-        _blk("in_q", "Input", 20, 270, signal="q"),
-        _blk("in_Va", "Input", 20, 340, signal="Va"),
-        _blk("in_de0", "Input", 20, 410, signal="de_trim"),
-        _blk("s1", "Sum", 170, 50, signs="+-"),
-        _pid_block("k_t", 250, 58, pit.theta_Kp, pit.theta_Ki, pit.theta_Kd, pit.theta_tau),
-        _blk("sat_q", "Sat", 400, 58, min=-q_max, max=q_max),
-        _blk("s2", "Sum", 170, 220, signs="+-"),
-        _pid_block("k_q", 250, 228, pit.q_Kp, pit.q_Ki, pit.q_Kd, pit.q_tau),
-        _blk("neg", "Gain", 390, 228, K=-1.0),
-        _blk("gs", "VaScale", 500, 220, V0=Va0, k_min=pit.gs_scale_min, k_max=pit.gs_scale_max),
-        _blk("s3", "Sum", 650, 230, signs="++"),
-        _blk("sat_de", "Sat", 720, 238, min=de_min, max=de_max),
-        _blk("out_de", "Output", 860, 238, act="de"),
-        _blk("sc_t", "Scope", 250, 130, title="тангаж θ, °"),
-        _blk("sc_q", "Scope", 560, 130, title="угл. скорость q, °/с"),
-        _blk("sc_de", "Scope", 860, 330, title="руль высоты δe, °", n=1),
-    ], "wires": [
-        _w("in_tr", "s1", 0), _w("in_t", "s1", 1), _w("s1", "k_t"), _w("k_t", "sat_q"),
-        _w("sat_q", "s2", 0), _w("in_q", "s2", 1), _w("s2", "k_q"), _w("k_q", "neg"),
-        _w("neg", "gs", 0), _w("in_Va", "gs", 1), _w("gs", "s3", 0), _w("in_de0", "s3", 1),
-        _w("s3", "sat_de"), _w("sat_de", "out_de"),
-        _w("in_tr", "sc_t", 0), _w("in_t", "sc_t", 1),
-        _w("sat_q", "sc_q", 0), _w("in_q", "sc_q", 1),
-        _w("sat_de", "sc_de", 0),
-    ]}
+    th_max = deg(alt.theta_max)
+    blocks, wires = _pitch_part(aircraft, pit, 620, "sat_th")
+    blocks += [
+        _blk("in_h_ref", "Input", 20, 50, signal="h_ref"),
+        _blk("in_h", "Input", 20, 140, signal="h"),
+        _blk("in_alpha_trim", "Input", 170, 170, signal="alpha_trim"),
+        _blk("s_h", "Sum", 170, 50, signs="+-"),
+        _blk("k_h", "PI", 250, 58, Kp=deg(alt.Kp), Ki=deg(alt.Ki),
+             i_max=deg(alt.Ki * alt.integral_limit), y_max=th_max),
+        _blk("s_a", "Sum", 400, 60, signs="++"),
+        _blk("sat_th", "Sat", 470, 68, min=-th_max, max=th_max),
+        _blk("sc_h", "Scope", 250, 270, title="высота h, м"),
+    ]
+    wires += [_w("in_h_ref", "s_h", 0), _w("in_h", "s_h", 1), _w("s_h", "k_h"),
+              _w("k_h", "s_a", 0), _w("in_alpha_trim", "s_a", 1), _w("s_a", "sat_th"),
+              _w("in_h_ref", "sc_h", 0), _w("in_h", "sc_h", 1)]
+    return {"blocks": blocks, "wires": wires}
+
+
+def speed_standard(aircraft, spd=None):
+    """
+    Скорость → газ (control.controllers.SpeedController):
+        Va_ref − Va → [ПИ, предел И] → + δt_бал → [насыщение 0…1] → δt
+    spd — SpeedControlParams (по умолчанию — расчёт control/tuning.py).
+    """
+    from .controllers import SpeedControlParams
+    spd = spd or SpeedControlParams()
+    blocks = [
+        _blk("in_Va_ref", "Input", 20, 50, signal="Va_ref"),
+        _blk("in_Va", "Input", 20, 140, signal="Va"),
+        _blk("in_dt_trim", "Input", 250, 150, signal="dt_trim"),
+        _blk("s_V", "Sum", 170, 50, signs="+-"),
+        _pid_block("k_V", 250, 58, spd.Va_Kp, spd.Va_Ki, spd.Va_Kd, spd.Va_tau,
+                   i_max=spd.Va_Ki * spd.Va_integral_limit),
+        _blk("s_dt", "Sum", 420, 60, signs="++"),
+        _blk("sat_dt", "Sat", 500, 68, min=aircraft.throttle_min, max=aircraft.throttle_max),
+        _blk("out_dt", "Output", 660, 68, act="dt"),
+        _blk("sc_V", "Scope", 420, 180, title="воздушная скорость Va, м/с"),
+    ]
+    wires = [_w("in_Va_ref", "s_V", 0), _w("in_Va", "s_V", 1), _w("s_V", "k_V"),
+             _w("k_V", "s_dt", 0), _w("in_dt_trim", "s_dt", 1), _w("s_dt", "sat_dt"),
+             _w("sat_dt", "out_dt"), _w("in_Va_ref", "sc_V", 0), _w("in_Va", "sc_V", 1)]
+    return {"blocks": blocks, "wires": wires}
+
+
+def _roll_part(aircraft, rp, dx, dy, phi_ref_src):
+    """
+    Крен (RollController, схема PX4): φ_ref − φ → [1/τ_φ] → [насыщение ±p_max] = p_ref;
+        δa = [FF] → [перестройка по Va, n = 1] + (p_ref − p) → [ПИ] → [перестройка, n = 2]
+        → [насыщение ±δa_max]
+    Отличие от RollController: тот при упоре элеронов не копит интеграл (анти-виндап
+    по δa); здесь ограничена только И-составляющая.
+    """
+    deg = math.degrees
+    p_max = deg(rp.p_max)
+    da = deg(aircraft.delta_a_max)
+    s2_min, s2_max = rp.scale_min ** 2, rp.scale_max ** 2
+    blocks = [
+        _blk("in_phi", "Input", dx + 20, dy + 90, signal="phi"),
+        _blk("in_p", "Input", dx + 400, dy + 190, signal="p"),
+        _blk("in_Va", "Input", dx + 560, dy + 280, signal="Va"),
+        _blk("s_phi", "Sum", dx + 170, dy, signs="+-"),
+        _blk("k_tau", "Gain", dx + 240, dy + 8, K=1.0 / rp.tau_phi),
+        _blk("sat_p", "Sat", dx + 400, dy + 8, min=-p_max, max=p_max),
+        _blk("k_ff", "Gain", dx + 560, dy + 8, K=rp.FF),
+        _blk("gs_ff", "VaScale", dx + 720, dy, V0=rp.Va_ref, n=1.0,
+             k_min=rp.scale_min, k_max=rp.scale_max),
+        _blk("s_p", "Sum", dx + 560, dy + 130, signs="+-"),
+        _blk("k_p", "PI", dx + 640, dy + 138, Kp=rp.Kp, Ki=rp.Ki,
+             i_max=deg(rp.Ki * rp.integral_limit)),
+        _blk("gs_p", "VaScale", dx + 800, dy + 130, V0=rp.Va_ref, n=2.0,
+             k_min=s2_min, k_max=s2_max),
+        _blk("s_da", "Sum", dx + 960, dy + 60, signs="++"),
+        _blk("sat_da", "Sat", dx + 1040, dy + 68, min=-da, max=da),
+        _blk("out_da", "Output", dx + 1200, dy + 68, act="da"),
+        _blk("sc_p", "Scope", dx + 960, dy + 220, title="угл. скорость крена p, °/с"),
+    ]
+    wires = [
+        _w(phi_ref_src, "s_phi", 0), _w("in_phi", "s_phi", 1), _w("s_phi", "k_tau"),
+        _w("k_tau", "sat_p"), _w("sat_p", "k_ff"), _w("k_ff", "gs_ff", 0), _w("in_Va", "gs_ff", 1),
+        _w("sat_p", "s_p", 0), _w("in_p", "s_p", 1), _w("s_p", "k_p"), _w("k_p", "gs_p", 0),
+        _w("in_Va", "gs_p", 1), _w("gs_ff", "s_da", 0), _w("gs_p", "s_da", 1),
+        _w("s_da", "sat_da"), _w("sat_da", "out_da"),
+        _w("sat_p", "sc_p", 0), _w("in_p", "sc_p", 1),
+    ]
+    return blocks, wires
+
+
+def roll_standard(aircraft, rp=None):
+    """Штатный канал крена (RollController) от уставки φ_ref."""
+    from .controllers import RollControlParams
+    rp = rp or RollControlParams()
+    blocks, wires = _roll_part(aircraft, rp, 0, 50, "in_phi_ref")
+    blocks += [_blk("in_phi_ref", "Input", 20, 50, signal="phi_ref"),
+               _blk("sc_phi", "Scope", 240, 230, title="крен φ, °")]
+    wires += [_w("in_phi_ref", "sc_phi", 0), _w("in_phi", "sc_phi", 1)]
+    return {"blocks": blocks, "wires": wires}
+
+
+def lateral_standard(aircraft, lat=None):
+    """
+    Боковой канал (LateralController):
+      курс:  χ_ref − χ (кратчайшим путём) → [K_χ] + χ̇_уп = ω → [крен разворота arctg(Vg·ω/g)]
+             → [насыщение ±φ_max] → [ограничение производной] = φ_ref → крен → δa
+      скольжение: β → [ПИ, предел И] → [×(−1)] + [K_mix]·δa → [насыщение ±δr_max] → δr
+    Ограничитель уставки крена стартует с первой команды (LateralController — с текущего φ).
+    """
+    from .controllers import LateralControlParams
+    lat = lat or LateralControlParams()
+    deg = math.degrees
+    phi_max, dr = deg(lat.phi_ref_max), deg(aircraft.delta_r_max)
+    y_r = 360                                             # ряд крена
+    y_b = 720                                             # ряд скольжения
+    blocks, wires = _roll_part(aircraft, lat.roll, 0, y_r, "rl_phi")
+    blocks += [
+        _blk("in_chi_ref", "Input", 20, 50, signal="chi_ref"),
+        _blk("in_chi", "Input", 20, 140, signal="chi"),
+        _blk("in_chidot_ff", "Input", 330, 140, signal="chidot_ff"),
+        _blk("in_Vg", "Input", 500, 160, signal="Vg"),
+        _blk("e_chi", "AngleErr", 170, 50),
+        _blk("k_chi", "Gain", 330, 58, K=lat.chi_K),
+        _blk("s_w", "Sum", 500, 60, signs="++"),
+        _blk("tb", "TurnBank", 580, 60, g=aircraft.g),
+        _blk("sat_phi", "Sat", 760, 68, min=-phi_max, max=phi_max),
+        _blk("rl_phi", "RateLim", 920, 68, rate=deg(lat.phi_ref_rate)),
+        _blk("sc_chi", "Scope", 760, 200, title="путевой угол χ, °"),
+        _blk("sc_phi", "Scope", 240, y_r + 230, title="крен φ, °"),
+
+        _blk("in_beta", "Input", 20, y_b, signal="beta"),
+        _blk("k_b", "PI", 170, y_b + 8, Kp=lat.beta_Kp, Ki=lat.beta_Ki,
+             i_max=deg(lat.beta_Ki * lat.beta_integral_limit)),
+        _blk("neg_b", "Gain", 330, y_b + 8, K=-1.0),
+        _blk("k_mix", "Gain", 330, y_b + 100, K=lat.da_dr_mix),
+        _blk("s_dr", "Sum", 500, y_b + 10, signs="++"),
+        _blk("sat_dr", "Sat", 580, y_b + 18, min=-dr, max=dr),
+        _blk("out_dr", "Output", 740, y_b + 18, act="dr"),
+        _blk("sc_b", "Scope", 740, y_b + 110, title="скольжение β, °", n=1),
+    ]
+    wires += [
+        _w("in_chi_ref", "e_chi", 0), _w("in_chi", "e_chi", 1), _w("e_chi", "k_chi"),
+        _w("k_chi", "s_w", 0), _w("in_chidot_ff", "s_w", 1), _w("s_w", "tb", 0),
+        _w("in_Vg", "tb", 1), _w("tb", "sat_phi"), _w("sat_phi", "rl_phi"),
+        _w("in_chi_ref", "sc_chi", 0), _w("in_chi", "sc_chi", 1),
+        _w("rl_phi", "sc_phi", 0), _w("in_phi", "sc_phi", 1),
+        _w("in_beta", "k_b"), _w("k_b", "neg_b"), _w("neg_b", "s_dr", 0),
+        _w("sat_da", "k_mix"), _w("k_mix", "s_dr", 1), _w("s_dr", "sat_dr"),
+        _w("sat_dr", "out_dr"), _w("in_beta", "sc_b", 0),
+    ]
+    if not lat.beta_hold:                    # РН в нейтрали: канал скольжения не нужен
+        keep = {b["id"] for b in blocks if b["id"] not in
+                ("in_beta", "k_b", "neg_b", "k_mix", "s_dr", "sat_dr", "out_dr", "sc_b")}
+        blocks = [b for b in blocks if b["id"] in keep]
+        wires = [w for w in wires if w["src"] in keep and w["dst"] in keep]
+    return {"blocks": blocks, "wires": wires}
+
+
+def _merge(*parts):
+    """Несколько схем в одну: (префикс id, сдвиг по y, схема)."""
+    blocks, wires = [], []
+    for prefix, dy, sch in parts:
+        for b in sch["blocks"]:
+            blocks.append({**b, "id": prefix + b["id"], "y": b["y"] + dy})
+        wires += [{**w, "src": prefix + w["src"], "dst": prefix + w["dst"]} for w in sch["wires"]]
+    return {"blocks": blocks, "wires": wires}
+
+
+def full_standard(aircraft, pit=None, alt=None, spd=None, lat=None):
+    """
+    Вся САУ из блоков (раздельные контуры B&M гл. 6, SAUParams(lon="split")):
+    высота + тангаж → δe, скорость → δt, курс + крен → δa, скольжение → δr.
+    Осциллографы — h, Va, χ, φ (редактор показывает до 4).
+    """
+    lon = altitude_standard(aircraft, pit, alt)
+    spd_s = speed_standard(aircraft, spd)
+    lat_s = lateral_standard(aircraft, lat)
+    sch = _merge(("lon_", 0, lon), ("spd_", 560, spd_s), ("lat_", 860, lat_s))
+    keep = {"lon_sc_h", "spd_sc_V", "lat_sc_chi", "lat_sc_phi"}
+    drop = {b["id"] for b in sch["blocks"] if b["type"] == "Scope" and b["id"] not in keep}
+    sch["blocks"] = [b for b in sch["blocks"] if b["id"] not in drop]
+    sch["wires"] = [w for w in sch["wires"] if w["dst"] not in drop]
+    return sch
+
+
+def templates(aircraft, Va0):
+    """Шаблоны для редактора: «Заготовка: …» и «Штатная САУ: …» (точка настройки Va0)."""
+    from .controllers import (PitchControlParams, RollControlParams, LateralControlParams)
+    pit = PitchControlParams(Va_ref=Va0)
+    lat = LateralControlParams(roll=RollControlParams(Va_ref=Va0))
+    return {
+        "Заготовка: тангаж → δe": pitch_blank(),
+        "Заготовка: высота → δe": altitude_blank(),
+        "Заготовка: скорость → δt": speed_blank(),
+        "Заготовка: крен → δa": roll_blank(),
+        "Заготовка: курс и скольжение → δa, δr": lateral_blank(),
+        "Штатная САУ: тангаж": pitch_standard(aircraft, pit),
+        "Штатная САУ: высота + тангаж": altitude_standard(aircraft, pit),
+        "Штатная САУ: скорость": speed_standard(aircraft),
+        "Штатная САУ: крен": roll_standard(aircraft, lat.roll),
+        "Штатная САУ: курс + крен + скольжение": lateral_standard(aircraft, lat),
+        "Штатная САУ: все каналы": full_standard(aircraft, pit, lat=lat),
+    }

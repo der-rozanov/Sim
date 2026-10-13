@@ -68,6 +68,9 @@ control/              — управление (импортирует толь�
                         lon по умолчанию в SAU (SAUParams.lon = "tecs" | "split")
     navigation.py     — WaypointNavigator, NavParams: полёт по точкам (B&M 10–11): прямая/
                         окружность векторным полем, углы — дугой R_fillet, кружение у последней
+    blocks.py         — структурные схемы САУ из блоков (BlockLab3D): библиотека звеньев
+                        (названия — термины ТАУ), Diagram, sau_signals(); шаблоны всех каналов
+                        (заготовки + штатные ≡ регуляторам controllers.py), templates()
 
 runner.py             — главный цикл: run(), Log, compute_trim(), trim_state(), print_summary()
 flight_logger.py      — FlightLogger, load_log(), print_log_info()
@@ -95,6 +98,9 @@ viz/                  — отображение (принимает Log, не �
                         процесс-спутник scenarios/Bench3D.py, связь через очереди
     map_panel.py      — окно карты (tkinter): вид сверху, ЛА, след, точки маршрута мышью;
                         процесс-спутник GameScenario3D/Bench3D; фон — World.save_top_image()
+    block_editor.py   — окно редактора структурных схем (tkinter): палитра-дерево, провода
+                        с автотрассировкой, масштаб (Ctrl+колесо, «Вписать»), осциллограф;
+                        процесс-спутник scenarios/BlockLab3D.py
 
 scenarios/            — прогоны s1–s14; каждый: конфиг → run() → viz или logger.save()
     s1_steady_flight.py    — балансировка, тримовый горизонтальный полёт
@@ -123,7 +129,13 @@ scenarios/            — прогоны s1–s14; каждый: конфиг �
                              tkinter, отдельный процесс) с ползунками параметров на лету;
                              вкладки: крен, высота и скорость (TECS), тангаж, рыскание, защита по α,
                              навигация; + окно карты с маршрутом
+    BlockLab3D.py          — лабораторная «Конструктор САУ»: 3D + редактор схем
+                             (viz/block_editor.py); схема ведёт любые из δe, δt, δa, δr,
+                             остальные — штатная САУ; меню «Шаблоны» — все каналы
     lab6/                  — учебная лабораторная по лекции 6 (L1–L3 + solutions/)
+                             konstruktor/ — задания К1–К3 «Конструктор САУ» (BlockLab3D):
+                             заготовки K*.json, fly_scheme.py (прогон схемы без 3D);
+                             эталоны — solutions/konstruktor/make_schemes.py [--check]
 
 rl_control/           — экспериментальный RL-регулятор тангажа (Q-learning), вне основной линии
 
@@ -142,6 +154,8 @@ checks/               — проверки здравого смысла
     check_motor.py        — характеристики силовой установки
     check_optimal_speed.py — Va_md (макс. дальность), Va_mp (макс. продолжительность),
                              what-if анализ: какой параметр сдвигает Va_md к заданной цели
+    check_blocks.py       — схемы из блоков: шаблоны ≡ регуляторы, звенья, ошибки схемы,
+                            полёт «все каналы» из блоков против SAU(lon="split")
 
 docs/                 — техническая документация (карта — docs/README.md)
     DEV_PLAN.md       — статус этапов, интерфейсы, ДОРОЖНАЯ КАРТА (что делать дальше)
@@ -365,6 +379,7 @@ from viz.plotting import plot_dynamics
 python checks/check.py            # все модули + 6DOF + боковая САУ: ALL CHECKS PASSED
 python checks/check_lateral.py    # моды бокового канала vs линейная теория
 python checks/check_ground.py     # шасси и земля: ALL GROUND CHECKS PASSED
+python checks/check_blocks.py     # конструктор САУ: ALL BLOCK CHECKS PASSED
 # регрессия: все сценарии без окон (Git Bash)
 export MPLBACKEND=Agg PYTHONIOENCODING=utf-8
 for f in scenarios/s*.py scenarios/lab6/L*.py; do python "$f" >/dev/null 2>&1; echo "$f rc=$?"; done
