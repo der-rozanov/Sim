@@ -4,9 +4,9 @@
 
 Запуск:
     python viz/viewer.py                              # диалог выбора файла
-    python viz/viewer.py results/s8.flightlog         # открыть напрямую
-    python viz/viewer.py results/s8.flightlog --speed 3.0   # скорость анимации
-    python viz/viewer.py results/s8.flightlog --static      # статичный дашборд
+    python viz/viewer.py results/s1.flightlog         # открыть напрямую
+    python viz/viewer.py results/s1.flightlog --speed 3.0   # скорость анимации
+    python viz/viewer.py results/s1.flightlog --static      # статичный дашборд
 
 Управление анимацией:
     Пробел — пауза / продолжение

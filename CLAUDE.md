@@ -18,7 +18,7 @@
 ## Текущая фаза (с 2026-10-06) — ЧИТАТЬ ПЕРВЫМ
 
 - **Диплом защищён/окончен. Всё, что связано с зондом (сравнения «зонд vs
-  косвенная оценка», s7–s10, УС по зонду), — НА ПАУЗЕ.** Не развивать без
+  косвенная оценка», p7–p10, УС по зонду), — НА ПАУЗЕ.** Не развивать без
   явной команды автора.
 - Цель фазы — **довести симулятор до нормального инженерного состояния**
   (6DOF-модель, согласованные параметры, трим, САУ, графики, навигация).
@@ -56,9 +56,8 @@ control/              — управление (импортирует толь�
                         PitchControlParams.gain_scheduling — масштабирование delta_e ∝ (Va_ref/Va)²
     sensors.py        — measure_gyro/altitude/airspeed/angle_of_attack/gps_*,
                         measure_attitude/sideslip/gps_course (боковой канал)
-    estimators.py     — estimate_alpha_indirect()
-    aua.py            — AngleOfAttackProtector (АУА, надзор над УА) — s10
-    lqr.py            — LQRController продольного канала (scipy DARE) — s11
+    aua.py            — AngleOfAttackProtector (АУА, надзор над УА) — SAU, Bench3D, archive/probe/p10
+    lqr.py            — LQRController продольного канала (scipy DARE) — s7
     tuning.py         — РАСЧЁТ САУ ПО МОДЕЛИ (РЕШ-21): plant_coeffs(), design_sau(aircraft, Va,
                         SAUSpecs) → параметры всех регуляторов; для другого ЛА — тот же вызов
     sau.py            — SAU: вся САУ одним классом (РЕШ-26): sensors → estimator → nav →
@@ -102,26 +101,20 @@ viz/                  — отображение (принимает Log, не �
                         с автотрассировкой, масштаб (Ctrl+колесо, «Вписать»), осциллограф;
                         процесс-спутник scenarios/BlockLab3D.py
 
-scenarios/            — прогоны s1–s14; каждый: конфиг → run() → viz или logger.save()
+scenarios/            — прогоны s1–s10; каждый: конфиг → run() → viz или logger.save()
     s1_steady_flight.py    — балансировка, тримовый горизонтальный полёт
     s2_pitch_up.py         — кабрирование (уставка theta_ref > 0)
     s3_pitch_down.py       — пикирование (уставка theta_ref < 0)
     s4_stall.py            — выход на закритический УА + индикация (ТЗ С4)
     s5_altitude_control.py — контроль высоты (P-контур h → theta_ref → θ+q; Va — газом)
     s6_speed_control.py    — контроль высоты + удержание Va (SpeedController)
-    s7_alpha_estimation.py — сравнение оценок УА: зонд vs ИНС+GPS при попутном ветре
-    s8_energy_comparison.py  — то же + субплот накопленной энергии (прокси throttle·Va)
-    s8_b_motor_work.py     — ФИЗИЧЕСКИ КОРРЕКТНАЯ работа мотора W=∫T·Va·dt [Дж];
-                             gain_scheduling включён; ретрим на VA_REF
-    s9_paired_probe_comparison.py — парный прогон "с зондом vs без зонда"
-    s10_aua_gust_protection.py — АУА против попутного порыва
-    s11_lqr_climb.py       — LQR: набор / горизонт / снижение
-    s12_coordinated_turn.py — разворот 0°→90°→−45°, β=0 по зонду vs δr=0
-    s13_crosswind.py       — ступенька бокового ветра: удержание путевого угла,
+    (нумерация с 2026-10-13: прежние s11–s14 → s7–s10; прежние s7–s10 (зонд) → archive/probe/p7–p10)
+    s7_lqr_climb.py       — LQR: набор / горизонт / снижение
+    s8_coordinated_turn.py — разворот 0°→90°→−45°, β=0 по зонду vs δr=0
+    s9_crosswind.py       — ступенька бокового ветра: удержание путевого угла,
                              сверка с треугольником скоростей
-    s14_waypoints.py       — полёт по точкам (WaypointNavigator): штиль и боковой ветер
+    s10_waypoints.py       — полёт по точкам (WaypointNavigator): штиль и боковой ветер
     lateral_common.py      — FullSAU: обёртка control.sau.SAU с псевдодатчиками для run()
-    GameScenario.py        — интерактивное ручное/автоматическое управление (клавиши, 2D)
     GameScenario3D.py      — пилотирование в 3D в реальном времени (Ursina): ручной режим
                              6DOF + САУ (θ/h, Va, курс, маршрут — окно карты, N);
                              полёт пишется в .flightlog
@@ -132,12 +125,10 @@ scenarios/            — прогоны s1–s14; каждый: конфиг �
     BlockLab3D.py          — лабораторная «Конструктор САУ»: 3D + редактор схем
                              (viz/block_editor.py); схема ведёт любые из δe, δt, δa, δr,
                              остальные — штатная САУ; меню «Шаблоны» — все каналы
-    lab6/                  — учебная лабораторная по лекции 6 (L1–L3 + solutions/)
-                             konstruktor/ — задания К1–К3 «Конструктор САУ» (BlockLab3D):
-                             заготовки K*.json, fly_scheme.py (прогон схемы без 3D);
-                             эталоны — solutions/konstruktor/make_schemes.py [--check]
 
-rl_control/           — экспериментальный RL-регулятор тангажа (Q-learning), вне основной линии
+archive/              — код вне основной линии, в регрессию не входит (archive/README.md)
+    probe/            — зонд vs косвенная оценка УА: estimators.py, p7, p8, p8_b, p9, p10
+                        (тема на паузе; состояние на защите — тег git `diploma`)
 
 checks/               — проверки здравого смысла
     estimate_fpv_aero.py  — оценка производных FPV-самолёта по геометрии (РЕШ-20)
@@ -166,8 +157,7 @@ docs/                 — техническая документация (ка�
     viewer3d.md       — 3D-тренажёр: запуск, клавиши, СК и ориентация, проверки
     architecture.md   — зависимости, Log, controls_fn, совместимость 6DOF
     decisions.md      — журнал решений РЕШ-01…28 (почему сделано так)
-    scenarios_report.md — результаты сценариев С1–С14
-    continuation.md   — ИСТОРИЧЕСКИЙ (состояние на 2026-06)
+    scenarios_report.md — результаты сценариев С1–С10, П7–П10
 results/              — .flightlog файлы (генерируемые, в .gitignore)
 ```
 
@@ -180,7 +170,6 @@ from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
 from sim.state  import THETA, Q, H, X, U, W
 from control.controllers import PitchController, PitchControlParams
 from control.sensors     import measure_gyro, measure_airspeed, ...
-from control.estimators  import estimate_alpha_indirect
 from runner       import run, compute_trim, trim_state, print_summary
 from flight_logger import FlightLogger
 from viz.animate  import animate_log
@@ -281,7 +270,7 @@ from viz.plotting import plot_dynamics
 - Ядро физики: `sim/` — dynamics, aero (sigmoid CL), integrators (RK4+Euler), wind, state
 - **Боковая САУ (Б3, 2026-10-06)**: `LateralController` — ПИ курса χ (GPS) → φ_ref
   (±30°) → ПИ крена − Kd·p → δa; ПИ по β (зонд УС) → δr. Коэффициенты рассчитаны
-  по B&M гл. 6 для Va=30 м/с (docs/control.md, раздел 9). Сценарии s12, s13.
+  по B&M гл. 6 для Va=30 м/с (docs/control.md, раздел 9). Сценарии s8, s9.
   Вывод: на аналоге Aerosonde контур β почти не влияет — ЛА сам координирован.
 - **Модель 6DOF (Б1, 2026-10-06)**: состояние `[u, w, q, θ, x, h, v, p, r, φ, ψ, y]`
   (индексы 0..5 прежние), управление `[δe, δt, δa, δr]` (2 элемента → δa=δr=0),
@@ -296,15 +285,15 @@ from viz.plotting import plot_dynamics
   (не полёта!). По умолчанию ВКЛЮЧЁН (`gain_scheduling: bool = True` в коде).
 - Инфраструктура: `runner.py`, `flight_logger.py` (.flightlog / npz), `viz/` (plotting,
   animate, viewer)
-- Сценарии s1–s13: балансировка, кабрирование, пикирование, срыв с индикацией,
+- Сценарии s1–s9, p7–p10: балансировка, кабрирование, пикирование, срыв с индикацией,
   контроль высоты, контроль Va, сравнение оценок УА, метрика энергии, парный
   прогон, АУА, LQR, координированный разворот, боковой ветер
-- **s8_b `scenarios/s8_b_motor_work.py` — физически корректная работа мотора**:
+- **p8_b `archive/probe/p8_b_motor_work.py` — физически корректная работа мотора**:
   - Метрика `W = ∫T(t)·Va(t) dt` [Дж] вместо прокси `throttle·Va`
   - T вычисляется из модели: `T = 0.5·ρ·S_prop·C_prop·((k_motor·δt)²−Va²)`
   - `gain_scheduling=True`, `Va_ref=30.0` (точка настройки), ретрим на `VA_REF`
   - Субплоты: P_мот(t) [Вт] и W(t) нарастающий [Дж]
-- **s9 `scenarios/s9_paired_probe_comparison.py` — парный прогон "с зондом vs без зонда"**
+- **p9 `archive/probe/p9_paired_probe_comparison.py` — парный прогон "с зондом vs без зонда"**
   (кульминационный результат, Этап 2 ТЗ С6):
   - Два независимых `run()` с идентичными ПИД/ветром/шумом общих датчиков
   - УА **подаётся в контур управления**: `theta_ref = alpha_src + KH * h_err`
@@ -342,7 +331,7 @@ from viz.plotting import plot_dynamics
 Все сценарии (Va0 = 30 м/с, коэффициенты САУ) настроены под прежний ЛА — перенастройка
 отдельным блоком.
 
-### Результаты s9 (параметры-аналог, m=5 кг, Пресет 1) — **устарело, m изменён**
+### Результаты p9 (параметры-аналог, m=5 кг, Пресет 1) — **устарело, m изменён**
 Условия: постоянный встречный ветер Vwx = −5 м/с, рамп-снижение 150→100 м за 60 с.
 
 | Метрика | С зондом | Без зонда | Δ |
@@ -354,15 +343,15 @@ from viz.plotting import plot_dynamics
 Результаты получены при m=5 кг и до исправления знака Vx_earth — перезапустить.
 
 - **Навигация по точкам (блок 4 дорожной карты, 2026-10-06)**: `control/navigation.py`
-  (B&M 10–11, скругление углов R = 200 м), s14; окно карты `viz/map_panel.py` в
+  (B&M 10–11, скругление углов R = 200 м), s10; окно карты `viz/map_panel.py` в
   GameScenario3D и Bench3D (точки мышью, «Лететь по маршруту»), вкладка «Навигация»
   стенда. Прямые: |e_py| ≤ 3.5 м (штиль), ≤ 6.6 м (ветер 5 м/с). docs/control.md р. 10.
 
 ### Не реализовано из ТЗ
 - Боковой канал Б4: сравнение УС «зонд vs косвенная оценка» (на паузе)
 - ТЗ С5: сравнение двух установившихся режимов с разным Cl/Cd
-- s9_b: парный прогон с метрикой реальной работы мотора T·Va (запланирован)
-- Штилевой контрольный прогон вынесен в Пресет 4 s9 (раскомментировать)
+- p9_b: парный прогон с метрикой реальной работы мотора T·Va (запланирован)
+- Штилевой контрольный прогон вынесен в Пресет 4 p9 (раскомментировать)
 
 ## Порядок работы (рекомендуемый)
 
@@ -382,7 +371,7 @@ python checks/check_ground.py     # шасси и земля: ALL GROUND CHECKS 
 python checks/check_blocks.py     # конструктор САУ: ALL BLOCK CHECKS PASSED
 # регрессия: все сценарии без окон (Git Bash)
 export MPLBACKEND=Agg PYTHONIOENCODING=utf-8
-for f in scenarios/s*.py scenarios/lab6/L*.py; do python "$f" >/dev/null 2>&1; echo "$f rc=$?"; done
+for f in scenarios/s*.py archive/probe/s*.py; do python "$f" >/dev/null 2>&1; echo "$f rc=$?"; done
 git checkout -- checks/*.png      # check_*.py перегенерируют PNG — не коммитить случайно
 ```
 При изменении физики — регрессия продольного канала: прогон с ветром/порывом/
@@ -415,7 +404,7 @@ git checkout -- checks/*.png      # check_*.py перегенерируют PNG 
 **Рабочий диапазон с gain_scheduling=True**: Va = 20–35 м/с (scale = 0.73–2.25).
 За пределами этого диапазона качество управления деградирует.
 
-**Для s8_b**: использовать `gain_scheduling=True`, `Va_ref=30.0`, ретримироваться
+**Для p8_b**: использовать `gain_scheduling=True`, `Va_ref=30.0`, ретримироваться
 на целевой VA_REF через `compute_trim(aircraft, VA_REF)`.
 
 **Идея на будущее**: добавить speed-dependent feedforward в SpeedController:
@@ -425,42 +414,40 @@ git checkout -- checks/*.png      # check_*.py перегенерируют PNG 
 ### Формула горизонтальной скорости в земной СК — ИСПРАВЛЕНО (2026-10-06)
 Было `Vx_earth = u·cos θ − w·sin θ`, стало `+ w·sin θ` (B&M) — одновременно в
 `dynamics` (через матрицу поворота), `state.kinematic_gamma`,
-`sensors.measure_gps_velocity_earth`. Результаты s7–s9 до этой даты получены со
+`sensors.measure_gps_velocity_earth`. Результаты p7–p9 до этой даты получены со
 старой формулой — перезапустить. См. docs/decisions.md РЕШ-14.
 
 ### Боковой канал (Б1)
 - Реактивный момент винта кренит ЛА; спиральная мода неустойчива (T2 = 10 с). В продольных
-  сценариях (s1–s11, lab6, GameScenario) крен держит `RollHold` (φ_ref = 0) через
+  сценариях (s1–s7, p7–p10) крен держит `RollHold` (φ_ref = 0) через
   `with_roll_hold(controls_fn, aircraft, sp, dt)` — РЕШ-19. |φ| ≲ 0.5°, δa ≈ 0.4°.
 - Крен и курс (РЕШ-22, 2026-10-08) — каскад по схеме PX4/ArduPilot: p_ref = (φ_ref − φ)/τ_φ
   (≤ p_max), δa = FF·p_ref + ПИ(p_ref − p) с масштабом по Va; курс — П-контур
   φ_ref = atan(Vg·(Vg·κ + K_χ·e_χ)/g), κ — кривизна от навигатора. Коэффициенты — расчёт
   tuning.py (docs/control.md 11.4). meas LateralController требует 'Vg' и 'Va';
   RollHold.step(phi, p, Va, dt).
-- Сценарии s12/s13 выводят только текст + .flightlog; графиков бокового канала
+- Сценарии s8/s9 выводят только текст + .flightlog; графиков бокового канала
   в viz/ пока нет (по указанию автора графику не трогали).
 - `CY_dr = +0.19` (2-е изд. B&M; в табл. E.2 1-го изд. было −0.17 — РЕШ-15).
 - Блок Б2 (открытый контур) закрыт проверкой `checks/check_lateral.py`.
-- Блок Б3 (боковая САУ) — s12, s13. Дальше (Б4, по решению автора): УС зонд vs
+- Блок Б3 (боковая САУ) — s8, s9. Дальше (Б4, по решению автора): УС зонд vs
   косвенная оценка, полёт по точкам, графики бокового канала в viz/.
 
 ### САУ под FPV (РЕШ-21, 2026-10-07)
 - Коэффициенты всех контуров — расчёт `control/tuning.py` на крейсере 16 м/с (решение
   автора); умолчания классов регуляторов = расчёт (сверяет `checks/check_sau.py`).
   Таблицы и проверка на полной модели — docs/control.md раздел 11.
-- Высота и скорость в 3D-тренажёре и полной САУ (s12–s14) — TECS (РЕШ-27, docs/control.md
-  р. 13), и на стенде тоже (вкладка «Высота и скорость (TECS)»); в s5–s10 —
+- Высота и скорость в 3D-тренажёре и полной САУ (s8–s10) — TECS (РЕШ-27, docs/control.md
+  р. 13), и на стенде тоже (вкладка «Высота и скорость (TECS)»); в s5–s6, p7–p10 —
   упрощённый П-контур KH. Анти-виндап интегралов курса, крена, высоты (`PID.unwind`).
   Предел q_ref каскада тангажа = Kθ·40° (при 60°/с руль ограничивался ~2° — ЛА
   «застревал» в наборе, полёт 2026-10-07).
 - Все сценарии переведены на Va0 = 16 м/с; `KH` берётся из `PitchControlParams().KH`;
   `PitchController.set_trim_elevator(de_trim)` — упреждающий δe; `h_Kp` = 0 по умолчанию.
 - s5 получил контур скорости (раньше сваливался при наборе на балансировочном газе).
-- НЕ перенастроено: lab6 (варианты Va = 22–30 м/с и ωn_θ = 4.5–6 рад/с рассчитаны под
-  Aerosonde; у FPV собственная ωn_θ ≈ 14.5 — решения лабораторной не проходят свои
-  проверки) — учебный материал, решение за автором. LQR (s11) считается по модели сам.
+- LQR (s7) считается по модели сам.
 - Координация разворота (РЕШ-23): скорость уставки крена ≤ 90°/с и микс δr += K·δa,
-  K = −N_δa/N_δr = −0.654 — рывок носа против разворота −34 → −6°/с, |β| ≤ 2.7° (s12).
+  K = −N_δa/N_δr = −0.654 — рывок носа против разворота −34 → −6°/с, |β| ≤ 2.7° (s8).
   При beta_hold=False РН и микс выключены.
 
 ### Земля и шасси (РЕШ-25, 2026-10-08)
@@ -469,7 +456,7 @@ git checkout -- checks/*.png      # check_*.py перегенерируют PNG 
 - Трёхопорное шасси FPV и точки конструкции — `AircraftParams.gear_*`, сняты с 3D-модели
   (ОЦЕНКА [АВТОР]). Авария — решение игры (`Game._ground_contact`): конструкция,
   колесо > `gear_v_crash`, вода. Здания/деревья не твёрдые, тормозов нет.
-- В s1–s14 земли нет (`ground_fn=None`), `runner.run()` по-прежнему стоп при h < 0.
+- В s1–s10, p7–p10 земли нет (`ground_fn=None`), `runner.run()` по-прежнему стоп при h < 0.
 
 ### Открытые дефекты и долги (найдены 2026-10-06, не исправлены — см. дорожную карту)
 - `compute_trim` — линейный по CL/Cm (без sigmoid), только горизонтальный полёт без

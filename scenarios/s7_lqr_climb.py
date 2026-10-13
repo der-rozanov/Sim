@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-С11: LQR — набор высоты → горизонтальный полёт → снижение.
+С7: LQR — набор высоты → горизонтальный полёт → снижение.
 
 Три фазы:
   0        – T_CRUISE  с — набор:       h_ref = H_CRUISE (150 м)
@@ -11,8 +11,8 @@ LQR-регулятор: численная линеаризация + DARE (scip
 Измерения: гироскоп q, барометр h, СВС Va, ИНС theta.
 u, w реконструируются из Va и theta (приближение без зонда УА).
 
-Запуск:  python scenarios/s11_lqr_climb.py
-         python scenarios/s11_lqr_climb.py results/s11.gif   -- сохранить анимацию
+Запуск:  python scenarios/s7_lqr_climb.py
+         python scenarios/s7_lqr_climb.py results/s7.gif   -- сохранить анимацию
 """
 
 import os
@@ -85,7 +85,7 @@ print(f"Трим: alpha={np.degrees(alpha_trim):.2f}°  "
 # Лётный журнал
 # ------------------------------------------------------------------
 logger = FlightLogger(
-    scenario="С11: LQR набор/горизонт/снижение",
+    scenario="С7: LQR набор/горизонт/снижение",
     description=(f"LQR h_ref: {H_INIT:.0f}→{H_CRUISE:.0f}→{H_INIT:.0f} м, "
                  f"Va={VA_REF:.0f} м/с"),
     aircraft=aircraft,
@@ -143,7 +143,7 @@ def controls_fn(t, state, Va, alpha):  # noqa: ARG001 — alpha required by runn
 # Прогон
 # ------------------------------------------------------------------
 log = run(with_roll_hold(controls_fn, aircraft, sp, cfg.dt), aircraft, wind_params, cfg, state0=s0)
-print_summary(log, aircraft, label="С11  LQR набор/горизонт/снижение")
+print_summary(log, aircraft, label="С7  LQR набор/горизонт/снижение")
 logger.save(log, h_ref=h_ref_buf, theta_ref=theta_ref_buf)
 
 # ------------------------------------------------------------------
@@ -191,7 +191,7 @@ n_frames = len(idx_list)
 # ------------------------------------------------------------------
 fig = plt.figure(figsize=(14, 12))
 fig.suptitle(
-    f"С11: LQR — набор h={H_INIT:.0f}→{H_CRUISE:.0f} м → горизонтальный полёт"
+    f"С7: LQR — набор h={H_INIT:.0f}→{H_CRUISE:.0f} м → горизонтальный полёт"
     f" → снижение h={H_INIT:.0f} м\n"
     f"(набор 0–{T_CRUISE:.0f} с,  горизонт {T_CRUISE:.0f}–{T_DESCEND:.0f} с,"
     f"  снижение {T_DESCEND:.0f}–{cfg.t_end:.0f} с,  Va_ref={VA_REF:.0f} м/с)",

@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-Общая часть сценариев бокового канала (s12–s14): полная САУ 6DOF (control/sau.py).
+Общая часть сценариев бокового канала (s8–s10): полная САУ 6DOF (control/sau.py).
 
 Продольный канал — TECS (control/tecs.py):
   h_ref, Va_ref → [темпы энергии Ė, Ḃ] → throttle (Ė), theta_ref (Ḃ) → [каскад theta → q] → delta_e
 Боковой канал — LateralController:
   chi_ref → [П chi] → phi_ref → [phi → p_ref → FF + ПИ p] → delta_a
   beta (зонд) → [ПИ beta] + микс δa → delta_r
-Навигация (необязательно, s14) — WaypointNavigator: положение (GPS) → chi_ref, h_ref
+Навигация (необязательно, s10) — WaypointNavigator: положение (GPS) → chi_ref, h_ref
 (B&M гл. 10–11, control/navigation.py); без маршрута — расписание chi_ref_fn(t).
 
 Источники измерений:
@@ -41,7 +41,7 @@ class FullSAU:
         self.alpha_trim = trim[0]
         params = SAUParams(pitch=PitchControlParams(Va_ref=cfg.Va0),
                            lateral=lat_params or LateralControlParams())
-        # GPS-положение — только с навигатором: s12/s13 без изменений в последовательности шума
+        # GPS-положение — только с навигатором: s8/s9 без изменений в последовательности шума
         sensors = NoisySensors(sp, rng, gps_pos=nav is not None)
         self.sau = SAU(aircraft, trim, sensors, params, nav=nav)
         self.sau.engage(theta=self.alpha_trim, h=cfg.h0 if h_ref is None else h_ref,

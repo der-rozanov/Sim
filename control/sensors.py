@@ -79,32 +79,6 @@ def measure_angle_of_attack(alpha_true, bias, noise_std, rng):
     return alpha_true + bias + noise
 
 
-def measure_gps_position(x_true, h_true, bias, noise_std, rng):
-    """
-    GPS: горизонтальная координата и высота (независимые шумы).
-
-    Args:
-        x_true: истинная горизонтальная координата, м
-        h_true: истинная высота, м
-        bias: смещение (кортеж из 2 элементов или 0.0)
-        noise_std: СКО шума, м
-        rng: numpy.random.Generator
-
-    Returns:
-        (x_meas, h_meas): измеренные координаты, м
-    """
-    bias_x = bias if isinstance(bias, (int, float)) else bias[0] if len(bias) > 0 else 0.0
-    bias_h = bias if isinstance(bias, (int, float)) else bias[1] if len(bias) > 1 else 0.0
-
-    if noise_std > 0:
-        noise_x = rng.normal(0.0, noise_std)
-        noise_h = rng.normal(0.0, noise_std)
-    else:
-        noise_x = noise_h = 0.0
-
-    return (x_true + bias_x + noise_x, h_true + bias_h + noise_h)
-
-
 def measure_gps_velocity_earth(u_body, w_body, theta, bias, noise_std, rng):
     """
     GPS: земная скорость (горизонтальная и вертикальная).
@@ -143,45 +117,6 @@ def measure_gps_velocity_earth(u_body, w_body, theta, bias, noise_std, rng):
 
     return (Vx_earth_true + bias_x + noise_x,
             Vh_earth_true + bias_h + noise_h)
-
-
-def measure_accelerometer(u_dot, w_dot, theta, g, bias, noise_std, rng):
-    """
-    Акселерометр (линейные ускорения в связанной СК, с гравитацией).
-
-    Сумма инерционного ускорения (u_dot, w_dot) и гравитационного эффекта.
-    В связанной СК при крене=0:
-        a_x_body = u_dot − g·sin(theta)
-        a_z_body = w_dot + g·cos(theta)  (z_body — вниз)
-
-    Args:
-        u_dot: истинное ускорение u, м/с²
-        w_dot: истинное ускорение w, м/с²
-        theta: угол тангажа, рад
-        g: ускорение свободного падения, м/с²
-        bias: смещение (кортеж из 2 элементов или 0.0)
-        noise_std: СКО шума, м/с²
-        rng: numpy.random.Generator
-
-    Returns:
-        (a_x, a_z): измеренные ускорения в связанной СК, м/с²
-    """
-    st, ct = np.sin(theta), np.cos(theta)
-
-    a_x_true = u_dot - g * st
-    a_z_true = w_dot + g * ct
-
-    bias_x = bias if isinstance(bias, (int, float)) else bias[0] if len(bias) > 0 else 0.0
-    bias_z = bias if isinstance(bias, (int, float)) else bias[1] if len(bias) > 1 else 0.0
-
-    if noise_std > 0:
-        noise_x = rng.normal(0.0, noise_std)
-        noise_z = rng.normal(0.0, noise_std)
-    else:
-        noise_x = noise_z = 0.0
-
-    return (a_x_true + bias_x + noise_x,
-            a_z_true + bias_z + noise_z)
 
 
 # ---------------------------------------------------------------------------

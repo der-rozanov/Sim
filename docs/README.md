@@ -24,7 +24,7 @@
 python checks/check.py                      # проверки всех модулей (ALL CHECKS PASSED)
 python checks/check_lateral.py              # боковой канал в открытом контуре
 python scenarios/s1_steady_flight.py        # балансировочный полёт
-python scenarios/s12_coordinated_turn.py    # разворот с боковой САУ
+python scenarios/s8_coordinated_turn.py    # разворот с боковой САУ
 python viz/viewer.py results/<файл>.flightlog
 python viz/viewer3d.py                      # 3D-проигрыватель, последний лог из results/
 python scenarios/GameScenario3D.py          # пилотирование в 3D (ручной режим / САУ)
@@ -48,7 +48,7 @@ Sim/
 ├── viz/                 plotting, animate, viewer (продольный канал);
 │                        viewer3d — 3D-тренажёр на Ursina (6DOF); bench_panel,
 │                        map_panel — окна стенда и карты (tkinter)
-├── scenarios/           s1–s14, lateral_common, GameScenario, GameScenario3D, Bench3D, lab6/
+├── scenarios/           s1–s10, p7–p10, lateral_common, GameScenario, GameScenario3D, Bench3D, lab6/
 ├── checks/              check, check_lateral, check_polar, check_motor, check_optimal_speed
 ├── rl_control/          экспериментальный RL-регулятор (вне основной линии)
 └── docs/
@@ -61,7 +61,7 @@ Sim/
     ├── SENSORS.md          Псевдодатчики
     ├── viewer3d.md         3D-тренажёр: запуск, клавиши, СК, проверки
     ├── decisions.md        Журнал решений РЕШ-01…17
-    ├── scenarios_report.md Результаты С1–С14
+    ├── scenarios_report.md Результаты С1–С10, П7–П10
     └── continuation.md     Исторический (2026-06)
 ```
 
@@ -95,5 +95,5 @@ ursina      # только для viz/viewer3d.py (3D-тренажёр, РЕШ-1
 |------|--------|------------|
 | 0 — Каркас | ✅ Готов | Структура, конфиг, вектор состояния, RK4, прогон |
 | 1 — База | ✅ Готов | Физика, аэро, датчики, каскадный ПИД тангажа, удержание высоты |
-| 2 — Слой доказательства | ✅ Готов | estimators.py, парный прогон "с зондом / без" (s9) |
-| 3 — Фичи | 🔄 В работе (фаза «довести до нормы», см. DEV_PLAN) | LQR (s11) ✅; модель 6DOF — физика бокового канала ✅ (docs/physics.md); боковая САУ ✅ (s12, s13); наблюдатель УА ⬜ |
+| 2 — Слой доказательства | ✅ Готов | estimators.py, парный прогон "с зондом / без" (p9) |
+| 3 — Фичи | 🔄 В работе (фаза «довести до нормы», см. DEV_PLAN) | LQR (s7) ✅; модель 6DOF — физика бокового канала ✅ (docs/physics.md); боковая САУ ✅ (s8, s9); наблюдатель УА ⬜ |

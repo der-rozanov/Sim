@@ -70,14 +70,14 @@ def _sanitize_scenario(name: str) -> str:
     Привести имя сценария к виду, пригодному для имени файла.
     'С8: Контроль высоты + Va + энергия' → 'Контроль_высоты_Va_энергия'
     """
-    # Убрать префикс вида «С8: » или «S8: »
-    name = re.sub(r'^[СсSs]\d+\s*[:\-]\s*', '', name).strip()
+    # Убрать префикс вида «С8: », «S8: », «П8б: » (П — архивные сценарии зонда)
+    name = re.sub(r'^[СсSsПпPp]\d+[а-яa-z]?\s*[:\-]\s*', '', name).strip()
     # Разделители → подчёркивание
     name = re.sub(r'[/\\|,;°]+', '_', name)
     # Пробелы и + → подчёркивание
     name = re.sub(r'[\s+]+', '_', name)
     # Убрать недопустимые символы для имени файла
-    name = re.sub(r'[<>?*"\']+', '', name)
+    name = re.sub(r'[<>:?*"\']+', '', name)
     name = re.sub(r'_+', '_', name).strip('_')
     return name or "scenario"
 
@@ -390,7 +390,7 @@ def load_log(path: str) -> dict:
         data["meta"]                                     — dict метаданных
 
     Пример:
-        data = load_log("results/s8.flightlog")
+        data = load_log("results/s1.flightlog")
         plt.plot(data["t"], np.degrees(data["alpha_true"]))
     """
     if not os.path.exists(path) and os.path.exists(path + ".npz"):

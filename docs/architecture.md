@@ -28,9 +28,9 @@ config.py            ← нет зависимостей (только dataclass
                             └── scenarios/
                                 ├── s1..s5        ← runner, control, sensors, config
                                 ├── s6            ← runner, control, sensors, config
-                                ├── s7–s10        ← runner, control, sensors, estimators, config
-                                ├── s11           ← runner, control/lqr
-                                └── s12, s13      ← lateral_common (FullSAU → control.sau.SAU) ← runner, control
+                                ├── p7–p10        ← runner, control, sensors, estimators, config
+                                ├── s7           ← runner, control/lqr
+                                └── s8, s9      ← lateral_common (FullSAU → control.sau.SAU) ← runner, control
 ```
 
 `check.py` — импортирует все модули, зависимость только в одну сторону.
@@ -223,7 +223,7 @@ wind_call = lambda h, t: (5.0 * np.sin(t), 0.0)
 Гарантия совместимости: при v = p = r = φ = ψ = 0, δa = δr = 0 уравнения
 вырождаются точно в прежние продольные (проверка 7.3 в `checks/check.py`;
 регрессия по прогону с ветром и дублетом руля — совпадение u, w, q, θ, h
-до бита). Все сценарии s1–s11 и lab6 работают без правок.
+до бита). Все сценарии s1–s7, p7–p10 и lab6 работают без правок.
 
 Адекватность бокового канала в открытом контуре — `checks/check_lateral.py`.
 

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-С12: Координированный разворот — смена курса боковой САУ.
+С8: Координированный разворот — смена курса боковой САУ.
 
 Расписание уставки курса chi_ref:
    0 .. T_TURN1  с → 0°    (полёт на север; первые ~15 с — переходный процесс
@@ -16,7 +16,7 @@
 Это показывает вклад измерения УС в координацию разворота.
 
 Вывод: таблица по времени, метрики переходного процесса, .flightlog (прогон А).
-Запуск:  python scenarios/s12_coordinated_turn.py
+Запуск:  python scenarios/s8_coordinated_turn.py
 """
 
 import sys
@@ -77,7 +77,7 @@ t = log_a.t
 chi_a = course_of(log_a)
 chi_b = course_of(log_b)
 print("=" * 96)
-print("С12: Координированный разворот (прогон А — с контуром скольжения по зонду)")
+print("С8: Координированный разворот (прогон А — с контуром скольжения по зонду)")
 print("=" * 96)
 print(f"{'t,с':>5} {'χref°':>6} {'χ°':>7} {'ψ°':>7} {'φref°':>6} {'φ°':>6} {'β°':>6} "
       f"{'δa°':>6} {'δr°':>6} {'h,м':>6} {'Va':>5} {'x,м':>6} {'y,м':>6}")
@@ -145,10 +145,10 @@ R_turn = log_a.Va[i_ss]**2 / (aircraft.g * np.tan(abs(s[PHI])))
 print(f"Радиус разворота R = Va²/(g·tgφ) = {R_turn:.0f} м")
 
 print()
-print_summary(log_a, aircraft, label="С12 прогон А (β по зонду)")
+print_summary(log_a, aircraft, label="С8 прогон А (β по зонду)")
 
 logger = FlightLogger(
-    scenario="С12: Координированный разворот",
+    scenario="С8: Координированный разворот",
     description="Курс 0° → 90° → −45°, β=0 по зонду, h=100 м, Va=30 м/с",
     aircraft=aircraft, wind_params=wind_params, cfg=cfg, sp=sp,
     trim=compute_trim(aircraft, cfg.Va0),
