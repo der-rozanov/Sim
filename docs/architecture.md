@@ -4,41 +4,43 @@
 
 ## 1. Граф зависимостей модулей
 
+Слои зависят только от нижележащих:
+
 ```
-config.py            ← нет зависимостей (только dataclasses)
-    │
-    ├── state.py     ← config
-    ├── aero.py      ← config
-    ├── wind.py      ← config
-    ├── sensors.py   ← numpy only, параметры из config
-    ├── control/controllers.py ← config (ограничения рулей и тяги);
-    │                            PitchController, SpeedController, LateralController
-    ├── control/lqr.py, aua.py ← config, state, dynamics (LQR линеаризует модель)
-    ├── estimators.py ← numpy only (НЕ зависит от sensors или control)
-    │
-    └── dynamics.py  ← config, state, aero
-            │
-            └── integrators.py ← dynamics
-                    │
-                    └── runner.py ← config, state, wind, integrators
-                            │
-                            ├── plotting.py       ← state, config
-                            ├── animate.py        ← state (только индексы)
-                            ├── viewer3d.py       ← flight_logger (только .flightlog), world3d, ursina
-                            └── scenarios/
-                                ├── s1..s5        ← runner, control, sensors, config
-                                ├── s6            ← runner, control, sensors, config
-                                ├── p7–p10        ← runner, control, sensors, estimators, config
-                                ├── s7           ← runner, control/lqr
-                                └── s8, s9      ← lateral_common (FullSAU → control.sau.SAU) ← runner, control
+sim/            физика (не знает об управлении)
+  config.py       ← только dataclasses: AircraftParams, WindParams, SimConfig, SensorParams
+  state.py        ← config: индексы, air_data(), earth_velocity(), матрица поворота
+  aero.py, wind.py, ground.py, actuators.py ← config, state
+  dynamics.py     ← config, state, aero, ground: derivatives(), propeller()
+  integrators.py  ← dynamics: step_rk4(), step_euler()
+      │
+control/        САУ (импортирует только sim/)
+  controllers.py  PID, PitchController, SpeedController, RollController, LateralController,
+                  AltitudeHold, RollHold
+  sensors.py      псевдодатчики (numpy)
+  tecs.py, aua.py, navigation.py, lqr.py (← dynamics: линеаризация)
+  tuning.py       расчёт коэффициентов по модели (← runner.compute_trim)
+  sau.py          SAU: всё вместе;  blocks.py — схемы из блоков (← sau, controllers)
+      │
+runner.py       ← sim/: run() → Log, compute_trim(), trim_state(), print_summary()
+flight_logger.py← runner, sim/: FlightLogger.save() → .flightlog, load_log()
+      │
+viz/            отображение (не импортирует control/)
+  viewer.py       ← flight_logger: 2D-графики и анимация .flightlog
+  viewer3d.py     ← flight_logger, world3d, aircraft3d, ursina: 3D
+  world3d.py, mapdata.py, osmdata.py, landcover.py — миры и карты
+  bench_panel.py, map_panel.py, block_editor.py — окна tkinter (процессы-спутники)
+      │
+scenarios/      прогоны и интерактивные программы (← всё выше)
+  s1–s7         ← runner, control (регуляторы напрямую), flight_logger, viz.viewer
+  s8–s10        ← lateral_common (FullSAU → control.sau.SAU), flight_logger, viz.viewer
+  GameScenario3D, Bench3D, BlockLab3D ← control.sau, sim/, viz.viewer3d
+archive/probe/  сценарии сравнения «зонд vs косвенная оценка УА» (вне основной линии)
+checks/         проверки (← sim/, control/, runner)
 ```
 
-`check.py` — импортирует все модули, зависимость только в одну сторону.
-
-**Главное правило**: зависимости направлены только **вниз по графу**.  
-`sensors.py`, `control.py`, `estimators.py` — не импортируют `runner.py` или друг друга.  
-`estimators.py` намеренно не зависит от `sensors.py`: оценщик принимает уже готовые
-измерения (`theta_meas`, `Vx_gps`, `Vh_gps`), а не сырое состояние.
+**Главное правило**: зависимости направлены только **вниз по графу**.
+`sim/` не знает о `control/`; `viz/` не знает о `control/` и физике (читает `.flightlog`).
 
 ---
 
@@ -92,7 +94,7 @@ def derivatives(state, controls, t, params, wind_fn) -> dstate:
 class Log:
     t:        ndarray (N,)      # время
     state:    ndarray (N, 12)   # [u, w, q, θ, x, h, v, p, r, φ, ψ, y] на каждом шаге
-    controls: ndarray (N, 4)    # [δe, throttle, δa, δr]
+    controls: ndarray (N, 4)    # [δe, throttle, δa, δr] — положения рулей после приводов
     Va:       ndarray (N,)      # воздушная скорость
     alpha:    ndarray (N,)      # УА в радианах
     E_kin:    ndarray (N,)      # кинетическая энергия, Дж
@@ -100,6 +102,7 @@ class Log:
     E_total:  ndarray (N,)      # полная механическая энергия, Дж
     wind_vec: ndarray (N, 3)    # [Vwx, Vwh, Vwy] в м/с
     beta:     ndarray (N,)      # УС в радианах
+    controls_cmd: ndarray (N, 4) # команды САУ до приводов рулей (положения — в controls)
 ```
 
 Столбцы 0..5 `state`, 0..1 `controls`, 0..1 `wind_vec` имеют тот же смысл,
@@ -198,11 +201,12 @@ wind_call = lambda h, t: (5.0 * np.sin(t), 0.0)
 
 ## 9. Как добавить новый сценарий
 
-1. Написать функцию управления `controls_fn` (или использовать существующую).
-2. Вызвать `run(controls_fn, aircraft, wind_params, cfg)`.
-3. Передать `log` в функции `plotting.py` или `animate.animate_log`.
+1. Написать функцию управления `controls_fn` (или собрать `SAU` — см. s8–s10).
+2. Вызвать `log = run(controls_fn, aircraft, wind_params, cfg, state0=trim_state(aircraft, cfg))`.
+3. Сохранить лог с уставками: `path = FlightLogger(scenario=..., ...).save(log, h_ref=..., chi_ref=...)`.
+4. Показать: `show_flightlog(path)` (`viz/viewer.py`).
 
-Физика, интегратор, лог — ничего менять не нужно.
+Физика, интегратор, лог, графики — ничего менять не нужно. Шаблон — `scenarios/s2_pitch_up.py`.
 
 ---
 
@@ -223,19 +227,28 @@ wind_call = lambda h, t: (5.0 * np.sin(t), 0.0)
 Гарантия совместимости: при v = p = r = φ = ψ = 0, δa = δr = 0 уравнения
 вырождаются точно в прежние продольные (проверка 7.3 в `checks/check.py`;
 регрессия по прогону с ветром и дублетом руля — совпадение u, w, q, θ, h
-до бита). Все сценарии s1–s7, p7–p10 и lab6 работают без правок.
+до бита). Все продольные сценарии работали без правок.
 
 Адекватность бокового канала в открытом контуре — `checks/check_lateral.py`.
 
 ---
 
-## 11. Изоляция `animate.py`
+## 11. Просмотр логов (`viz/viewer.py`)
 
-`animate.py` намеренно **не импортирует** `runner`, `dynamics`, `config`.  
-Единственная зависимость — именованные индексы из `state.py` (`X`, `H`, `THETA`).
+Единственный 2D-показ результатов. Вход — только `.flightlog` (`flight_logger.load_log`),
+физику и САУ не импортирует. Набор панелей выбирается по содержимому лога: продольные
+всегда; вид сверху, χ, φ, β, δa, δr — если ЛА маневрирует по курсу или в логе есть
+уставка курса / маршрут. Уставки (`*_ref`), команды до приводов (`*_cmd`), события и
+маршрут пишет `FlightLogger.save()`.
 
-Это означает: анимацию можно использовать в любом другом проекте,  
-передав ей любой объект с полями `t`, `state`, `Va`, `alpha`.
+```python
+from viz.viewer import show_flightlog
+show_flightlog(path)                        # анимация; несколько путей — несколько окон
+show_flightlog(path, static=True)           # без анимации
+show_flightlog(path, save_path="out.gif")   # сохранить анимацию (.gif / .mp4)
+```
+
+CLI: `python viz/viewer.py [файл] [--static] [--speed N] [--save out.gif]`.
 
 ---
 
@@ -244,3 +257,32 @@ wind_call = lambda h, t: (5.0 * np.sin(t), 0.0)
 `viewer3d.py` не импортирует `sim/`, `control/`, `runner`: вход — только
 `.flightlog` через `flight_logger.load_log()`. Ursina (РЕШ-16) используется
 только здесь. Подробно — `docs/viewer3d.md`.
+
+
+---
+
+## 13. Основные интерфейсы
+
+```python
+# Прогон
+log = run(controls_fn, aircraft, wind_params, cfg, state0=s0)
+# controls_fn(t, state, Va, alpha) -> [δe, δt] или [δe, δt, δa, δr]
+alpha_trim, de_trim, thr_trim = compute_trim(aircraft, Va)
+s0 = trim_state(aircraft, cfg)
+
+# Полная САУ (control/sau.py)
+sau = SAU(aircraft, trim, sensors, SAUParams(), nav=None)
+sau.engage(theta=..., h=..., Va=..., chi=...)
+sau.set_mode(Mode.ALTITUDE)                 # PITCH | ALTITUDE | ROUTE
+controls = sau.step(t, state, Va, alpha, beta, dt)
+
+# Коэффициенты по модели (control/tuning.py)
+d = design_sau(aircraft, Va=16.0)           # d.pitch, d.speed, d.lateral, d.tecs, ...
+
+# Лог
+path = FlightLogger(scenario="С2: Кабрирование", aircraft=aircraft, wind_params=wind_params,
+                    cfg=cfg, trim=(alpha_trim, de_trim, thr_trim),
+                    events=[{"t": 10.0, "label": "команда", "color": "steelblue"}]
+                    ).save(log, theta_ref=theta_ref_buf)
+data = load_log(path)                       # dict: каналы + data["meta"]
+```
