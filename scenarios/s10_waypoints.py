@@ -1,18 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-С14: Полёт по точкам (B&M гл. 10–11).
+С10: Полёт по точкам (B&M гл. 10–11).
 
 Маршрут — ломаная из WAYPOINTS (N, E, h), старт — из начала координат курсом
 на север. Уставки курса и высоты даёт WaypointNavigator (control/navigation.py):
 следование по прямой векторным полем, переключение участков по полуплоскости
 (биссектриса угла), после последней точки — кружение радиусом R_orbit.
-Остальная САУ — FullSAU (как в s12/s13): χ → φ → δa, β → δr, h → θ → δe, Va → δt.
+Остальная САУ — FullSAU (как в s8/s9): χ → φ → δa, β → δr, h → θ → δe, Va → δt.
 
 Два прогона: А) штиль, Б) постоянный ветер VW м/с на восток.
 Вывод: моменты прохождения точек, боковое отклонение от линии на прямых,
 ошибка радиуса на окружности; .flightlog — в results/.
 
-Запуск:  python scenarios/s14_waypoints.py
+Запуск:  python scenarios/s10_waypoints.py
 """
 
 import sys
@@ -68,7 +68,7 @@ def simulate(wind_params, label, nav_params=None):
     passed = [int(np.argmax((idx > k) | (mode == "orbit"))) for k in range(len(WAYPOINTS))]
     events = [{"t": round(log.t[i], 2), "label": f"точка {k + 1}", "color": "dodgerblue"}
               for k, i in enumerate(passed) if i > 0]
-    FlightLogger(scenario="С14", description=f"полёт по точкам — {label}",
+    FlightLogger(scenario="С10", description=f"полёт по точкам — {label}",
                  aircraft=aircraft, wind_params=wind_params, cfg=cfg,
                  events=events).save(log)
     return log, sau, np.array(epy), mode, idx
@@ -77,7 +77,7 @@ def simulate(wind_params, label, nav_params=None):
 def report(label, log, sau, epy, mode, idx):
     t, st = log.t, log.state
     print("=" * 78)
-    print(f"С14: полёт по точкам — {label}")
+    print(f"С10: полёт по точкам — {label}")
     print("=" * 78)
     print(f"{'точка':>6} {'N, м':>7} {'E, м':>7} {'h_ref':>6} | {'мин. расст., м':>14} "
           f"{'t, с':>6} {'h ЛА':>6}")

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-С13: Удержание путевого угла при боковом ветре.
+С9: Удержание путевого угла при боковом ветре.
 
 Сценарий:
    0 .. T_WIND   с → штиль, путевой угол chi_ref = 0° (на север)
@@ -16,7 +16,7 @@
 Ступенька ветра реализована порывом с большой длительностью (WindParams.gust_vwy).
 
 Два прогона с одинаковым шумом: А) β = 0 по зонду, Б) руль направления в нейтрали.
-Запуск:  python scenarios/s13_crosswind.py
+Запуск:  python scenarios/s9_crosswind.py
 """
 
 import sys
@@ -77,7 +77,7 @@ def ground_speed(log):
 Vg_a = ground_speed(log_a)
 
 print("=" * 92)
-print(f"С13: Боковой ветер {VW:.0f} м/с (ступенька при t={T_WIND:.0f} с), прогон А — β по зонду")
+print(f"С9: Боковой ветер {VW:.0f} м/с (ступенька при t={T_WIND:.0f} с), прогон А — β по зонду")
 print("=" * 92)
 print(f"{'t,с':>5} {'χref°':>6} {'χ°':>7} {'ψ°':>7} {'ψ−χ°':>6} {'φ°':>6} {'β°':>6} "
       f"{'δa°':>6} {'δr°':>6} {'Vg':>5} {'h,м':>6} {'x,м':>6} {'y,м':>6}")
@@ -141,10 +141,10 @@ for name, k, f in rows:
     print(f"{name:<44} {ma[k]:>14{f}} {mb[k]:>12{f}}")
 
 print()
-print_summary(log_a, aircraft, label="С13 прогон А (β по зонду)")
+print_summary(log_a, aircraft, label="С9 прогон А (β по зонду)")
 
 logger = FlightLogger(
-    scenario="С13: Боковой ветер",
+    scenario="С9: Боковой ветер",
     description=f"Ступенька бокового ветра {VW:.0f} м/с, удержание путевого угла, разворот на 90°",
     aircraft=aircraft, wind_params=wind_params, cfg=cfg, sp=sp,
     trim=compute_trim(aircraft, cfg.Va0),

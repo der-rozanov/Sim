@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-С7: Контроль высоты + удержание скорости + сравнение методов оценки УА.
+П7: Контроль высоты + удержание скорости + сравнение методов оценки УА.
 
 Структура управления — идентична С6:
   h_ref → [P_h] → theta_ref → [каскадный ПИД theta+q] → delta_e
@@ -13,8 +13,8 @@
     При попутном ветре Vwx > 0: gamma_gps < gamma_air →  alpha_est > alpha_true
     (систематическое завышение во время набора, занижение во время снижения)
 
-Запуск:  python scenarios/s7_alpha_estimation.py
-         python scenarios/s7_alpha_estimation.py results/s7.gif
+Запуск:  python archive/probe/p7_alpha_estimation.py
+         python archive/probe/p7_alpha_estimation.py results/p7.gif
 """
 
 import sys
@@ -27,7 +27,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.animation import FuncAnimation
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
 from runner import run, compute_trim, trim_state, print_summary
@@ -35,7 +35,7 @@ from control.controllers import with_roll_hold   # САУ по крену (РЕ�
 from control.controllers import PitchController, PitchControlParams, SpeedController, SpeedControlParams
 from control.sensors import (measure_gyro, measure_altitude, measure_airspeed,
                               measure_angle_of_attack, measure_gps_velocity_earth)
-from control.estimators import estimate_alpha_indirect
+from estimators import estimate_alpha_indirect
 from sim.state import THETA, Q, H, X, U, W
 from flight_logger import FlightLogger
 
@@ -68,7 +68,7 @@ alpha_trim, de_trim, thr_trim = compute_trim(aircraft, cfg.Va0)
 s0 = trim_state(aircraft, cfg)
 
 logger = FlightLogger(
-    scenario="С7: Оценка УА (зонд vs косвенная)",
+    scenario="П7: Оценка УА (зонд vs косвенная)",
     description=f"Набор h={H_HIGH:.0f} м, ветер Vwx={VW:+.0f} м/с, Va_ref={VA_REF:.0f} м/с",
     aircraft=aircraft,
     wind_params=wind_params,
@@ -164,7 +164,7 @@ def controls_fn(t, state, Va, alpha):
 # Прогон
 # ------------------------------------------------------------------
 log = run(with_roll_hold(controls_fn, aircraft, sp, cfg.dt), aircraft, wind_params, cfg, state0=s0)
-print_summary(log, aircraft, label="С7  Оценка УА (зонд vs косвенная)")
+print_summary(log, aircraft, label="П7  Оценка УА (зонд vs косвенная)")
 logger.save(
     log,
     alpha_probe=alpha_probe_buf,
@@ -204,7 +204,7 @@ n_frames = len(idx_list)
 # ------------------------------------------------------------------
 fig = plt.figure(figsize=(14, 15))
 fig.suptitle(
-    f"С7: Контроль высоты + удержание Va={VA_REF:.0f} м/с  |  Ветер: Vwx={VW:+.0f} м/с  (анимация)\n"
+    f"П7: Контроль высоты + удержание Va={VA_REF:.0f} м/с  |  Ветер: Vwx={VW:+.0f} м/с  (анимация)\n"
     f"Сравнение оценок УА: зонд (прямое) vs ИНС+GPS (косвенное)\n"
     f"(трим 0–{T_CLIMB:.0f} с,  набор {T_CLIMB:.0f}–{T_DESCEND:.0f} с,"
     f"  снижение {T_DESCEND:.0f}–{cfg.t_end:.0f} с)",

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-С10: АУА (Автомат Углов Атаки) vs. попутный порыв ветра.
+П10: АУА (Автомат Углов Атаки) vs. попутный порыв ветра.
 
 Физический механизм:
   ЛА летит в режиме контроля высоты (P-контур h → theta).
@@ -19,7 +19,7 @@
   С АУА:   alpha ≥ alpha_crit → theta=−7°, газ=100%.
            Набегающий поток разгоняет Va — вывод из срыва за 4–6 с.
 
-Запуск:  python scenarios/s10_aua_gust_protection.py
+Запуск:  python archive/probe/p10_aua_gust_protection.py
 """
 
 import sys
@@ -32,7 +32,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
 from runner import run, compute_trim, trim_state
@@ -80,7 +80,7 @@ _crit_deg  = np.degrees(aircraft.alpha_crit)
 _stall_deg = np.degrees(aircraft.alpha_stall)
 
 print(f"{'═'*60}")
-print(f"С10: АУА против попутного порыва (Vwx={GUST_VWX} м/с)")
+print(f"П10: АУА против попутного порыва (Vwx={GUST_VWX} м/с)")
 print(f"Трим: alpha={np.degrees(alpha_trim):.1f}°  thr={thr_trim:.3f}")
 print(f"Порыв: t=[{T_GUST}, {T_GUST+GUST_DUR}] с  throttle→0 на время порыва")
 print(f"Пороги: ПРЕД {_warn_deg:.0f}°  КРИТ {_crit_deg:.0f}°  СРЫВ {_stall_deg:.0f}°")
@@ -208,7 +208,7 @@ tref_arr = np.array(tref_a[:n_a])
 
 fig = plt.figure(figsize=(12, 14))
 fig.suptitle(
-    "С10: АУА против попутного порыва\n"
+    "П10: АУА против попутного порыва\n"
     f"Vwx={GUST_VWX} м/с, t=[{T_GUST:.0f}, {T_GUST+GUST_DUR:.0f}] с  |  "
     f"КН высоты: theta_ref = alpha_trim + {KH}·h_err",
     fontsize=11, fontweight="bold"

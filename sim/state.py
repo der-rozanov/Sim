@@ -182,15 +182,6 @@ def air_velocity(state: np.ndarray, wind_earth) -> tuple:
     return Va, alpha
 
 
-def flight_path_angle(state: np.ndarray, wind_earth) -> float:
-    """
-    Угол наклона траектории gamma = theta - alpha (по воздушной скорости).
-    Точен только в полёте без крена и скольжения.
-    """
-    _, alpha = air_velocity(state, wind_earth)
-    return state[THETA] - alpha
-
-
 def kinematic_gamma(state: np.ndarray) -> float:
     """
     Угол наклона траектории по земной скорости (GPS-измерение).

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-С9: Парный прогон «с зондом vs без зонда» — кульминационный результат.
+П9: Парный прогон «с зондом vs без зонда» — кульминационный результат.
 
 Два независимых прогона идентичны во всём, кроме источника УА:
   «С зондом»:  alpha_src = measure_angle_of_attack()  — прямое измерение
@@ -21,8 +21,8 @@
   J_eff  = ∫ Va dt / J_E            [м/о.е.]  — ключевая интегральная характеристика:
            «дальность на единицу израсходованной энергии двигателя»
 
-Запуск:  python scenarios/s9_paired_probe_comparison.py
-         python scenarios/s9_paired_probe_comparison.py results/s9.gif
+Запуск:  python archive/probe/p9_paired_probe_comparison.py
+         python archive/probe/p9_paired_probe_comparison.py results/p9.gif
 """
 
 import sys
@@ -36,7 +36,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.animation import FuncAnimation
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
 from runner import run, compute_trim, trim_state, print_summary
@@ -45,7 +45,7 @@ from control.controllers import (PitchController, PitchControlParams,
                                   SpeedController, SpeedControlParams)
 from control.sensors import (measure_gyro, measure_altitude, measure_airspeed,
                               measure_angle_of_attack, measure_gps_velocity_earth)
-from control.estimators import estimate_alpha_indirect
+from estimators import estimate_alpha_indirect
 from sim.state import THETA, Q, H, X, U, W
 from flight_logger import FlightLogger
 
@@ -137,7 +137,7 @@ Vw_high = wind_params.Vw_const + wind_params.dV_shear   # ветер на H_HIGH
 Vw_low  = wind_params.Vw_const                           # ветер на H_LOW
 
 print(f"{'═'*64}")
-print(f"С9  Парный прогон  |  Пресет: {PRESET_NAME}")
+print(f"П9  Парный прогон  |  Пресет: {PRESET_NAME}")
 print(f"Трим: α={np.degrees(alpha_trim):.2f}°  δe={np.degrees(de_trim):.2f}°  thr={thr_trim:.3f}")
 print(f"Ветер: Vwx@{H_HIGH:.0f}м = {Vw_high:+.1f} м/с  "
       f"Vwx@{H_LOW:.0f}м = {Vw_low:+.1f} м/с")
@@ -226,11 +226,11 @@ fn_est,   buf_est   = _make_controller("est")
 
 print("Прогон 1/2: с зондом…",  flush=True)
 log_probe = run(with_roll_hold(fn_probe, aircraft, sp, cfg.dt), aircraft, wind_params, cfg, state0=s0)
-print_summary(log_probe, aircraft, label="С9 | С ЗОНДОМ")
+print_summary(log_probe, aircraft, label="П9 | С ЗОНДОМ")
 
 print("Прогон 2/2: без зонда…", flush=True)
 log_est = run(with_roll_hold(fn_est, aircraft, sp, cfg.dt), aircraft, wind_params, cfg, state0=s0)
-print_summary(log_est, aircraft, label="С9 | БЕЗ ЗОНДА")
+print_summary(log_est, aircraft, label="П9 | БЕЗ ЗОНДА")
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  ПОДГОТОВКА МАССИВОВ
@@ -353,7 +353,7 @@ t_end = float(t_arr[-1])
 # ── Компоновка фигуры ─────────────────────────────────────────────────────
 fig = plt.figure(figsize=(15, 15))
 fig.suptitle(
-    f"С9: Парный прогон «с зондом vs без зонда»  |  {PRESET_NAME}\n"
+    f"П9: Парный прогон «с зондом vs без зонда»  |  {PRESET_NAME}\n"
     f"Vw@{H_HIGH:.0f}м={Vw_high:+.1f}м/с → Vw@{H_LOW:.0f}м={Vw_low:+.1f}м/с  |  "
     f"J_E: зонд={J_E_p:.1f}  без={J_E_e:.1f}  "
     f"J_eff: зонд={J_eff_p:.0f}  без={J_eff_e:.0f} м/о.е.",
