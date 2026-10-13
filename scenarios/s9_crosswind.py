@@ -34,6 +34,7 @@ from sim.wind import wind
 from runner import run, compute_trim, trim_state, print_summary
 from control.controllers import LateralControlParams
 from flight_logger import FlightLogger
+from viz.viewer import show_flightlog
 from lateral_common import FullSAU, course_of
 
 # ------------------------------------------------------------------
@@ -151,4 +152,6 @@ logger = FlightLogger(
     events=[{"t": T_WIND, "label": "боковой ветер", "color": "orange"},
             {"t": T_TURN, "label": "курс 90°",      "color": "dodgerblue"}],
 )
-logger.save(log_a, h_ref=sau_a.h_ref_buf, theta_ref=sau_a.theta_ref_buf)
+path = logger.save(log_a, h_ref=sau_a.h_ref_buf, theta_ref=sau_a.theta_ref_buf, Va_ref=cfg.Va0,
+                   chi_ref=sau_a.chi_ref_buf, phi_ref=sau_a.phi_ref_buf)
+show_flightlog(path, speed=4.0, save_path=sys.argv[1] if len(sys.argv) > 1 else None)

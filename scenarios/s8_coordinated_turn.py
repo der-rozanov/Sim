@@ -29,11 +29,12 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
-from sim.state import PHI, PSI, H, X, Y, P, R, DA, DR
+from sim.state import PHI, PSI, H, X, Y, DA, DR
 from sim.wind import wind
 from runner import run, compute_trim, trim_state, print_summary
 from control.controllers import LateralControlParams
 from flight_logger import FlightLogger
+from viz.viewer import show_flightlog
 from lateral_common import FullSAU, course_of, settle_time
 
 # ------------------------------------------------------------------
@@ -149,10 +150,12 @@ print_summary(log_a, aircraft, label="С8 прогон А (β по зонду)")
 
 logger = FlightLogger(
     scenario="С8: Координированный разворот",
-    description="Курс 0° → 90° → −45°, β=0 по зонду, h=100 м, Va=30 м/с",
+    description=f"Курс 0° → 90° → −45°, β=0 по зонду, h={cfg.h0:.0f} м, Va={cfg.Va0:.0f} м/с",
     aircraft=aircraft, wind_params=wind_params, cfg=cfg, sp=sp,
     trim=compute_trim(aircraft, cfg.Va0),
     events=[{"t": T_TURN1, "label": "курс 90°",  "color": "orange"},
             {"t": T_TURN2, "label": "курс −45°", "color": "dodgerblue"}],
 )
-logger.save(log_a, h_ref=sau_a.h_ref_buf, theta_ref=sau_a.theta_ref_buf)
+path = logger.save(log_a, h_ref=sau_a.h_ref_buf, theta_ref=sau_a.theta_ref_buf, Va_ref=cfg.Va0,
+                   chi_ref=sau_a.chi_ref_buf, phi_ref=sau_a.phi_ref_buf)
+show_flightlog(path, speed=4.0, save_path=sys.argv[1] if len(sys.argv) > 1 else None)
