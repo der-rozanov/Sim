@@ -53,6 +53,8 @@ output/
 results/
 plots/
 figures/
+# скрипты иллюстраций документации — в git
+!docs/figures/
 data/
 
 # OS
