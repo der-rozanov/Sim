@@ -12,6 +12,7 @@
     ← / →       — перемотка −5 / +5 с          R — в начало
     ↑ / ↓       — скорость проигрывания ×2 / ÷2
     1 2 3 4     — камера: за хвостом / из кабины / облёт мышью / обзор сверху
+    F1          — уровень HUD: всё / режимы и предупреждения / пусто (viz/hud3d.py)
     правая кнопка мыши + движение, колесо — облёт и зум (камера 3)
     M           — увеличить силуэт ×10 (для обзора)    T — показать весь путь
     клик по полосе времени внизу — переход к моменту
@@ -42,14 +43,13 @@ if _ROOT not in sys.path:
 from flight_logger import load_log
 from viz.world3d import World, make_world, MAPS
 from viz.aircraft3d import make_model
+from viz.hud3d import Hud, HudData
 
 from ursina import (Ursina, Entity, Mesh, Text, Sky, Vec3, Color, camera, scene,
                     window, mouse, held_keys, application, time as utime,
                     DirectionalLight, AmbientLight, destroy)
 from ursina.shaders.unlit_shader import unlit_shader
 
-ALERT_LABEL = ["НОРМ", "ПРЕД", "КРИТ", "СРЫВ"]
-ALERT_CLR   = [(0.55, 0.95, 0.55), (1.0, 0.9, 0.3), (1.0, 0.6, 0.2), (1.0, 0.3, 0.3)]
 SUN_DIR     = np.array([0.45, 0.75, 0.35]) / np.linalg.norm([0.45, 0.75, 0.35])
 FOG_CLR     = (0.72, 0.80, 0.88)
 
@@ -76,6 +76,18 @@ def body_axes(phi, theta, psi):
     return x_b, z_b
 
 
+def air_velocity_axis(phi, theta, psi, alpha, beta):
+    """
+    Направление вектора воздушной скорости в земной СК (NED) — для маркера HUD.
+    В связанной СК: (cos α cos β, sin β, sin α cos β); y_b = z_b × x_b.
+    """
+    x_b, z_b = body_axes(phi, theta, psi)
+    y_b = np.cross(z_b, x_b)
+    ca, sa, cb, sb = np.cos(alpha), np.sin(alpha), np.cos(beta), np.sin(beta)
+    k = lambda c: np.asarray(c)[..., None]
+    return k(ca * cb) * x_b + k(sb) * y_b + k(sa * cb) * z_b
+
+
 class Track:
     """Массивы лога, приведённые к сцене Ursina."""
 
@@ -94,6 +106,13 @@ class Track:
 
         deg = np.degrees
         self.Va, self.h = d["Va"], d["h"]
+        self.Vh = np.gradient(d["h"], self.t)
+        v = air_velocity_axis(get("phi"), d["theta"], get("psi"), d["alpha_true"], get("beta_true"))
+        self.vel = ned_to_u(v[:, 0], v[:, 1], v[:, 2])
+        nan = np.full(n, np.nan)
+        self.Va_ref = d["Va_ref"] if "Va_ref" in d else nan
+        self.h_ref = d["h_ref"] if "h_ref" in d else nan
+        self.chi_ref = (deg(d["chi_ref"]) % 360.0) if "chi_ref" in d else nan
         self.alpha = deg(d["alpha_true"])
         self.beta  = deg(get("beta_true"))
         self.phi = (deg(get("phi")) + 180.0) % 360.0 - 180.0     # крен копится при бочках
@@ -155,14 +174,14 @@ def _font():
 class View3D:
     """
     Всё, что рисуется вокруг ЛА: силуэт, след и его тень, отвес до земли,
-    4 камеры, приборная панель. Источник состояния — снаружи (лог или игра):
-    владелец каждый кадр вызывает render() и set_hud().
+    4 камеры, HUD (viz/hud3d.py). Источник состояния — снаружи (лог или игра):
+    владелец каждый кадр вызывает render() и set_hud(HudData).
     """
 
-    CAM_NAMES = {1: "за хвостом", 2: "из кабины", 3: "облёт мышью", 4: "обзор сверху"}
+    CAM_NAMES = {1: "chase", 2: "cockpit", 3: "orbit", 4: "overview"}
 
     def __init__(self, b: float, c: float, terrain: World, help_text: str,
-                 cam: int = 1, hud_lines: int = 11, aircraft_name: str = "fpv"):
+                 cam: int = 1, aircraft_name: str = "fpv"):
         self.b, self.ter = b, terrain
         self.cam_mode, self.big = cam, False
         self.orbit_yaw, self.orbit_pitch, self.orbit_r = 30.0, 15.0, 12.0 * b
@@ -179,20 +198,7 @@ class View3D:
         self.route_poles = []
 
         font = _font()
-        Entity(parent=camera.ui, model="quad", color=Color(0, 0, 0, 0.45), origin=(-0.5, 0.5),
-               position=window.top_left + Vec3(0.01, -0.01, 0),
-               scale=(0.47, 0.03 + 0.0235 * hud_lines))
-        Entity(parent=camera.ui, model="quad", color=Color(0, 0, 0, 0.45),
-               position=window.top + Vec3(0, -0.055, 0), scale=(0.42, 0.1))
-        self.hud = Text(parent=camera.ui, position=window.top_left + Vec3(0.02, -0.02, 0),
-                        scale=0.85, font=font, text="", line_height=1.1)
-        self.alert_txt = Text(parent=camera.ui, position=window.top + Vec3(0, -0.03, 0),
-                              origin=(0, 0), scale=1.6, font=font, text="")
-        self.event_txt = Text(parent=camera.ui, position=window.top + Vec3(0, -0.08, 0),
-                              origin=(0, 0), scale=1.1, font=font, text="",
-                              color=Color(1, 0.85, 0.4, 1))
-        self.help = Text(parent=camera.ui, position=window.bottom_left + Vec3(0.02, 0.075, 0),
-                         scale=0.7, font=font, color=Color(1, 1, 1, 0.75), text=help_text)
+        self.hud = Hud(font, help_text)
         if terrain.attribution:                 # условие использования снимков
             Text(parent=camera.ui, position=window.bottom_right + Vec3(-0.01, 0.012, 0),
                  origin=(0.5, -0.5), scale=0.55, font=font, color=Color(1, 1, 1, 0.6),
@@ -218,6 +224,8 @@ class View3D:
         if key in ("1", "2", "3", "4"):
             self.cam_mode, self._cam_pos = int(key), None
             self.set_fog()
+        elif key == "f1":
+            self.hud.cycle()
         elif key == "m":
             self.big = not self.big
         elif key == "scroll up":
@@ -280,12 +288,8 @@ class View3D:
             camera.look_at(Vec3(*c))
             camera.rotation_z = 0
 
-    def set_hud(self, text: str, alert: int, event: str = ""):
-        a = int(np.clip(alert, 0, 3))
-        self.hud.text = text + f"\nкамера: {self.CAM_NAMES[self.cam_mode]}"
-        self.alert_txt.text = f"УА {ALERT_LABEL[a]}"
-        self.alert_txt.color = Color(*ALERT_CLR[a], 1)
-        self.event_txt.text = event
+    def set_hud(self, data: HudData):
+        self.hud.update(data, self.cam_mode, self.CAM_NAMES[self.cam_mode])
 
 
 def make_app(title: str, map_name: str = "default", size=(1600, 900)):
@@ -319,8 +323,8 @@ def screenshot_and_quit(path: str):
 
 class Player3D(Entity):
 
-    HELP = ("Пробел пауза  ←/→ ±5 с  ↑/↓ скорость  R начало  "
-            "1-4 камера  M масштаб  T весь путь  Esc выход")
+    HELP = ("Space pause  ←/→ ±5 s  ↑/↓ speed  R restart  "
+            "1-4 camera  M scale  T path  Esc quit")
 
     def __init__(self, track: Track, terrain: World, speed=1.0, cam=1, shot=None):
         super().__init__()
@@ -336,13 +340,13 @@ class Player3D(Entity):
         _set_line(self.view.path_all, track.pos[self._sub])
 
         self.bar_bg = Entity(parent=camera.ui, model="quad", color=Color(0, 0, 0, 0.45),
-                             scale=(1.6, 0.018), position=(0, -0.47), collider="box")
+                             scale=(1.6, 0.018), position=(0, -0.452), collider="box")
         self.bar = Entity(parent=camera.ui, model="quad", color=Color(1, 0.45, 0.2, 0.9),
-                          scale=(0.0, 0.018), position=(-0.8, -0.47), origin=(-0.5, 0))
+                          scale=(0.0, 0.018), position=(-0.8, -0.452), origin=(-0.5, 0))
         for ev in track.events:                              # метки событий на полосе
             fx = (ev["t"] - track.t[0]) / (track.t[-1] - track.t[0])
             Entity(parent=camera.ui, model="quad", color=Color(1, 0.85, 0.3, 1),
-                   scale=(0.004, 0.03), position=(-0.8 + 1.6 * fx, -0.47))
+                   scale=(0.004, 0.03), position=(-0.8 + 1.6 * fx, -0.452))
 
     def input(self, key):
         if self.view.handle_key(key):
@@ -387,23 +391,17 @@ class Player3D(Entity):
 
     def _hud(self, i):
         tr = self.tr
-        wN, wE, wH = tr.wind[i]
-        speed = "ПАУЗА" if self.paused else f"×{self.speed:g}"
-        text = (
-            f"{tr.meta.get('scenario', '')}\n"
-            f"t   {tr.t[i]:7.2f} с   {speed}\n"
-            f"Va  {tr.Va[i]:7.2f} м/с\n"
-            f"h   {tr.h[i]:7.1f} м\n"
-            f"α   {tr.alpha[i]:7.2f}°    β  {tr.beta[i]:6.2f}°\n"
-            f"φ   {tr.phi[i]:7.2f}°    θ  {tr.theta[i]:6.2f}°\n"
-            f"ψ   {tr.psi[i]:7.1f}°    χ  {tr.chi[i]:6.1f}°\n"
-            f"δe  {np.degrees(tr.de[i]):7.2f}°    δa {np.degrees(tr.da[i]):6.2f}°\n"
-            f"δr  {np.degrees(tr.dr[i]):7.2f}°    δt {tr.thr[i]:6.2f}\n"
-            f"ветер С {wN:5.1f}  В {wE:5.1f}  верт {wH:5.1f} м/с"
-        )
+        wN, wE, _ = tr.wind[i]
         past = [e for e in tr.events if e["t"] <= tr.t[i]]
-        ev = f"{past[-1]['label']}  (t={past[-1]['t']:g} с)" if past else ""
-        self.view.set_hud(text, tr.alert[i], ev)
+        ref = lambda a: float(a[i]) if np.isfinite(a[i]) else None
+        self.view.set_hud(HudData(
+            t=tr.t[i], Va=tr.Va[i], h=tr.h[i], Vh=tr.Vh[i], alpha=tr.alpha[i], beta=tr.beta[i],
+            phi=tr.phi[i], psi=tr.psi[i], chi=tr.chi[i], thr=tr.thr[i], wind_n=wN, wind_e=wE,
+            alert=tr.alert[i], modes=f"LOG  {tr.meta.get('scenario', '')}",
+            status="PAUSED" if self.paused else f"×{self.speed:g}",
+            event=f"{past[-1]['label']}  (t={past[-1]['t']:g} s)" if past else "",
+            Va_ref=ref(tr.Va_ref), h_ref=ref(tr.h_ref), chi_ref=ref(tr.chi_ref),
+            nose=tr.nose[i], vel=tr.vel[i]))
         fx = (tr.t[i] - tr.t[0]) / (tr.t[-1] - tr.t[0])
         self.bar.scale_x = 1.6 * fx
 
