@@ -19,14 +19,14 @@ GameScenario3D — пилотирование ЛА в реальном врем�
   A / D  — уставка путевого угла χ_ref ∓10°
   X / Z  — уставка скорости Va_ref ±1 м/с
   H      — удержание высоты (захват текущей)
-  N      — навигация по маршруту вкл/выкл (маршрут — в окне карты; уставки χ_ref
+  N      — навигация по маршруту вкл/выкл (маршрут — в окне станции; уставки χ_ref
            и h_ref даёт WaypointNavigator, control/navigation.py). Ручные уставки
            W/S/A/D навигацию выключают.
 САУ — control/sau.py (тот же класс, что в s8–s10): χ → φ_ref → δa, β → δr,
 h → θ_ref → δe, Va → δt.
 
-Окно карты (viz/map_panel.py, отдельный процесс): вид сверху, ЛА и след; точки
-маршрута ставятся мышью, «Лететь по маршруту» — САУ ведёт по точкам.
+Окно наземной станции (viz/station.py, отдельный процесс): PFD, карта с маршрутом
+(точки ставятся мышью, FLY — САУ ведёт по точкам), рули, α/β, TECS, журнал событий.
 Измерения в САУ — истинные (без шума).
 
 Общие: Пробел — пауза, R — сброс, 1–4 — камера, M — масштаб силуэта, F1 — уровень HUD,
@@ -41,7 +41,7 @@ Esc — выход. HUD — viz/hud3d.py (подписи по-английски
     python scenarios/GameScenario3D.py
     python scenarios/GameScenario3D.py --wind-n -5 --wind-e 3   # ветер, м/с
     python scenarios/GameScenario3D.py --ap --cam 3              # старт с включённой САУ
-    python scenarios/GameScenario3D.py --no-map                  # без окна карты
+    python scenarios/GameScenario3D.py --no-map                  # без окна станции
 """
 
 import sys
@@ -69,7 +69,8 @@ from flight_logger import FlightLogger
 from control.controllers import PitchControlParams, wrap_angle
 from control.navigation import WaypointNavigator, NavParams
 from control.sau import SAU, SAUParams, TruthSensors, Mode
-from viz import map_panel
+from sim.aero import coef_CL
+from viz import station
 from viz.viewer3d import (View3D, make_app, MAPS, ned_to_u, body_axes, air_velocity_axis,
                           screenshot_and_quit)
 from viz.hud3d import HudData
@@ -96,6 +97,7 @@ VA_STEP, VA_MIN, VA_MAX = 1.0, 10.0, 30.0   # FPV: сваливание 7.5, м�
 H_STEP, H_MIN, H_MAX = 10.0, 20.0, 1000.0
 KH        = PitchControlParams().KH   # рад/м, расчёт control/tuning.py
 
+MANUAL_REF = ("маршрут: ручная уставка", "NAV: manual ref")   # событие: ручная уставка выключила маршрут
 MAX_STEPS_PER_FRAME = 10        # при просадке кадров — замедление, а не «рывок»
 TRAIL_MAX = 3000                # точек следа (0.1 с) — последние 5 мин
 
@@ -111,11 +113,11 @@ class Game(Entity):
             "Space pause  R reset  1-4 cam  Esc quit")
 
     def __init__(self, aircraft, wind_params, cfg, terrain, cam=1, ap=False, shot=None,
-                 q_map=None):
-        """q_map — (q_cmd, q_tel) окна карты (viz/map_panel.py) или None."""
-        self.q_map = q_map
+                 q_station=None):
+        """q_station — (q_cmd, q_tel) окна станции (viz/station.py) или None."""
+        self.q_station = q_station
         self.nav = WaypointNavigator(NavParams())
-        self.route, self.loop = [], False        # маршрут из окна карты: [(N, E, h), ...]
+        self.route, self.loop = [], False        # маршрут из окна станции: [(N, E, h), ...]
         super().__init__()
         self.ac, self.wp, self.cfg = aircraft, wind_params, cfg
         self.wind_call = lambda h, t: _wind(h, t, wind_params)
@@ -171,8 +173,12 @@ class Game(Entity):
         self.sau.engage(theta=self.alpha_trim, h=self.cfg.h0, Va=self.cfg.Va0, chi=0.0)
         self.trail = []
 
-    def _event(self, label, color="orange"):
-        self.events.append({"t": round(self.t, 2), "label": label, "color": color})
+    def _event(self, label, color="orange", en=None):
+        """label — в лог (по-русски); en — подпись для окна станции (по-английски)."""
+        ev = {"t": round(self.t, 2), "label": label, "color": color}
+        if en:
+            ev["label_en"] = en
+        self.events.append(ev)
 
     def _toggle_ap(self):
         if self.ap:
@@ -181,7 +187,7 @@ class Game(Entity):
             self.de_trim_man = self.controls[0]          # без рывка при выключении
             self.surf = np.array([self.controls[0], 0.0, 0.0])
             self.thr = self.controls[1]
-            self._event("САУ выкл", "gray")
+            self._event("САУ выкл", "gray", "AP OFF")
             return
         self.ap = True
         s = self.state
@@ -190,7 +196,7 @@ class Game(Entity):
         self.sau.set_mode(Mode.PITCH)
         self.sau.engage(theta=float(np.clip(s[THETA], -THETA_LIM, THETA_LIM)), h=float(s[H]),
                         Va=float(np.clip(Va, VA_MIN, VA_MAX)), chi=float(np.arctan2(Vy, Vx)))
-        self._event("САУ вкл", "dodgerblue")
+        self._event("САУ вкл", "dodgerblue", "AP ON")
 
     # --- навигация по маршруту ----------------------------------------------
     def _nav_go(self):
@@ -201,9 +207,9 @@ class Game(Entity):
             self._toggle_ap()
         s = self.state
         self.sau.fly_route(self.route, start=(s[X], s[Y], s[H]))
-        self._event("маршрут: старт", "dodgerblue")
+        self._event("маршрут: старт", "dodgerblue", "NAV: start")
 
-    def _nav_off(self, why="маршрут: стоп"):
+    def _nav_off(self, why="маршрут: стоп", why_en="NAV: stop"):
         """Навигация выкл: САУ держит текущие путевой угол и высоту."""
         if not self.nav_on:
             return
@@ -211,14 +217,14 @@ class Game(Entity):
         self.sau.refs.chi = float(np.arctan2(Vy, Vx))
         self.sau.refs.h = float(np.clip(self.state[H], H_MIN, H_MAX))
         self.sau.set_mode(Mode.ALTITUDE)
-        self._event(why, "gray")
+        self._event(why, "gray", why_en)
 
-    def _poll_map(self):
-        if self.q_map is None:
+    def _poll_station(self):
+        if self.q_station is None:
             return
         while True:
             try:
-                kind, val = self.q_map[0].get_nowait()
+                kind, val = self.q_station[0].get_nowait()
             except queue.Empty:
                 break
             if kind == "route":
@@ -235,19 +241,70 @@ class Game(Entity):
             elif kind == "stop":
                 self._nav_off()
 
-    def _map_telemetry(self):
-        if self.q_map is None:
+    def _fma(self):
+        """Табло режимов станции: 5 колонок (строка 1, строка 2, цвет 1, цвет 2).
+        Цвета: g — активный режим, c — уставка, w — нейтрально, a — предупреждение, d — пусто."""
+        deg, refs, sau = np.degrees, self.sau.refs, self.sau
+        if not self.ap:
+            return [("MAN THR", f"{100 * self.controls[1]:.0f} %", "w", "d"),
+                    ("MAN", f"TRIM {deg(self.de_trim_man):+.1f}°", "w", "d"),
+                    ("MAN", self._route_tag(), "w", "d"),
+                    self._fma_prot(), ("MAN", "", "w", "d")]
+        thr = ("TECS" if sau.params.lon == "tecs" else "SPEED", f"SPD {refs.Va:.1f}", "g", "c")
+        ver = (("ALT", f"{refs.h:.0f} m", "g", "c") if self.h_hold
+               else ("PITCH", f"{deg(refs.theta):+.1f}°", "g", "c"))
+        if self.nav_on:
+            lat = ("NAV ORBIT" if self.nav.mode == "orbit" else f"NAV {self.nav.idx + 1}/{len(self.route)}",
+                   f"TRK {deg(refs.chi) % 360:03.0f}°", "g", "c")
+        else:
+            lat = ("TRK", f"{deg(refs.chi) % 360:03.0f}°", "g", "c")
+        return [thr, ver, lat, self._fma_prot(), ("AP", "" if self.nav_on else self._route_tag(), "w", "d")]
+
+    def _route_tag(self):
+        """Маршрут загружен, но не активен (N / FLY — лететь): серым, чтобы не путать с режимом."""
+        return f"ROUTE {len(self.route)} WP" if self.route else ""
+
+    def _fma_prot(self):
+        """Колонка защиты по α: в игре защиты нет — только предупреждение по УА."""
+        a = self._alert()
+        return ("AOA", ["", "WARN", "CRIT", "STALL"][a], "a", "a" if a == 1 else "r") if a else ("", "", "d", "d")
+
+    def _alert(self):
+        alpha = air_data(self.state, self.wind_call(self.state[H], self.t))[1]
+        return int(sum(alpha >= x for x in (self.ac.alpha_warning, self.ac.alpha_crit, self.ac.alpha_stall)))
+
+    def _station_telemetry(self):
+        if self.q_station is None:
             return
-        s, nav = self.state, self.nav
-        Va = air_data(s, self.wind_call(s[H], self.t))[0]
+        s, nav, c, cmd, deg = self.state, self.nav, self.controls, self.cmd, np.degrees
+        w = self.wind_call(s[H], self.t)
+        Va, alpha, beta = air_data(s, w)
+        Vx, Vy, Vh = earth_velocity(s)
         tgt = nav.target if self.nav_on else None
-        msg = {"t": self.t, "n": s[X], "e": s[Y], "h": s[H], "psi": s[PSI], "Va": Va,
-               "ap": self.ap, "nav": self.nav_on, "idx": nav.idx, "mode": nav.mode,
+        refs, lon = self.sau.refs, self.sau.lon
+        tecs = None
+        if self.ap and self.sau.params.lon == "tecs":       # производные энергии × Va — в м/с набора
+            Vs = max(Va, 1.0)
+            tecs = (lon.E * Vs, lon.E_ref * Vs, lon.B * Vs, lon.B_ref * Vs)
+        mode = ("AUTO · " + ("NAV" if self.nav_on else "ALT" if self.h_hold else "PITCH")) if self.ap else "MANUAL"
+        msg = {"t": self.t, "n": s[X], "e": s[Y], "h": s[H], "Vh": Vh, "Va": Va, "Vg": float(np.hypot(Vx, Vy)),
+               "psi": deg(s[PSI]) % 360, "chi": deg(np.arctan2(Vy, Vx)) % 360,
+               "phi": _wrap180(deg(s[PHI])), "theta": deg(s[THETA]), "alpha": deg(alpha), "beta": deg(beta),
+               "de": deg(c[0]), "da": deg(c[2]), "dr": deg(c[3]), "thr": c[1],
+               "de_cmd": deg(cmd[0]), "da_cmd": deg(cmd[2]), "dr_cmd": deg(cmd[3]), "thr_cmd": cmd[1],
+               "wind_n": w[0], "wind_e": w[2], "alert": self._alert(),
+               "ap": self.ap, "mode": mode, "fma": self._fma(), "tecs": tecs,
+               "Va_ref": refs.Va if self.ap else None, "h_ref": refs.h if self.h_hold else None,
+               "chi_ref": deg(refs.chi) % 360 if self.ap else None,
+               "status": ("CRASH" if self.crashed else "PAUSED" if self.paused
+                          else "ON GROUND" if self.on_ground else "FLYING"),
+               "events": [(e["t"], e.get("label_en", e["label"]), e["color"]) for e in self.events[-14:]],
+               "nav": self.nav_on, "idx": nav.idx, "mode_nav": nav.mode,
                "circle": (tuple(nav.circle[:3])
                           if self.nav_on and nav.mode in ("fillet", "orbit") else None),
                "dist": float(np.hypot(tgt[0] - s[X], tgt[1] - s[Y])) if tgt is not None else 0.0}
         try:
-            self.q_map[1].put_nowait(msg)
+            self.q_station[1].put_nowait(msg)
         except queue.Full:
             pass
 
@@ -269,12 +326,12 @@ class Game(Entity):
                 self._nav_off()
             else:
                 self._nav_go()
-        elif key == "h" and self.ap:                        # высота ⇄ тангаж (маршрут — стоп)
-            self._nav_off("маршрут: ручная уставка")
-            to_alt = self.sau.mode is Mode.PITCH
+        elif key == "h" and self.ap:                        # высота ⇄ тангаж (маршрут — стоп, далее высота)
+            to_alt = self.sau.mode is not Mode.ALTITUDE      # до _nav_off: он сам ставит ALTITUDE
+            self._nav_off(*MANUAL_REF)
             self.sau.refs.h = float(self.state[H])
             self.sau.set_mode(Mode.ALTITUDE if to_alt else Mode.PITCH)
-            self._event("удержание h" if to_alt else "θ_ref", "dodgerblue")
+            self._event("удержание h" if to_alt else "θ_ref", "dodgerblue", "ALT hold" if to_alt else "PITCH hold")
         elif base in ("x", "z"):
             sgn = 1 if base == "x" else -1
             if self.ap:
@@ -283,7 +340,7 @@ class Game(Entity):
             else:
                 self.thr = float(np.clip(self.thr + sgn * THR_STEP, 0.0, 1.0))
         elif self.ap and base in ("w", "s"):
-            self._nav_off("маршрут: ручная уставка")
+            self._nav_off(*MANUAL_REF)
             sgn, refs = (1 if base == "s" else -1), self.sau.refs     # S — вверх
             if self.h_hold:
                 refs.h = float(np.clip(refs.h + sgn * H_STEP, H_MIN, H_MAX))
@@ -291,7 +348,7 @@ class Game(Entity):
                 refs.theta = float(np.clip(refs.theta + sgn * THETA_STEP,
                                            -THETA_LIM, THETA_LIM))
         elif self.ap and base in ("a", "d"):
-            self._nav_off("маршрут: ручная уставка")
+            self._nav_off(*MANUAL_REF)
             sgn = 1 if base == "d" else -1                  # D — вправо
             self.sau.refs.chi = wrap_angle(self.sau.refs.chi + sgn * CHI_STEP)
         elif not self.ap and base in ("up arrow", "down arrow"):
@@ -326,7 +383,7 @@ class Game(Entity):
 
     def update(self):
         self._focus_check()
-        self._poll_map()
+        self._poll_station()
         dt = self.cfg.dt
         if not (self.paused or self.crashed):
             self.acc += utime.dt
@@ -348,7 +405,7 @@ class Game(Entity):
         self.view.render(pos, nose, up, c[0], c[2], c[3], c[1],
                          np.array(self.trail), utime.dt)
         self._hud()
-        self._map_telemetry()
+        self._station_telemetry()
 
         self._frames += 1
         if self.shot and self._frames == 300:
@@ -393,13 +450,13 @@ class Game(Entity):
         elif v_sink > self.ac.gear_v_crash:
             self._crash(f"ПОЛОМКА ШАССИ ({v_sink:.1f} м/с)", f"CRASH: GEAR ({v_sink:.1f} m/s)")
         elif not self.on_ground:
-            self._event(f"касание {v_sink:.1f} м/с", "green")
+            self._event(f"касание {v_sink:.1f} м/с", "green", f"touchdown {v_sink:.1f} m/s")
         self.on_ground = True
 
     def _crash(self, msg, msg_en):
         """msg — событие в логе (по-русски, как остальные), msg_en — для HUD."""
         self.crashed, self.crash_msg, self.crash_en = True, msg, msg_en
-        self._event(msg.lower(), "red")
+        self._event(msg.lower(), "red", msg_en)
 
     def _modes(self) -> str:
         """Строка режимов HUD: только активные (как табло режимов на PFD)."""
@@ -454,13 +511,24 @@ class Game(Entity):
                      events=self.events).save(log)
 
 
-def start_map_window(terrain, h_new, geometry, px=720):
-    """Окно карты (viz/map_panel.py) в отдельном процессе; возвращает (q_cmd, q_tel).
-    px — ширина карты в окне, пикс (фон — в map_panel.ZOOM_MAX раз крупнее, для масштаба)."""
+def station_info(ac):
+    """Постоянные данные ЛА для окна станции: пределы рулей, пороги α, скорости полос ленты
+    скорости — горизонтальный полёт с n = 1: Va = √(2mg / (ρ S CL(α))) при alpha_warning и alpha_crit."""
+    V = lambda a: float(np.sqrt(2 * ac.mass * ac.g / (ac.rho * ac.S * coef_CL(a, 0.0, 0.0, 16.0, ac))))
+    deg = lambda x: float(np.degrees(x))
+    return {"name": ac.name, "de_min": deg(ac.delta_e_min), "de_max": deg(ac.delta_e_max),
+            "da_max": deg(ac.delta_a_max), "dr_max": deg(ac.delta_r_max),
+            "alpha_warn": deg(ac.alpha_warning), "alpha_crit": deg(ac.alpha_crit),
+            "V_stall": V(ac.alpha_crit), "V_warn": V(ac.alpha_warning)}
+
+
+def start_station(terrain, aircraft, h_new, geometry, px=720):
+    """Окно станции (viz/station.py) в отдельном процессе; возвращает (q_cmd, q_tel).
+    px — сторона карты в окне, пикс (фон — в station.ZOOM_MAX раз крупнее, для масштаба)."""
     q_cmd, q_tel = mp.Queue(maxsize=100), mp.Queue(maxsize=200)
-    mp.Process(target=map_panel.run, daemon=True,
-               args=(q_cmd, q_tel, terrain.save_top_image(px * map_panel.ZOOM_MAX), (terrain.map_x, terrain.map_z),
-                     geometry, h_new)).start()
+    mp.Process(target=station.run, daemon=True,
+               args=(q_cmd, q_tel, terrain.save_top_image(px * station.ZOOM_MAX),
+                     (terrain.map_x, terrain.map_z), station_info(aircraft), geometry, h_new)).start()
     return q_cmd, q_tel
 
 
@@ -473,7 +541,7 @@ def main():
     ap.add_argument("--ap", action="store_true", help="старт с включённой САУ")
     ap.add_argument("--shot", default=None, help="скриншот через ~300 кадров и выход")
     ap.add_argument("--map", default="default", choices=list(MAPS), help="карта мира")
-    ap.add_argument("--no-map", action="store_true", help="без окна карты (маршрута)")
+    ap.add_argument("--no-map", action="store_true", help="без окна станции (PFD + карта)")
     ap.add_argument("--aircraft", default="fpv", choices=list(AIRCRAFT_TYPES), help="тип ЛА")
     a = ap.parse_args()
 
@@ -482,9 +550,9 @@ def main():
     cfg = SimConfig(Va0=16.0, h0=a.h0, theta0=0.0, dt=0.01, t_end=1e9)
 
     app, terrain = make_app(f"3D: пилотирование — {MAPS[a.map].title}", a.map)
-    q_map = None if (a.no_map or a.shot) else start_map_window(terrain, a.h0, "-0+0")
+    q_station = None if (a.no_map or a.shot) else start_station(terrain, aircraft, a.h0, "-0+0")
     game = Game(aircraft, wind_params, cfg, terrain, cam=a.cam, ap=a.ap, shot=a.shot,
-                q_map=q_map)
+                q_station=q_station)
     try:
         app.run()
     finally:
