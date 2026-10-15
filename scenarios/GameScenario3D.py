@@ -11,6 +11,7 @@ GameScenario3D — пилотирование ЛА в реальном врем�
   W / S  — руль высоты (W — нос вниз, S — нос вверх)
   A / D  — элероны (крен влево / вправо)
   Q / E  — руль направления (нос влево / вправо)
+  Shift  — большие расходы: с W/S/A/D/Q/E рули ±10° (без Shift: δe ±2°, δa, δr ±3°)
   ↑ / ↓  — триммер руля высоты ±0.3° (↑ — нос вниз)
   X / Z  — тяга ±5 %
 
@@ -79,16 +80,21 @@ from ursina import Entity, application, held_keys, time as utime
 # ------------------------------------------------------------------
 # Параметры
 # ------------------------------------------------------------------
-# Отклонения подобраны по отклику модели (разомкнутый контур, Va = 30 м/с, 1 с удержания):
-#   δa 3° → p ≈ 37°/с, φ ≈ 32°;  δe 2° → q ≈ 8°/с;  δr 3° → r ≈ 9°/с
+# Двойные расходы (dual rate, как на RC-пульте): без Shift — малые отклонения для точного
+# пилотирования, с Shift — большие для энергичного маневра (выравнивание, вывод из сваливания).
+# Отклик FPV в разомкнутом контуре (Va = 16 м/с, руль удерживается 1 с, штиль):
+#   δe 2° → q ≈ 21°/с, θ ≈ 18°;   δe 10° → q ≈ 106°/с, α ≈ 8.5° (порог предупреждения 9°)
+#   δa 3° → p ≈ 29°/с, φ ≈ 26°;   δa 10° → p ≈ 100°/с
+#   δr 3° → r ≈ 13°/с;            δr 10° → r ≈ 44°/с
 DE_DEFL   = np.radians(2.0)     # отклонение руля высоты от триммера при нажатой W/S
 DA_DEFL   = np.radians(3.0)     # элероны при A/D
 DR_DEFL   = np.radians(3.0)     # руль направления при Q/E
+HI_DEFL   = np.radians(10.0)    # все рули при нажатом Shift (большие расходы)
 SURF_RATE = np.radians(20.0)    # скорость отклонения «ручки» с клавиатуры (команда; привод — sim/actuators.py)
 TRIM_STEP = np.radians(0.3)
 # Клавиши ручного пилотирования: при потере фокуса 3D-окном Ursina не получает
 # «клавиша отпущена» — held_keys остаются 1 и рули «заклинивает» (полёт 2026-10-08)
-PILOT_KEYS = ("w", "s", "a", "d", "q", "e")
+PILOT_KEYS = ("w", "s", "a", "d", "q", "e", "shift", "left shift", "right shift")
 THR_STEP  = 0.05
 
 THETA_STEP, THETA_LIM = np.radians(1.0), np.radians(20.0)
@@ -358,10 +364,12 @@ class Game(Entity):
 
     # --- управление на шаг ----------------------------------------------------
     def _manual(self, dt):
+        hi = held_keys["shift"] or held_keys["left shift"] or held_keys["right shift"]  # большие расходы
+        de, da, dr = (HI_DEFL,) * 3 if hi else (DE_DEFL, DA_DEFL, DR_DEFL)
         cmd = np.array([
-            self.de_trim_man + DE_DEFL * (held_keys["w"] - held_keys["s"]),
-            DA_DEFL * (held_keys["d"] - held_keys["a"]),
-            DR_DEFL * (held_keys["q"] - held_keys["e"]),
+            self.de_trim_man + de * (held_keys["w"] - held_keys["s"]),
+            da * (held_keys["d"] - held_keys["a"]),
+            dr * (held_keys["q"] - held_keys["e"]),
         ])
         ac = self.ac                                    # рули не дальше упоров
         cmd = np.clip(cmd, [ac.delta_e_min, -ac.delta_a_max, -ac.delta_r_max],
