@@ -29,7 +29,7 @@ viz/            отображение (не импортирует control/)
   viewer.py       ← flight_logger: 2D-графики и анимация .flightlog
   viewer3d.py     ← flight_logger, world3d, aircraft3d, ursina: 3D
   world3d.py, mapdata.py, osmdata.py, landcover.py — миры и карты
-  bench_panel.py, map_panel.py, block_editor.py — окна tkinter (процессы-спутники)
+  bench_panel.py, station.py, block_editor.py — окна tkinter (процессы-спутники)
       │
 scenarios/      прогоны и интерактивные программы (← всё выше)
   s1–s7         ← runner, control (регуляторы напрямую), flight_logger, viz.viewer

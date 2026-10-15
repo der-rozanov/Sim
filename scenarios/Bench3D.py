@@ -17,8 +17,8 @@ Bench3D — испытательный стенд САУ для студенто
   Навигация       маршрут (окно карты) → [менеджер маршрута] → [следование по
                   прямой / окружности] → χ_ref, h_ref  (control/navigation.py)
 
-Окно карты (viz/map_panel.py, третий процесс): вид сверху, ЛА и след, точки
-маршрута ставятся мышью; «Лететь по маршруту» — САУ ведёт по точкам.
+Окно станции (viz/station.py, третий процесс): PFD, карта с маршрутом (точки ставятся
+мышью; FLY — САУ ведёт по точкам), рули, α/β, TECS, журнал событий.
 САУ — control/sau.py (как в GameScenario3D и s8–s10): TECS + защита по α;
 по умолчанию параметры штатные — летает.
 
@@ -60,7 +60,7 @@ from control.sau import SAU, SAUParams, TruthSensors, Mode
 from viz.viewer3d import make_app, MAPS
 from ursina import window, Vec2
 from viz import bench_panel
-from GameScenario3D import (Game, _wrap180, start_map_window,
+from GameScenario3D import (Game, _wrap180, start_station, MANUAL_REF,
                             KH, H_MIN, H_MAX, VA_MIN, VA_MAX, THETA_LIM)
 from control.navigation import NavParams
 
@@ -231,6 +231,14 @@ class Bench(Game):
         p = self.sau.lon.params                      # расчётные таблицы — для ползунков γ
         self.tecs_gamma_tabs = (p.gamma_climb_tab, p.gamma_sink_tab)
 
+    def _fma_prot(self):
+        """Колонка защиты по α на табло станции: состояние автомата защиты (control/aua.py)."""
+        if not self.prot.enabled:
+            return super()._fma_prot()
+        st = AUAState(self.prot.state)
+        ok = st == AUAState.NORMAL
+        return ("AOA PROT", st.name, "w" if ok else "a", "g" if ok else "a")
+
     def _make_sau(self):
         params = SAUParams(lon="tecs",
                            pitch=PitchControlParams(Va_ref=self.cfg.Va0),
@@ -260,7 +268,7 @@ class Bench(Game):
 
         if self.sau.stall and self.sau.prot_out.state == AUAState.CRITICAL:  # защита перехватила
             self._stall_off(s)
-            self._event("защита: перехват", "orange")
+            self._event("защита: перехват", "orange", "AOA PROT: recovery")
         return c
 
     def _stall_off(self, s):
@@ -285,24 +293,24 @@ class Bench(Game):
             elif not self.ap:                  # ступеньки и толчки — только с САУ
                 continue
             elif kind == "chi":
-                self._nav_off("маршрут: ручная уставка")
+                self._nav_off(*MANUAL_REF)
                 self.sau.refs.chi = wrap_angle(self.sau.refs.chi + np.radians(val))
             elif kind == "h":
-                self._nav_off("маршрут: ручная уставка")
+                self._nav_off(*MANUAL_REF)
                 self.sau.refs.h = float(np.clip(self.sau.refs.h + val, H_MIN, H_MAX))
                 self.sau.set_mode(Mode.ALTITUDE)
             elif kind == "va":
                 self.sau.refs.Va = float(np.clip(self.sau.refs.Va + val, VA_MIN, VA_MAX))
             elif kind == "stall":
                 self.sau.stall = True
-                self._event("срыв: δt = 0, θ_ref +15°", "red")
+                self._event("срыв: δt = 0, θ_ref +15°", "red", "STALL test: δt = 0, θ_ref +15°")
             elif kind == "stall_off" and self.sau.stall:
                 self._stall_off(self.state)
-                self._event("срыв: отмена", "gray")
+                self._event("срыв: отмена", "gray", "STALL test: cancel")
             elif kind == "kick":
                 idx, amp = KICK[val]
                 self.kick = (idx, amp, self.t + KICK_T)
-                self._event(f"толчок {val}", "purple")
+                self._event(f"толчок {val}", "purple", f"kick {val}")
 
     def _telemetry(self):
         s, deg, c = self.state, np.degrees, self.controls
@@ -373,7 +381,7 @@ def main():
     ap.add_argument("--h0", type=float, default=200.0, help="начальная высота, м")
     ap.add_argument("--cam", type=int, default=1, choices=[1, 2, 3, 4])
     ap.add_argument("--map", default="default", choices=list(MAPS), help="карта мира")
-    ap.add_argument("--no-map", action="store_true", help="без окна карты (маршрута)")
+    ap.add_argument("--no-map", action="store_true", help="без окна станции (PFD + карта)")
     ap.add_argument("--aircraft", default="fpv", choices=list(AIRCRAFT_TYPES), help="тип ЛА")
     a = ap.parse_args()
 
@@ -388,8 +396,8 @@ def main():
 
     app, terrain = make_app(f"Стенд САУ — {MAPS[a.map].title}", a.map, size=WIN_3D)
     window.position = Vec2(0, 40)          # заголовок окна виден — можно перетащить
-    q_map = None if a.no_map else start_map_window(terrain, a.h0, "+0-40", px=560)
-    game = Bench(aircraft, wind_params, cfg, terrain, q_par, q_tel, cam=a.cam, q_map=q_map)
+    q_station = None if a.no_map else start_station(terrain, aircraft, a.h0, "+0-40", px=560)
+    game = Bench(aircraft, wind_params, cfg, terrain, q_par, q_tel, cam=a.cam, q_station=q_station)
     try:
         app.run()
     finally:

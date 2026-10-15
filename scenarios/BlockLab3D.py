@@ -59,7 +59,7 @@ from control.blocks import Diagram, SchemeError, catalog, sau_signals, templates
 from viz.viewer3d import make_app, MAPS
 from viz import block_editor
 from ursina import window, Vec2
-from GameScenario3D import Game, H_MIN, H_MAX, VA_MIN, VA_MAX, THETA_LIM
+from GameScenario3D import Game, MANUAL_REF, H_MIN, H_MAX, VA_MIN, VA_MAX, THETA_LIM
 
 WIN_3D = (720, 600)               # 3D-окно у левого края экрана, редактор — справа
 # Импульс рулём (прямоугольный): привод → (индекс в [δe, δt, δa, δr], добавка, рад, длительность, с)
@@ -111,7 +111,7 @@ class Lab(Game):
     def _scheme_fail(self, msg):
         self.err = f"ошибка счёта, схема выключена: {msg}"
         self.dia, self.scheme_on = None, False
-        self._event("схема: ошибка", "red")
+        self._event("схема: ошибка", "red", "SCHEME: error")
 
     def _set_scheme(self, scheme):
         try:
@@ -122,7 +122,7 @@ class Lab(Game):
         self.dia, self.err = dia, ""
         self.version += 1
         if self.scheme_on:
-            self._event("схема: заменена", "dodgerblue")
+            self._event("схема: заменена", "dodgerblue", "SCHEME: replaced")
 
     def _set_on(self, on):
         if on and self.dia is None:
@@ -131,7 +131,8 @@ class Lab(Game):
         if on and not self.scheme_on:
             self.dia.reset()               # включение — с нулевыми состояниями блоков
         if on != self.scheme_on:
-            self._event("схема вкл" if on else "схема выкл", "dodgerblue" if on else "gray")
+            self._event("схема вкл" if on else "схема выкл", "dodgerblue" if on else "gray",
+                        "SCHEME ON" if on else "SCHEME OFF")
         self.scheme_on = on
 
     # --- окно редактора -----------------------------------------------------------
@@ -153,13 +154,13 @@ class Lab(Game):
             elif not self.ap:              # уставки и толчки — только с САУ
                 continue
             elif kind == "theta":
-                self._nav_off("маршрут: ручная уставка")
+                self._nav_off(*MANUAL_REF)
                 refs = self.sau.refs
                 if self.sau.mode is not Mode.PITCH:
                     self.sau.set_mode(Mode.PITCH)       # θ_ref подхватит текущую команду
                 refs.theta = float(np.clip(refs.theta + math.radians(val), -THETA_LIM, THETA_LIM))
             elif kind == "h":
-                self._nav_off("маршрут: ручная уставка")
+                self._nav_off(*MANUAL_REF)
                 if self.sau.mode is Mode.PITCH:
                     self.sau.refs.h = float(self.state[H])
                 self.sau.refs.h = float(np.clip(self.sau.refs.h + val, H_MIN, H_MAX))
@@ -167,16 +168,17 @@ class Lab(Game):
             elif kind == "va":
                 self.sau.refs.Va = float(np.clip(self.sau.refs.Va + val, VA_MIN, VA_MAX))
             elif kind == "chi":
-                self._nav_off("маршрут: ручная уставка")
+                self._nav_off(*MANUAL_REF)
                 self.sau.refs.chi = wrap_angle(self.sau.refs.chi + math.radians(val))
             elif kind == "mode":
-                self._nav_off("маршрут: ручная уставка")
+                self._nav_off(*MANUAL_REF)
                 if val == "alt":
                     self.sau.refs.h = float(self.state[H])
                 self.sau.set_mode(Mode.ALTITUDE if val == "alt" else Mode.PITCH)
             elif kind == "kick" and val in KICKS:
                 self.kick, self.kick_until = val, self.t + KICKS[val][2]
-                self._event(f"импульс {dict(de='δe', da='δa', dr='δr')[val]}", "purple")
+                nm = dict(de='δe', da='δa', dr='δr')[val]
+                self._event(f"импульс {nm}", "purple", f"pulse {nm}")
 
     def _telemetry(self):
         s, deg, sau = self.state, math.degrees, self.sau

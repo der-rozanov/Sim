@@ -10,7 +10,7 @@
 | `sau_diagrams.py` | структурные схемы САУ (тот же стиль, что `diagrams.py`): `python docs/figures/sau_diagrams.py [имя]` | `sau_structure`, `sau_pitch`, `sau_tecs`, `sau_split`, `sau_roll`, `sau_lateral`, `sau_aoa`, `sensor_model` |
 | `sau_plots.py` | переходные процессы САУ на полной модели против линейной теории; печатает числа для таблиц control.md и SENSORS.md: `python docs/figures/sau_plots.py [steps outer tecs course coord aoa navfield route bandwidth sensors]` (~1.5 мин) | `sau_steps`, `sau_outer_steps`, `sau_tecs_vs_split`, `sau_course`, `sau_coord`, `sau_aoa_demo`, `sau_nav_field`, `sau_route`, `sau_bandwidth`, `sensors_noise` |
 | `viewer_shots.py` | прогоняет сценарии и сохраняет кадр 2D-просмотра | `viewer_s4`, `viewer_s8` |
-| `grab_screen.py` | запускает интерактивную программу, по сценарию команд (ждать, двигать окна, щёлкать, нажимать) снимает окна; только Windows | `bench_*`, `lab_editor`, `map_route`, `game_route_3d` |
+| `grab_screen.py` | запускает интерактивную программу, по сценарию команд (ждать, двигать окна, щёлкать, нажимать) снимает окна; только Windows | `bench_*`, `lab_editor`, `station`, `game_route_3d` |
 
 3D-кадры проигрывателя снимаются им самим:
 
