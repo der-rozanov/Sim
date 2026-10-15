@@ -29,7 +29,8 @@ h → θ_ref → δe, Va → δt.
 маршрута ставятся мышью, «Лететь по маршруту» — САУ ведёт по точкам.
 Измерения в САУ — истинные (без шума).
 
-Общие: Пробел — пауза, R — сброс, 1–4 — камера, M — масштаб силуэта, Esc — выход.
+Общие: Пробел — пауза, R — сброс, 1–4 — камера, M — масштаб силуэта, F1 — уровень HUD,
+Esc — выход. HUD — viz/hud3d.py (подписи по-английски).
 
 Земля твёрдая (sim/ground.py, РЕШ-25): поверхность карты — World.surface(), как
 нарисована, с ВПП и покрытиями. ЛА садится на шасси, катится (Q/E — носовое
@@ -69,8 +70,9 @@ from control.controllers import PitchControlParams, wrap_angle
 from control.navigation import WaypointNavigator, NavParams
 from control.sau import SAU, SAUParams, TruthSensors, Mode
 from viz import map_panel
-from viz.viewer3d import (View3D, make_app, MAPS, ned_to_u, body_axes,
+from viz.viewer3d import (View3D, make_app, MAPS, ned_to_u, body_axes, air_velocity_axis,
                           screenshot_and_quit)
+from viz.hud3d import HudData
 from ursina import Entity, application, held_keys, time as utime
 
 # ------------------------------------------------------------------
@@ -105,8 +107,8 @@ def _wrap180(a):
 
 class Game(Entity):
 
-    HELP = ("W/S δe  A/D δa  Q/E δr  ↑/↓ трим  X/Z газ  P САУ  H высота  N маршрут  "
-            "Пробел пауза  R сброс  1-4 камера  Esc выход")
+    HELP = ("W/S δe  A/D δa  Q/E δr  ↑/↓ trim  X/Z thr  P AP  H alt  N nav  "
+            "Space pause  R reset  1-4 cam  Esc quit")
 
     def __init__(self, aircraft, wind_params, cfg, terrain, cam=1, ap=False, shot=None,
                  q_map=None):
@@ -122,7 +124,7 @@ class Game(Entity):
         self.s0[PSI] = terrain.start_psi          # старт вдоль ВПП карты
         self.ter = terrain
         self.ground = lambda N, E: terrain.surface(E, N)    # NED → Ursina: X — восток, Z — север
-        self.view = View3D(aircraft.b, aircraft.c, terrain, self.HELP, cam=cam, hud_lines=13,
+        self.view = View3D(aircraft.b, aircraft.c, terrain, self.HELP, cam=cam,
                            aircraft_name=aircraft.name)
 
         self.sau = self._make_sau()
@@ -158,7 +160,7 @@ class Game(Entity):
         self.state = self.s0.copy()
         self.t, self.acc = 0.0, 0.0
         self.paused, self.crashed = False, False
-        self.on_ground, self.crash_msg = False, ""
+        self.on_ground, self.crash_msg, self.crash_en = False, "", ""
         self.ap = False
         self.de_trim_man = self.de_trim
         self.thr = self.thr_trim
@@ -385,55 +387,57 @@ class Game(Entity):
         v_sink = max(0.0, float(-c["vn"][on].min()))         # скорость к земле, м/с
         wet = self.ter.is_water(c["pos"][on, 1], c["pos"][on, 0]).any()
         if (on & ~c["wheel"]).any():
-            self._crash("УДАР О ЗЕМЛЮ")
+            self._crash("УДАР О ЗЕМЛЮ", "CRASH: AIRFRAME HIT")
         elif wet:
-            self._crash("ПРИВОДНЕНИЕ")
+            self._crash("ПРИВОДНЕНИЕ", "CRASH: WATER")
         elif v_sink > self.ac.gear_v_crash:
-            self._crash(f"ПОЛОМКА ШАССИ ({v_sink:.1f} м/с)")
+            self._crash(f"ПОЛОМКА ШАССИ ({v_sink:.1f} м/с)", f"CRASH: GEAR ({v_sink:.1f} m/s)")
         elif not self.on_ground:
             self._event(f"касание {v_sink:.1f} м/с", "green")
         self.on_ground = True
 
-    def _crash(self, msg):
-        self.crashed, self.crash_msg = True, msg
+    def _crash(self, msg, msg_en):
+        """msg — событие в логе (по-русски, как остальные), msg_en — для HUD."""
+        self.crashed, self.crash_msg, self.crash_en = True, msg, msg_en
         self._event(msg.lower(), "red")
 
-    def _hud(self):
+    def _modes(self) -> str:
+        """Строка режимов HUD: только активные (как табло режимов на PFD)."""
+        deg, refs = np.degrees, self.sau.refs
+        if not self.ap:
+            return f"MAN   TRIM δe {deg(self.de_trim_man):+.1f}°"
+        m = ["AP", "TECS" if self.sau.params.lon == "tecs" else "SPD/ALT"]
+        m.append(f"ALT {refs.h:.0f}" if self.h_hold else f"PITCH {deg(refs.theta):+.1f}°")
+        m.append(f"SPD {refs.Va:.1f}")
+        if self.nav_on:
+            m.append("NAV ORBIT" if self.nav.mode == "orbit"
+                     else f"NAV {self.nav.idx + 1}/{len(self.route)}")
+        else:
+            m.append(f"TRK {deg(refs.chi) % 360:03.0f}")
+        return "   ".join(m)
+
+    def _hud_data(self) -> HudData:
         s, c = self.state, self.controls
         w_vec = self.wind_call(s[H], self.t)
         Va, alpha, beta = air_data(s, w_vec)
-        Vx, Vy, _ = earth_velocity(s)
-        deg = np.degrees
-        refs = self.sau.refs
-        if self.ap:
-            ref = (f"h_ref {refs.h:6.0f} м" if self.h_hold
-                   else f"θ_ref {deg(refs.theta):5.1f}°")
-            nav = ""
-            if self.nav_on:
-                nav = ("  НАВ: кружение" if self.nav.mode == "orbit" else
-                       f"  НАВ → точка {self.nav.idx + 1}/{len(self.route)}")
-            mode = (f"САУ  {ref}  Va_ref {refs.Va:4.1f}\n"
-                    f"     χ_ref {deg(refs.chi) % 360:5.1f}°{nav}")
-        else:
-            mode = f"РУЧНОЙ  трим δe {deg(self.de_trim_man):5.2f}°\n"
-        state = "ПАУЗА" if self.paused else ("НА ЗЕМЛЕ" if self.on_ground else "")
-        text = (
-            f"{mode}\n"
-            f"t   {self.t:7.2f} с   {state}\n"
-            f"Va  {Va:7.2f} м/с" + (f"   уставка {refs.Va:4.1f}\n" if self.ap else "\n") +
-            f"газ δt {c[1]:5.2f}  ({100 * c[1]:3.0f} %)\n"
-            f"h   {s[H]:7.1f} м\n"
-            f"α   {deg(alpha):7.2f}°    β  {deg(beta):6.2f}°\n"
-            f"φ   {_wrap180(deg(s[PHI])):7.2f}°    θ  {deg(s[THETA]):6.2f}°\n"
-            f"ψ   {deg(s[PSI]) % 360:7.1f}°    χ  {deg(np.arctan2(Vy, Vx)) % 360:6.1f}°\n"
-            f"δe  {deg(c[0]):7.2f}°    δa {deg(c[2]):6.2f}°\n"
-            f"δr  {deg(c[3]):7.2f}°\n"
-            f"ветер С {w_vec[0]:5.1f}  В {w_vec[2]:5.1f}  верт {w_vec[1]:5.1f} м/с"
-        )
+        Vx, Vy, Vh = earth_velocity(s)
+        deg, refs = np.degrees, self.sau.refs
         al = [self.ac.alpha_warning, self.ac.alpha_crit, self.ac.alpha_stall]
-        alert = int(sum(alpha >= x for x in al))
-        msg = f"{self.crash_msg} — R для сброса" if self.crashed else ""
-        self.view.set_hud(text, alert, msg)
+        v = air_velocity_axis(s[PHI], s[THETA], s[PSI], alpha, beta)
+        x_b, z_b = body_axes(s[PHI], s[THETA], s[PSI])
+        return HudData(
+            t=self.t, Va=Va, h=s[H], Vh=Vh, alpha=deg(alpha), beta=deg(beta),
+            phi=_wrap180(deg(s[PHI])), psi=deg(s[PSI]) % 360, chi=deg(np.arctan2(Vy, Vx)) % 360,
+            thr=c[1], wind_n=w_vec[0], wind_e=w_vec[2],
+            alert=int(sum(alpha >= x for x in al)), modes=self._modes(),
+            status="PAUSED" if self.paused else ("ON GROUND" if self.on_ground else ""),
+            event=f"{self.crash_en} — R to reset" if self.crashed else "",
+            Va_ref=refs.Va if self.ap else None, h_ref=refs.h if self.h_hold else None,
+            chi_ref=deg(refs.chi) % 360 if self.ap else None,
+            nose=ned_to_u(*x_b), vel=ned_to_u(*v))
+
+    def _hud(self):
+        self.view.set_hud(self._hud_data())
 
     # --- сохранение -------------------------------------------------------------
     def save(self):

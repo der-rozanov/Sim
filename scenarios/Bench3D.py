@@ -218,8 +218,8 @@ class BenchSAU(SAU):
 
 class Bench(Game):
 
-    HELP = ("A/D χ_ref -/+10°  W/S h_ref  X/Z Va_ref  P САУ вкл/выкл  N маршрут  "
-            "Пробел пауза  R сброс  1-4 камера  Esc выход")
+    HELP = ("A/D χ_ref ∓10°  W/S h_ref  X/Z Va_ref  P AP  N nav  "
+            "Space pause  R reset  1-4 cam  Esc quit")
 
     def __init__(self, aircraft, wind_params, cfg, terrain, q_par, q_tel, **kw):
         self.q_par, self.q_tel = q_par, q_tel

@@ -69,8 +69,8 @@ KICKS = {"de": (0, math.radians(3.0), 1.0), "da": (2, math.radians(5.0), 0.5),
 
 class Lab(Game):
 
-    HELP = ("W/S h_ref (θ_ref)  A/D χ_ref  X/Z Va_ref  H высота/тангаж  P САУ  "
-            "Пробел пауза  R сброс  1-4 камера  Esc выход")
+    HELP = ("W/S h_ref (θ_ref)  A/D χ_ref  X/Z Va_ref  H alt/pitch  P AP  "
+            "Space pause  R reset  1-4 cam  Esc quit")
 
     def __init__(self, aircraft, wind_params, cfg, terrain, q_cmd, q_tel, **kw):
         self.q_cmd, self.q_tel = q_cmd, q_tel
@@ -199,13 +199,11 @@ class Lab(Game):
         except queue.Full:                 # редактор не успевает / закрыт — не ждём
             pass
 
-    def _hud(self):
-        super()._hud()
+    def _modes(self):
         acts = sorted(self.dia.outputs) if self.dia is not None else []
         names = {"de": "δe", "dt": "δt", "da": "δa", "dr": "δr"}
-        line = ("СХЕМА: " + ", ".join(names[a] for a in acts) if self.scheme_on
-                else "СХЕМА выкл — штатная САУ")
-        self.view.hud.text = line + "\n" + self.view.hud.text
+        tag = "SCHEME " + ",".join(names[a] for a in acts) if self.scheme_on else "SCHEME OFF"
+        return tag + "   " + super()._modes()
 
 
 def main():
