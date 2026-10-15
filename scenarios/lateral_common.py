@@ -3,7 +3,7 @@
 Общая часть сценариев бокового канала (s8–s10): полная САУ 6DOF (control/sau.py).
 
 Продольный канал — TECS (control/tecs.py):
-  h_ref, Va_ref → [темпы энергии Ė, Ḃ] → throttle (Ė), theta_ref (Ḃ) → [каскад theta → q] → delta_e
+  h_ref, Va_ref → [производные энергии Ė, Ḃ] → throttle (Ė), theta_ref (Ḃ) → [каскад theta → q] → delta_e
 Боковой канал — LateralController:
   chi_ref → [П chi] → phi_ref → [phi → p_ref → FF + ПИ p] → delta_a
   beta (зонд) → [ПИ beta] + микс δa → delta_r

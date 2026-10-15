@@ -465,7 +465,7 @@ class LateralControlParams:
 
     Интеграла по курсу нет: на прямой φ = 0 при любом χ, статической ошибки нет.
     Коэффициенты рассчитаны для FPV-самолёта при Va = 16 м/с
-    (control/tuning.py, docs/control.md раздел 11).
+    (control/tuning.py, docs/control.md разделы 2, 6).
     """
     roll: RollControlParams = field(default_factory=RollControlParams)
 

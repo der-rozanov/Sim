@@ -7,7 +7,7 @@ Bench3D — испытательный стенд САУ для студенто
   Крен            χ_ref → [K_χ, atan] → [огр. φ_ref] → [1/τ_φ] → [огр. p_ref]
                   → [FF + ПИ скорости крена] → [огр. δa]   (схема PX4 / ArduPilot)
   Высота и скорость (TECS, control/tecs.py)
-                  h_ref, Va_ref → [П высоты, П скорости] → темпы энергии Ė_ref, Ḃ_ref
+                  h_ref, Va_ref → [П высоты, П скорости] → производные энергии Ė_ref, Ḃ_ref
                   → газ: [ПИ по Ė] + упреждение → [огр. 0…1] → [защита скорости]
                   → тангаж: [ПИ по Ḃ] + упреждение → [огр. θ] → θ_ref
   Тангаж          θ_ref → [ПИД θ] → [огр. q_ref] → [ПИД q] → [× −(Va₀/Va)²] → [огр. δe]
@@ -317,7 +317,7 @@ class Bench(Game):
         phi = np.radians(_wrap180(deg(s[PHI])))
         pit, lon, lat = sau.pitch, sau.lon, sau.lat
         h_ref = sau.refs.h if self.h_hold else s[H]
-        Vs = max(Va, 1.0)                    # темпы энергии на стенде — ×Va, в м/с набора
+        Vs = max(Va, 1.0)                    # производные энергии на стенде — ×Va, в м/с набора
         gs = (float(np.clip((pit.Va_ref / max(Va, 1.0)) ** 2, pit.gs_scale_min, pit.gs_scale_max))
               if pit.gain_scheduling else 1.0)
         msg = {
