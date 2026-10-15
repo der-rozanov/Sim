@@ -518,7 +518,7 @@ class Station:
             x = X(a)
             if x0 < x < x1:
                 cv.create_line(x, y0, x, y0 + (12 if a % 10 == 0 else 6), fill="white")
-                if a % 10 == 0:
+                if a % 10 == 0 and x0 + 14 < x < x1 - 14:      # подпись у края ленты не печатаем
                     a3 = a % 360
                     cv.create_text(x, y0 + 24, text={0: "N", 90: "E", 180: "S", 270: "W"}.get(a3, f"{a3 // 10:02d}"),
                                    fill="white", font=FM(11))
