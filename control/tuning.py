@@ -125,7 +125,7 @@ def plant_coeffs(aircraft, Va: float) -> dict:
     a_V1 = ac.rho * Va * ac.S * CD_t / ac.mass - dT_dVa / ac.mass
     a_V2 = dT_ddt / ac.mass
 
-    # Располагаемые темпы энергии: Ė = (T − D)/(m·g), D = T(δt*) в горизонтальном полёте
+    # Располагаемые производные энергии: Ė = (T − D)/(m·g), D = T(δt*) в горизонтальном полёте
     E_max = (thrust(1.0, Va, ac) - thrust(dt_t, Va, ac)) / (ac.mass * ac.g)
     E_min = (thrust(0.0, Va, ac) - thrust(dt_t, Va, ac)) / (ac.mass * ac.g)
     al = np.radians(np.linspace(0.0, 30.0, 601))

@@ -89,7 +89,7 @@ SCOPES = {
               ("sym", 10))],
     "tecs": [("высота h, м", [("h_ref", C_REF, "h_ref", 1), ("h", C_MEAS, "h", 0)], ("auto", 20)),
              ("скорость Va, м/с", [("Va_ref", C_REF, "Va_ref", 1), ("Va", C_MEAS, "Va", 0)], ("auto", 4)),
-             ("темпы энергии ×Va, м/с", [("E_ref", C_REF, "Ė_ref", 1), ("E", C_MEAS, "Ė", 0),
+             ("производные энергии ×Va, м/с", [("E_ref", C_REF, "Ė_ref", 1), ("E", C_MEAS, "Ė", 0),
                                           ("B_ref", "#e69500", "Ḃ_ref", 1), ("B", "#9467bd", "Ḃ", 0)],
               ("sym", 1)),
              ("тяга δt", [("thr_ff", "#999", "упрежд.", 1), ("thr", C_CTRL, "δt", 0)], ("fix", 0.0, 1.0))],
@@ -309,7 +309,7 @@ class Panel:
     def _draw_tecs(self, cv):
         A, S, V = self._arrow, self._sum, self._val
         YE, YB = 110, 230                       # линии полной энергии (газ) и баланса (тангаж)
-        self._title(cv, "TECS: высота h и скорость Va → темпы энергии → газ δt (Ė) и тангаж θ (Ḃ)")
+        self._title(cv, "TECS: высота h и скорость Va → производные энергии → газ δt (Ė) и тангаж θ (Ḃ)")
         # внешние контуры: высота и скорость
         cv.create_text(26, 92, text="h_ref", font=FONT_B, fill=C_REF)
         V(cv, 26, 128, lambda m: f"{m['h_ref']:.0f}", C_REF)
@@ -331,7 +331,7 @@ class Panel:
         cv.create_text(150, 262, text="V̇_ref = K_V·e_V", font=FONT_S)
         A(cv, 205, YB, 240, YB)
         V(cv, 223, YB - 12, lambda m: f"{m['Vdot_ref']:+.1f}", C_REF)
-        # требуемые темпы энергии
+        # требуемые производные энергии
         self._box(cv, 242, 55, 394, 285, "Темпы энергии")
         cv.create_text(318, 104, font=("Segoe UI", 7), justify="center",
                        text="γ_ref = ḣ_ref/Va, огр. γ\nĖ_ref = γ_ref + V̇_ref/g\n"

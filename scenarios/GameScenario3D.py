@@ -81,7 +81,7 @@ from ursina import Entity, application, held_keys, time as utime
 DE_DEFL   = np.radians(2.0)     # отклонение руля высоты от триммера при нажатой W/S
 DA_DEFL   = np.radians(3.0)     # элероны при A/D
 DR_DEFL   = np.radians(3.0)     # руль направления при Q/E
-SURF_RATE = np.radians(20.0)    # темп отклонения «ручки» с клавиатуры (команда; привод — sim/actuators.py)
+SURF_RATE = np.radians(20.0)    # скорость отклонения «ручки» с клавиатуры (команда; привод — sim/actuators.py)
 TRIM_STEP = np.radians(0.3)
 # Клавиши ручного пилотирования: при потере фокуса 3D-окном Ursina не получает
 # «клавиша отпущена» — held_keys остаются 1 и рули «заклинивает» (полёт 2026-10-08)
