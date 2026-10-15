@@ -396,7 +396,7 @@ def main():
 
     app, terrain = make_app(f"Стенд САУ — {MAPS[a.map].title}", a.map, size=WIN_3D)
     window.position = Vec2(0, 40)          # заголовок окна виден — можно перетащить
-    q_station = None if a.no_map else start_station(terrain, aircraft, a.h0, "+0-40", px=560)
+    q_station = None if a.no_map else start_station(terrain, aircraft, a.h0, "+0-40", px=640)
     game = Bench(aircraft, wind_params, cfg, terrain, q_par, q_tel, cam=a.cam, q_station=q_station)
     try:
         app.run()
