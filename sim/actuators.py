@@ -23,7 +23,9 @@
 
 Положения рулей — отдельный вектор той же раскладки, что управление
 [δe, δt, δa, δr] (индексы DE, DT, DA, DR). Газ проходит без задержки
-(динамика ESC + винта — не моделируется).
+(динамика ESC + винта — не моделируется), но с упорами
+δt ∈ [throttle_min, throttle_max]: команда схемы без насыщения (BlockLab3D)
+иначе даёт δt < 0 — напряжение на моторе V_in < 0, propeller() → NaN.
 """
 
 import numpy as np
@@ -45,6 +47,7 @@ def actuator_init(cmd, params: AircraftParams) -> np.ndarray:
     pos = full_controls(cmd).astype(float)
     idx = list(SURFACES)
     pos[idx] = np.clip(pos[idx], *surface_limits(params))
+    pos[DT] = np.clip(pos[DT], params.throttle_min, params.throttle_max)
     return pos
 
 
@@ -61,5 +64,5 @@ def actuator_step(pos: np.ndarray, cmd, dt: float,
 
     pos_new = pos.copy()
     pos_new[idx] = pos[idx] + step
-    pos_new[DT] = cmd[DT]
+    pos_new[DT] = np.clip(cmd[DT], params.throttle_min, params.throttle_max)
     return pos_new

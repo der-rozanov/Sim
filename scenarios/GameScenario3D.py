@@ -232,6 +232,30 @@ class Game(Entity):
         self.sau.set_mode(Mode.ALTITUDE)
         self._event(why, "gray", why_en)
 
+    def _flight_mode(self):
+        """Режим полёта для окна станции: MAN / PITCH / ALT / NAV."""
+        return "NAV" if self.nav_on else "ALT" if self.h_hold else "PITCH" if self.ap else "MAN"
+
+    def _set_vert(self, to_alt):
+        """Вертикальный канал САУ: удержание текущей высоты или тангажа; маршрут — стоп."""
+        self._nav_off(*MANUAL_REF)
+        self.sau.refs.h = float(self.state[H])
+        self.sau.set_mode(Mode.ALTITUDE if to_alt else Mode.PITCH)
+        self._event("удержание h" if to_alt else "θ_ref", "dodgerblue", "ALT hold" if to_alt else "PITCH hold")
+
+    def _set_flight_mode(self, fm):
+        """Режим полёта из окна станции — то же, что клавиши P (MAN), H (PITCH ⇄ ALT), N (NAV)."""
+        if fm == "MAN":
+            if self.ap:
+                self._toggle_ap()
+        elif fm == "NAV":
+            self._nav_go()
+        elif fm in ("PITCH", "ALT"):
+            if not self.ap:
+                self._toggle_ap()                           # САУ включается в режиме PITCH
+            if fm != self._flight_mode():
+                self._set_vert(fm == "ALT")
+
     def _poll_station(self):
         if self.q_station is None:
             return
@@ -253,6 +277,8 @@ class Game(Entity):
                 self._nav_go()
             elif kind == "stop":
                 self._nav_off()
+            elif kind == "mode":
+                self._set_flight_mode(val)
 
     def _fma(self):
         """Табло режимов станции: 5 колонок (строка 1, строка 2, цвет 1, цвет 2).
@@ -299,8 +325,9 @@ class Game(Entity):
         if self.ap and self.sau.params.lon == "tecs":       # производные энергии × Va — в м/с набора
             Vs = max(Va, 1.0)
             tecs = (lon.E * Vs, lon.E_ref * Vs, lon.B * Vs, lon.B_ref * Vs)
-        mode = ("AUTO · " + ("NAV" if self.nav_on else "ALT" if self.h_hold else "PITCH")) if self.ap else "MANUAL"
-        msg = {"t": self.t, "n": s[X], "e": s[Y], "h": s[H], "Vh": Vh, "Va": Va, "Vg": float(np.hypot(Vx, Vy)),
+        fm = self._flight_mode()
+        mode = "AUTO · " + fm if self.ap else "MANUAL"
+        msg = {"fm": fm,"t": self.t, "n": s[X], "e": s[Y], "h": s[H], "Vh": Vh, "Va": Va, "Vg": float(np.hypot(Vx, Vy)),
                "psi": deg(s[PSI]) % 360, "chi": deg(np.arctan2(Vy, Vx)) % 360,
                "phi": _wrap180(deg(s[PHI])), "theta": deg(s[THETA]), "alpha": deg(alpha), "beta": deg(beta),
                "de": deg(c[0]), "da": deg(c[2]), "dr": deg(c[3]), "thr": c[1],
@@ -340,11 +367,7 @@ class Game(Entity):
             else:
                 self._nav_go()
         elif key == "h" and self.ap:                        # высота ⇄ тангаж (маршрут — стоп, далее высота)
-            to_alt = self.sau.mode is not Mode.ALTITUDE      # до _nav_off: он сам ставит ALTITUDE
-            self._nav_off(*MANUAL_REF)
-            self.sau.refs.h = float(self.state[H])
-            self.sau.set_mode(Mode.ALTITUDE if to_alt else Mode.PITCH)
-            self._event("удержание h" if to_alt else "θ_ref", "dodgerblue", "ALT hold" if to_alt else "PITCH hold")
+            self._set_vert(self.sau.mode is not Mode.ALTITUDE)   # до _nav_off: он сам ставит ALTITUDE
         elif base in ("x", "z"):
             sgn = 1 if base == "x" else -1
             if self.ap:
