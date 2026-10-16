@@ -8,8 +8,8 @@ PFD — по мотивам Airbus; подписи по-английски).
 scenarios/GameScenario3D.py и scenarios/Bench3D.py.
 
 Состав окна:
-  сверху     — строка статуса: FLYING / ON GROUND / PAUSED / CRASH, режим, ветер, Va, h, α,
-               газ, время записи;
+  сверху     — строка статуса: FLYING / ON GROUND / PAUSED / CRASH, кнопки режима полёта
+               MAN | PITCH | ALT | NAV (активный — зелёный), ветер, Va, h, α, газ, время записи;
   слева PFD  — табло режимов (FMA, 5 колонок: тяга, вертикальный и боковой каналы,
                защита по α, САУ; зелёный — активный режим, голубой — уставка);
                авиагоризонт с маркером вектора воздушной скорости (смещён на α вниз,
@@ -28,11 +28,14 @@ scenarios/GameScenario3D.py и scenarios/Bench3D.py.
   колесо над точкой — её высота ±10 м;  колесо над картой — масштаб (вся карта … фон 1:1)
   средняя кнопка и тянуть — сдвиг карты
 Кнопки: FLY — САУ ведёт по точкам с первой; STOP — навигация выкл (САУ держит курс и
-высоту); CLEAR; LOOP — замкнуть маршрут (без него — кружение у последней точки);
+высоту); CLEAR; LOOP TRACK — замкнуть маршрут (без него — кружение у последней точки);
 CENTER — карту на ЛА; WP ALT ▲▼ — высота новых точек ±10 м.
+Режимы (строка статуса) — как клавиши 3D-окна: MAN — САУ выкл (P); PITCH / ALT — САУ
+держит тангаж / текущую высоту (H); NAV — полёт по маршруту (N, = FLY; без маршрута недоступен).
 
 Связь — две очереди multiprocessing (протокол окна карты сохранён):
     q_cmd (окно → 3D):  ("route", {"wps": [(N, E, h), ...], "loop": bool}) | ("go", None) | ("stop", None)
+                        | ("mode", "MAN" | "PITCH" | "ALT" | "NAV")
     q_tel (3D → окно):  dict на конец кадра — см. GameScenario3D.Game._station_telemetry
 info — постоянные данные ЛА (пределы рулей, пороги α, скорости полос) — station_info().
 
@@ -61,8 +64,9 @@ ZOOM_MAX = 4                   # фон — в ZOOM_MAX раз крупнее н
 SIDE_W = 470                   # ширина правой колонки, номинальные пикс
 TOP_H = 44                     # высота строки статуса, номинальные пикс
 PFD_K = 0.78                   # ширина PFD / номинальная высота
-MAP_MIN = 600                  # ширина карты, ниже которой мельчает всё окно (плашки карты не налезают), номинальные пикс
+MAP_MIN = 620                  # ширина карты, ниже которой мельчает всё окно (плашки карты не налезают), номинальные пикс
 OV = ("dyn", "ovl")            # теги элементов поверх карты (масштабируются ×UI)
+MODES = (("MAN", "P"), ("PITCH", "H"), ("ALT", "H"), ("NAV", "N"))   # режим полёта, клавиша 3D-окна
 
 # цвета (тёмная тема)
 BG, BAR, CARD, EDGE, DIM, TXT = "#101215", "#1c1f24", "#22262c", "#3a414b", "#8d99a6", "#e8ecf0"
@@ -140,6 +144,7 @@ class Station:
         self._t_trail = 0.0
         self._pan = None
         self.buttons = []                 # (x0, y0, x1, y1, действие) на карте
+        self.mode_buttons = []            # (x0, x1, режим) в строке статуса, номинальные пикс
         self._fonts = {}                  # кэш шрифтов для подбора размера
         self._size, self._job = None, None
 
@@ -171,6 +176,7 @@ class Station:
         cv.bind("<MouseWheel>", self._wheel)
         cv.bind("<Button-2>", lambda ev: setattr(self, "_pan", (ev.x, ev.y)))
         cv.bind("<B2-Motion>", self._pan_move)
+        self.top.bind("<Button-1>", self._mode_click)
         # номинальный размер, но не больше экрана (запас — заголовок окна и панель задач)
         Ww = min(round(PFD_K * self.H0) + self.H0 + SIDE_W, root.winfo_screenwidth() - 16)
         Wh = min(self.H0 + TOP_H, root.winfo_screenheight() - 110)
@@ -277,6 +283,12 @@ class Station:
             if x0 <= x <= x1 and y0 <= y <= y1:
                 return act
         return None
+
+    def _mode_click(self, ev):
+        x = ev.x / UI
+        for x0, x1, fm in self.mode_buttons:
+            if x0 <= x <= x1 and (fm != "NAV" or self.wps):
+                self._put(("mode", fm))
 
     def _press(self, ev):
         act = self._button_at(ev.x, ev.y)
@@ -402,14 +414,24 @@ class Station:
                             width=0)
         cv.create_text(16, TOP_H / 2, text=("▲  " if st == "FLYING" else "■  ") + st, anchor="w",
                        fill="white", font=F(14, "bold"))
+        # кнопки режима полёта: активный — зелёный, NAV без маршрута — недоступен
+        self.mode_buttons, x, bw = [], 224, 74
+        for fm, key in MODES:
+            on, off = fm == m.get("fm"), fm == "NAV" and not self.wps
+            cv.create_rectangle(x, 7, x + bw, TOP_H - 7, fill=GREEN if on else CARD,
+                                outline=GREEN if on else EDGE)
+            cv.create_text(x + bw / 2 - 4, TOP_H / 2, text=fm, font=F(11, "bold"),
+                           fill="black" if on else DIM if off else TXT)
+            cv.create_text(x + bw - 5, 12, text=key, anchor="ne", font=F(7), fill="#1b4d2e" if on else DIM)
+            self.mode_buttons.append((x, x + bw, fm))
+            x += bw + 4
         wind = math.hypot(m["wind_n"], m["wind_e"])
         frm = (math.degrees(math.atan2(-m["wind_e"], -m["wind_n"])) % 360) if wind > 0.2 else None
-        chips = [("◆ " + m["mode"], GREEN if m["ap"] else TXT),
-                 (f"WIND {wind:.1f} m/s" + (f" FROM {frm:03.0f}°" if frm is not None else ""), CYAN),
+        chips = [(f"WIND {wind:.1f} m/s" + (f" FROM {frm:03.0f}°" if frm is not None else ""), CYAN),
                  (f"Va {m['Va']:.1f} m/s", TXT), (f"h {m['h']:.0f} m", TXT),
                  (f"α {m['alpha']:.1f}°", [GREEN, AMBER, RED, RED][min(m['alert'], 3)]),
                  (f"THR {100 * m['thr']:.0f} %", TXT)]
-        x = 232
+        x += 22
         for s, c in chips:
             t = cv.create_text(x, TOP_H / 2, text=s, anchor="w", fill=c, font=F(12))
             b = cv.bbox(t)
@@ -633,13 +655,13 @@ class Station:
         items = [("✈", "FLY", lambda: self._put(("go", None)), GREEN),
                  ("■", "STOP", lambda: self._put(("stop", None)), TXT),
                  ("✕", "CLEAR", self._clear, TXT),
-                 ("↻", "LOOP", self._toggle_loop, CYAN if self.loop else TXT),
+                 ("↻", "LOOP TRACK", self._toggle_loop, CYAN if self.loop else TXT),
                  ("⊙", "CENTER", self._center_ac, TXT)]
-        bx0, by, bw, bh = 10, 10, 66, 58
+        bx0, by, bw, bh = 10, 10, 84, 58
         self._card(cv, bx0, by, bx0 + bw, by + bh * len(items) + 96)
         for i, (ic, lbl, act, c) in enumerate(items):
             y0 = by + bh * i
-            if lbl == "LOOP" and self.loop:
+            if lbl == "LOOP TRACK" and self.loop:
                 cv.create_rectangle(bx0 + 3, y0 + 3, bx0 + bw - 3, y0 + bh - 3, fill="#1d3a4a", outline="", tags=OV)
             cv.create_text(bx0 + bw / 2, y0 + 22, text=ic, fill=c, font=F(16), tags=OV)
             cv.create_text(bx0 + bw / 2, y0 + 45, text=lbl, fill=TXT, font=F(8), tags=OV)
@@ -683,7 +705,7 @@ class Station:
         vals = [("ALT", f"{m['h']:.0f} m"), ("VS", f"{m['Vh']:+.1f} m/s"), ("GS", f"{m['Vg']:.1f} m/s"),
                 ("TO WP", f"{m['dist']:.0f} m" if m["nav"] else "—"),
                 ("ETE", fmt_time(tgt) if tgt is not None else "—"), ("DIST", f"{self.flown / 1000:.2f} km")]
-        sx0, sy0, sw, sh = 92, MH - 66, 360, 56
+        sx0, sy0, sw, sh = bx0 + bw + 16, MH - 66, 360, 56
         self._card(cv, sx0, sy0, sx0 + sw, sy0 + sh)
         for i, (k, v) in enumerate(vals):
             x, y = sx0 + 12 + 118 * (i % 3), sy0 + 16 + 26 * (i // 3)
