@@ -25,7 +25,7 @@ scenarios/GameScenario3D.py и scenarios/Bench3D.py.
 Мышь на карте:
   ЛКМ по пустому месту — новая точка в конец маршрута (высота — «WP ALT» на панели)
   ЛКМ по точке и тянуть — перенести точку;  ПКМ по точке — удалить
-  колесо над точкой — её высота ±10 м;  колесо над картой — масштаб ×1 / ×2 / ×4
+  колесо над точкой — её высота ±10 м;  колесо над картой — масштаб (вся карта … фон 1:1)
   средняя кнопка и тянуть — сдвиг карты
 Кнопки: FLY — САУ ведёт по точкам с первой; STOP — навигация выкл (САУ держит курс и
 высоту); CLEAR; LOOP — замкнуть маршрут (без него — кружение у последней точки);
@@ -37,7 +37,13 @@ CENTER — карту на ЛА; WP ALT ▲▼ — высота новых то�
 info — постоянные данные ЛА (пределы рулей, пороги α, скорости полос) — station_info().
 
 Фон карты — PNG вида сверху (World.save_top_image()) охватом extent =
-((E_мин, E_макс), (N_мин, N_макс)), м, в ZOOM_MAX раз крупнее окна.
+((E_мин, E_макс), (N_мин, N_макс)), м, в ZOOM_MAX раз крупнее карты в окне.
+
+Размер окна: при запуске — номинальный, но не больше экрана; окно можно растягивать.
+Всё, кроме карты, рисуется в номинальных пикселях (окно с картой фон / ZOOM_MAX) и
+масштабируется коэффициентом UI = min(высота / номинальная высота, ширина / мин. ширина);
+шрифты — тоже ×UI. Карта занимает остаток ширины; её масштаб — целое прореживание фона
+(1 пикс окна = sub пикс фона), наименьший — вся карта в окне.
 Физики и САУ модуль не знает.
 """
 
@@ -51,9 +57,12 @@ TICK_MS = 40                   # период обновления, мс
 TRAIL_DT = 0.5                 # шаг точек следа, с
 TRAIL_MAX = 2400               # точек следа (20 мин)
 PICK_PX = 11                   # радиус «попадания» в точку, пикс
-ZOOM_MAX = 4                   # фон — в ZOOM_MAX раз крупнее окна
-SIDE_W = 470                   # ширина правой колонки, пикс
-TOP_H = 44                     # высота строки статуса, пикс
+ZOOM_MAX = 4                   # фон — в ZOOM_MAX раз крупнее номинальной карты в окне
+SIDE_W = 470                   # ширина правой колонки, номинальные пикс
+TOP_H = 44                     # высота строки статуса, номинальные пикс
+PFD_K = 0.78                   # ширина PFD / номинальная высота
+MAP_MIN = 600                  # ширина карты, ниже которой мельчает всё окно (плашки карты не налезают), номинальные пикс
+OV = ("dyn", "ovl")            # теги элементов поверх карты (масштабируются ×UI)
 
 # цвета (тёмная тема)
 BG, BAR, CARD, EDGE, DIM, TXT = "#101215", "#1c1f24", "#22262c", "#3a414b", "#8d99a6", "#e8ecf0"
@@ -63,8 +72,10 @@ ROUTE, WP, WP_CUR, AC, TRAIL = "#e8a33d", "#e8a33d", "#ffffff", "#ff3b30", "#ff5
 COL = {"g": GREEN, "c": CYAN, "w": TXT, "a": AMBER, "r": RED, "d": DIM}
 EV_COL = {"red": RED, "orange": AMBER, "green": GREEN, "dodgerblue": CYAN, "gray": DIM, "purple": MAG}
 
-F = lambda size, w="normal": ("Segoe UI", size, w)
-FM = lambda size, w="normal": ("Consolas", size, w)
+UI = 1.0                       # масштаб интерфейса (пересчитывается при изменении размера окна)
+PT = 96 / 72                   # пикс на пункт шрифта (tk scaling, уточняется при запуске)
+F = lambda size, w="normal": ("Segoe UI", -max(7, round(size * UI * PT)), w)       # size — пункты при UI = 1
+FM = lambda size, w="normal": ("Consolas", -max(7, round(size * UI * PT)), w)
 
 
 # ===========================================================================
@@ -115,7 +126,7 @@ def fmt_time(t):
 
 class Station:
 
-    def __init__(self, root, q_cmd, q_tel, bg_path, extent, info, h_new=150.0):
+    def __init__(self, root, q_cmd, q_tel, bg_path, extent, info, h_new=150.0, pos="+0+0"):
         self.root, self.q_cmd, self.q_tel, self.info = root, q_cmd, q_tel, info
         (self.e0, self.e1), (self.n0, self.n1) = extent
         self.wps = []                     # [[N, E, h], ...]
@@ -130,27 +141,28 @@ class Station:
         self._pan = None
         self.buttons = []                 # (x0, y0, x1, y1, действие) на карте
         self._fonts = {}                  # кэш шрифтов для подбора размера
+        self._size, self._job = None, None
 
+        global PT
+        PT = float(root.tk.call("tk", "scaling"))
         root.title("Ground station — PFD + map")
         root.configure(bg=BG)
         self.src = tk.PhotoImage(file=bg_path)
         self.SW, self.SH = self.src.width(), self.src.height()
-        self.MW, self.MH = self.SW // ZOOM_MAX, self.SH // ZOOM_MAX
-        self.PW, self.PH = int(0.78 * self.MH), self.MH
+        self.H0 = self.SH // ZOOM_MAX                       # номинальная высота приборов и карты
 
-        self.top = tk.Canvas(root, width=self.PW + self.MW + SIDE_W, height=TOP_H, bg=BAR,
-                             highlightthickness=0)
-        self.top.grid(row=0, column=0, columnspan=3, sticky="we")
-        self.pfd = tk.Canvas(root, width=self.PW, height=self.PH, bg="black", highlightthickness=0)
+        self.top = tk.Canvas(root, bg=BAR, highlightthickness=0)
+        self.top.grid(row=0, column=0, columnspan=3)
+        self.pfd = tk.Canvas(root, bg="black", highlightthickness=0)
         self.pfd.grid(row=1, column=0)
-        self.cv = tk.Canvas(root, width=self.MW, height=self.MH, bg="#666", highlightthickness=0)
+        self.cv = tk.Canvas(root, bg="#666", highlightthickness=0)
         self.cv.grid(row=1, column=1)
-        self.side = tk.Canvas(root, width=SIDE_W, height=self.PH, bg=BG, highlightthickness=0)
+        self.side = tk.Canvas(root, bg=BG, highlightthickness=0)
         self.side.grid(row=1, column=2)
 
         self.bg = self.cv.create_image(0, 0, anchor="nw")
         self.view = None
-        self.z, self.vx, self.vy = 1, 0, 0        # масштаб и левый верхний угол вида (пикс фона)
+        self.sub, self.vx, self.vy = ZOOM_MAX, 0, 0  # прореживание фона и левый верхний угол вида (пикс фона)
         cv = self.cv
         cv.bind("<Button-1>", self._press)
         cv.bind("<B1-Motion>", self._motion)
@@ -159,13 +171,45 @@ class Station:
         cv.bind("<MouseWheel>", self._wheel)
         cv.bind("<Button-2>", lambda ev: setattr(self, "_pan", (ev.x, ev.y)))
         cv.bind("<B2-Motion>", self._pan_move)
-        self._set_view(1, 0, 0)
-        self._draw_all()
+        # номинальный размер, но не больше экрана (запас — заголовок окна и панель задач)
+        Ww = min(round(PFD_K * self.H0) + self.H0 + SIDE_W, root.winfo_screenwidth() - 16)
+        Wh = min(self.H0 + TOP_H, root.winfo_screenheight() - 110)
+        root.geometry(f"{Ww}x{Wh}{pos}")
+        root.minsize(640, 360)
+        self._layout(Ww, Wh)
+        root.bind("<Configure>", self._on_configure)
         root.after(TICK_MS, self._tick)
+
+    # --- размер окна -------------------------------------------------------------
+    def _on_configure(self, ev):
+        if ev.widget is self.root and (ev.width, ev.height) != self._size:
+            if self._job:
+                self.root.after_cancel(self._job)
+            self._job = self.root.after(120, lambda: self._layout(self.root.winfo_width(),
+                                                                  self.root.winfo_height()))
+
+    def _layout(self, Ww, Wh):
+        """Размеры панелей и масштаб UI под окно Ww × Wh пикс; карта — снова целиком."""
+        global UI
+        self._size, self._job = (Ww, Wh), None
+        H0 = self.H0
+        UI = min(max(min(Wh / (H0 + TOP_H), Ww / (PFD_K * H0 + SIDE_W + MAP_MIN)), 0.4), 2.0)
+        top = round(TOP_H * UI)
+        self.PH = self.MH = max(Wh - top, 100)
+        self.PW, sw = round(PFD_K * H0 * UI), round(SIDE_W * UI)
+        self.MW = max(Ww - self.PW - sw, 100)
+        self.top.configure(width=Ww, height=top)
+        self.pfd.configure(width=self.PW, height=self.PH)
+        self.cv.configure(width=self.MW, height=self.MH)
+        self.side.configure(width=sw, height=self.PH)
+        fit = max(1, math.ceil(max(self.SW / self.MW, self.SH / self.MH)))
+        self.levels = [fit] + [s for s in (4, 2, 1) if s < fit]       # прореживание: вся карта … 1:1
+        self._set_view(fit, 0, 0)
+        self._draw_all()
 
     # --- координаты и вид карты ------------------------------------------------
     def _k(self):
-        return self.z / ZOOM_MAX                             # пикс окна на пикс фона
+        return 1.0 / self.sub                                # пикс окна на пикс фона
 
     def to_px(self, n, e):
         sx = (e - self.e0) / (self.e1 - self.e0) * self.SW
@@ -180,36 +224,42 @@ class Station:
     def _scale(self):
         return self.SW / (self.e1 - self.e0) * self._k()     # пикс окна / м
 
-    def _set_view(self, z, vx, vy):
-        """Масштаб z и левый верхний угол (vx, vy) в пикселях фона; вид — в пределах карты."""
-        self.z = z
-        w, h = self.MW / self._k(), self.MH / self._k()
-        self.vx = int(min(max(vx, 0), self.SW - w))
-        self.vy = int(min(max(vy, 0), self.SH - h))
+    def _set_view(self, sub, vx, vy):
+        """Прореживание sub и левый верхний угол (vx, vy) в пикселях фона; вид — в пределах
+        карты, а если карта меньше окна — по центру."""
+        self.sub = sub
+        w, h = self.MW * sub, self.MH * sub
+        place = lambda v, size, S: (S - size) // 2 if size >= S else int(min(max(v, 0), S - size))
+        self.vx, self.vy = place(vx, w, self.SW), place(vy, h, self.SH)
+        x0, y0 = max(self.vx, 0), max(self.vy, 0)
+        x1, y1 = min(self.vx + w, self.SW), min(self.vy + h, self.SH)
         self.view = tk.PhotoImage()
-        sub = ZOOM_MAX // z
-        self.view.tk.call(self.view, "copy", self.src, "-from", self.vx, self.vy,
-                          self.vx + int(w), self.vy + int(h), "-subsample", sub, sub)
+        self.view.tk.call(self.view, "copy", self.src, "-from", x0, y0, x1, y1, "-subsample", sub, sub)
+        self.cv.coords(self.bg, (x0 - self.vx) // sub, (y0 - self.vy) // sub)
         self.cv.itemconfigure(self.bg, image=self.view)
 
-    def _zoom_at(self, x, y, z):
-        sx, sy = self.vx + x / self._k(), self.vy + y / self._k()     # точка под курсором
-        k = z / ZOOM_MAX
-        self._set_view(z, sx - x / k, sy - y / k)
+    def _next_sub(self, d):
+        """Соседний уровень масштаба: d > 0 — крупнее."""
+        i = self.levels.index(self.sub) if self.sub in self.levels else 0
+        return self.levels[min(max(i + (1 if d > 0 else -1), 0), len(self.levels) - 1)]
+
+    def _zoom_at(self, x, y, sub):
+        sx, sy = self.vx + x * self.sub, self.vy + y * self.sub         # точка под курсором
+        self._set_view(sub, sx - x * sub, sy - y * sub)
         self._draw_map()
 
     def _pan_move(self, ev):
         if self._pan:
             dx, dy = ev.x - self._pan[0], ev.y - self._pan[1]
             self._pan = (ev.x, ev.y)
-            self._set_view(self.z, self.vx - dx / self._k(), self.vy - dy / self._k())
+            self._set_view(self.sub, self.vx - dx * self.sub, self.vy - dy * self.sub)
             self._draw_map()
 
     def _center_ac(self):
         if self.last:
             x, y = self.to_px(self.last["n"], self.last["e"])
-            self._set_view(self.z, self.vx + (x - self.MW / 2) / self._k(),
-                           self.vy + (y - self.MH / 2) / self._k())
+            self._set_view(self.sub, self.vx + (x - self.MW / 2) * self.sub,
+                           self.vy + (y - self.MH / 2) * self.sub)
 
     def _pick(self, x, y):
         best, k_best = PICK_PX, None
@@ -222,6 +272,7 @@ class Station:
 
     # --- мышь ----------------------------------------------------------------
     def _button_at(self, x, y):
+        x, y = x / UI, y / UI                                # кнопки — в номинальных пикселях
         for x0, y0, x1, y1, act in self.buttons:
             if x0 <= x <= x1 and y0 <= y <= y1:
                 return act
@@ -267,9 +318,9 @@ class Station:
             self.sel = k
             self._send()
             return
-        z = min(self.z * 2, ZOOM_MAX) if ev.delta > 0 else max(self.z // 2, 1)
-        if z != self.z:
-            self._zoom_at(ev.x, ev.y, z)
+        sub = self._next_sub(ev.delta)
+        if sub != self.sub:
+            self._zoom_at(ev.x, ev.y, sub)
 
     # --- кнопки ---------------------------------------------------------------
     def _clear(self):
@@ -285,15 +336,15 @@ class Station:
 
     def _zoom_btn(self, d):
         """Кнопки масштаба: вокруг ЛА, если он в окне, иначе вокруг центра карты."""
-        z = min(self.z * 2, ZOOM_MAX) if d > 0 else max(self.z // 2, 1)
-        if z == self.z:
+        sub = self._next_sub(d)
+        if sub == self.sub:
             return
         x, y = self.MW / 2, self.MH / 2
         if self.last:
             ax, ay = self.to_px(self.last["n"], self.last["e"])
             if 0 <= ax <= self.MW and 0 <= ay <= self.MH:
                 x, y = ax, ay
-        self._zoom_at(x, y, z)
+        self._zoom_at(x, y, sub)
 
     # --- связь -----------------------------------------------------------------
     def _put(self, msg):
@@ -332,16 +383,17 @@ class Station:
     # Рисование
     # ===========================================================================
     def _draw_all(self):
-        self._draw_top()
-        self._draw_pfd()
+        """Строка статуса, PFD и правая колонка рисуются в номинальных пикселях и масштабируются ×UI."""
+        for cv, draw in ((self.top, self._draw_top), (self.pfd, self._draw_pfd), (self.side, self._draw_side)):
+            cv.delete("all")
+            draw()
+            cv.scale("all", 0, 0, UI, UI)
         self._draw_map()
-        self._draw_side()
 
     # --- строка статуса ----------------------------------------------------------
     def _draw_top(self):
         cv, m = self.top, self.last
-        cv.delete("all")
-        W = int(cv["width"])
+        W = int(cv["width"]) / UI
         if m is None:
             cv.create_text(16, TOP_H / 2, text="WAITING FOR TELEMETRY…", anchor="w", fill=DIM, font=F(13, "bold"))
             return
@@ -360,15 +412,15 @@ class Station:
         x = 232
         for s, c in chips:
             t = cv.create_text(x, TOP_H / 2, text=s, anchor="w", fill=c, font=F(12))
-            x = cv.bbox(t)[2] + 26
+            b = cv.bbox(t)
+            x += (b[2] - b[0]) / UI + 26                     # ширина текста — в пикселях окна
         cv.create_oval(W - 190, TOP_H / 2 - 7, W - 176, TOP_H / 2 + 7, fill=RED, width=0)
         cv.create_text(W - 168, TOP_H / 2, text=f"REC {fmt_time(m['t'])}", anchor="w", fill=TXT, font=FM(12))
         cv.create_text(W - 12, TOP_H / 2, text=self.info["name"].upper(), anchor="e", fill=DIM, font=F(10))
 
     # --- PFD -----------------------------------------------------------------------
     def _draw_pfd(self):
-        cv, m, W, H = self.pfd, self.last, self.PW, self.PH
-        cv.delete("all")
+        cv, m, W, H = self.pfd, self.last, self.PW / UI, self.PH / UI
         if m is None:
             return
         self._fma(cv, m, W, H)
@@ -384,14 +436,14 @@ class Station:
         cv.create_text(W / 2, 0.95 * H, text=gs, fill=DIM, font=FM(11))
 
     def _fit(self, text, width, size):
-        """Шрифт не крупнее size, в котором text укладывается в width пикс (узкие колонки FMA)."""
+        """Шрифт не крупнее size, в котором text укладывается в width номинальных пикс (узкие колонки FMA)."""
         for sz in range(size, 6, -1):
-            key = ("Segoe UI", sz)
+            key = F(sz)
             if key not in self._fonts:
-                self._fonts[key] = tkfont.Font(family="Segoe UI", size=sz)
-            if self._fonts[key].measure(text) <= width:
+                self._fonts[key] = tkfont.Font(family=key[0], size=key[1])
+            if self._fonts[key].measure(text) <= width * UI:
                 return key
-        return ("Segoe UI", 7)
+        return F(7)
 
     def _fma(self, cv, m, W, H):
         fh, cw = 0.11 * H, W / 5
@@ -554,26 +606,29 @@ class Station:
             cv.create_line(*self.to_px(m["n"], m["e"]), *P[m["idx"]], fill="white", dash=(4, 3), tags="dyn")
         for k, ((x, y), (_, _, h)) in enumerate(zip(P, self.wps)):
             cur = nav and k == m["idx"]
-            r = 11 if cur else 9
+            r = (11 if cur else 9) * UI
             cv.create_oval(x - r, y - r, x + r, y + r, fill=WP_CUR if cur else WP,
                            outline=ROUTE if cur else "#3a2500", width=2, tags="dyn")
             cv.create_text(x, y, text=str(k + 1), font=F(9, "bold"), fill="black", tags="dyn")
             for dx, dy, c in ((1, 1, "black"), (0, 0, "white")):
-                cv.create_text(x + 13 + dx, y - 12 + dy, text=f"{h:.0f} m", font=F(9), fill=c,
+                cv.create_text(x + 13 * UI + dx, y - 12 * UI + dy, text=f"{h:.0f} m", font=F(9), fill=c,
                                anchor="w", tags="dyn")
         if m:                                               # ЛА: стрелка по курсу ψ
             x, y = self.to_px(m["n"], m["e"])
             s, c = math.sin(math.radians(m["psi"])), math.cos(math.radians(m["psi"]))
             tri = [(0, -16), (11, 11), (0, 5), (-11, 11)]
-            pts = [(x + px * c - py * s, y + px * s + py * c) for px, py in tri]
+            pts = [(x + UI * (px * c - py * s), y + UI * (px * s + py * c)) for px, py in tri]
             cv.create_polygon(*[v for p in pts for v in p], fill=AC, outline="white", width=2, tags="dyn")
         self._map_overlay(cv, m)
+        cv.scale("ovl", 0, 0, UI, UI)
 
-    def _card(self, cv, x0, y0, x1, y1, tags="dyn", fill=BAR):
+    def _card(self, cv, x0, y0, x1, y1, tags=OV, fill=BAR):
         cv.create_rectangle(x0, y0, x1, y1, fill=fill, outline=EDGE, tags=tags)
 
     def _map_overlay(self, cv, m):
+        """Кнопки, масштаб, карточки, компас — в номинальных пикселях (окно / UI), затем ×UI."""
         self.buttons = []
+        MW, MH = self.MW / UI, self.MH / UI
         # панель кнопок слева
         items = [("✈", "FLY", lambda: self._put(("go", None)), GREEN),
                  ("■", "STOP", lambda: self._put(("stop", None)), TXT),
@@ -585,16 +640,16 @@ class Station:
         for i, (ic, lbl, act, c) in enumerate(items):
             y0 = by + bh * i
             if lbl == "LOOP" and self.loop:
-                cv.create_rectangle(bx0 + 3, y0 + 3, bx0 + bw - 3, y0 + bh - 3, fill="#1d3a4a", outline="", tags="dyn")
-            cv.create_text(bx0 + bw / 2, y0 + 22, text=ic, fill=c, font=F(16), tags="dyn")
-            cv.create_text(bx0 + bw / 2, y0 + 45, text=lbl, fill=TXT, font=F(8), tags="dyn")
+                cv.create_rectangle(bx0 + 3, y0 + 3, bx0 + bw - 3, y0 + bh - 3, fill="#1d3a4a", outline="", tags=OV)
+            cv.create_text(bx0 + bw / 2, y0 + 22, text=ic, fill=c, font=F(16), tags=OV)
+            cv.create_text(bx0 + bw / 2, y0 + 45, text=lbl, fill=TXT, font=F(8), tags=OV)
             self.buttons.append((bx0, y0, bx0 + bw, y0 + bh, act))
         y0 = by + bh * len(items)
-        cv.create_line(bx0 + 8, y0, bx0 + bw - 8, y0, fill=EDGE, tags="dyn")
-        cv.create_text(bx0 + bw / 2, y0 + 14, text="WP ALT", fill=DIM, font=F(8), tags="dyn")
-        cv.create_text(bx0 + bw / 2, y0 + 48, text=f"{self.h_new:.0f} m", fill=TXT, font=F(10, "bold"), tags="dyn")
-        cv.create_text(bx0 + bw / 2, y0 + 30, text="▲", fill=TXT, font=F(10), tags="dyn")
-        cv.create_text(bx0 + bw / 2, y0 + 68, text="▼", fill=TXT, font=F(10), tags="dyn")
+        cv.create_line(bx0 + 8, y0, bx0 + bw - 8, y0, fill=EDGE, tags=OV)
+        cv.create_text(bx0 + bw / 2, y0 + 14, text="WP ALT", fill=DIM, font=F(8), tags=OV)
+        cv.create_text(bx0 + bw / 2, y0 + 48, text=f"{self.h_new:.0f} m", fill=TXT, font=F(10, "bold"), tags=OV)
+        cv.create_text(bx0 + bw / 2, y0 + 30, text="▲", fill=TXT, font=F(10), tags=OV)
+        cv.create_text(bx0 + bw / 2, y0 + 68, text="▼", fill=TXT, font=F(10), tags=OV)
         self.buttons.append((bx0, y0 + 20, bx0 + bw, y0 + 40, lambda: self._h_step(10)))
         self.buttons.append((bx0, y0 + 58, bx0 + bw, y0 + 80, lambda: self._h_step(-10)))
         # масштаб: кнопки +/−, линейка
@@ -602,24 +657,25 @@ class Station:
         for i, (s, d) in enumerate((("+", 1), ("−", -1))):
             x0 = zx + 40 * i
             self._card(cv, x0, 10, x0 + 34, 44)
-            cv.create_text(x0 + 17, 27, text=s, fill=TXT, font=F(14), tags="dyn")
+            cv.create_text(x0 + 17, 27, text=s, fill=TXT, font=F(14), tags=OV)
             self.buttons.append((x0, 10, x0 + 34, 44, lambda d=d: self._zoom_btn(d)))
-        L = next(L for L in (50, 100, 200, 500, 1000, 2000) if L * self._scale() >= 70)
-        sx0, sx1, sy = zx + 92, zx + 92 + L * self._scale(), 30
+        k = self._scale() / UI                              # номинальных пикс / м
+        L = next((L for L in (50, 100, 200, 500, 1000, 2000) if L * k >= 70), 5000)
+        sx0, sx1, sy = zx + 92, zx + 92 + L * k, 30
         for w, c in ((5, "black"), (2, "white")):
-            cv.create_line(sx0, sy - 6, sx0, sy, sx1, sy, sx1, sy - 6, width=w, fill=c, tags="dyn")
-        cv.create_text((sx0 + sx1) / 2, sy - 13, text=f"{L} m  ×{self.z}", font=F(9, "bold"), fill="white", tags="dyn")
+            cv.create_line(sx0, sy - 6, sx0, sy, sx1, sy, sx1, sy - 6, width=w, fill=c, tags=OV)
+        cv.create_text((sx0 + sx1) / 2, sy - 13, text=f"{L} m  ×{self.levels[0] / self.sub:g}", font=F(9, "bold"), fill="white", tags=OV)
         # карточка точки / подсказка (справа вверху)
-        x1 = self.MW - 10
+        x1 = MW - 10
         self._card(cv, x1 - 250, 10, x1, 58)
         if self.sel is not None and self.sel < len(self.wps):
             n, e, h = self.wps[self.sel]
             cv.create_text(x1 - 238, 26, text=f"WP {self.sel + 1}  ·  {h:.0f} m", anchor="w", fill=TXT,
-                           font=F(11, "bold"), tags="dyn")
-            cv.create_text(x1 - 238, 46, text=f"N {n:.0f}  E {e:.0f} m", anchor="w", fill=DIM, font=F(9), tags="dyn")
+                           font=F(11, "bold"), tags=OV)
+            cv.create_text(x1 - 238, 46, text=f"N {n:.0f}  E {e:.0f} m", anchor="w", fill=DIM, font=F(9), tags=OV)
         else:
-            cv.create_text(x1 - 238, 26, text="LMB add / drag   RMB delete", anchor="w", fill=TXT, font=F(9), tags="dyn")
-            cv.create_text(x1 - 238, 46, text="wheel: WP alt / zoom   MMB pan", anchor="w", fill=DIM, font=F(9), tags="dyn")
+            cv.create_text(x1 - 238, 26, text="LMB add / drag   RMB delete", anchor="w", fill=TXT, font=F(9), tags=OV)
+            cv.create_text(x1 - 238, 46, text="wheel: WP alt / zoom   MMB pan", anchor="w", fill=DIM, font=F(9), tags=OV)
         if m is None:
             return
         # полоса чисел (снизу)
@@ -627,41 +683,40 @@ class Station:
         vals = [("ALT", f"{m['h']:.0f} m"), ("VS", f"{m['Vh']:+.1f} m/s"), ("GS", f"{m['Vg']:.1f} m/s"),
                 ("TO WP", f"{m['dist']:.0f} m" if m["nav"] else "—"),
                 ("ETE", fmt_time(tgt) if tgt is not None else "—"), ("DIST", f"{self.flown / 1000:.2f} km")]
-        sx0, sy0, sw, sh = 92, self.MH - 66, 360, 56
+        sx0, sy0, sw, sh = 92, MH - 66, 360, 56
         self._card(cv, sx0, sy0, sx0 + sw, sy0 + sh)
         for i, (k, v) in enumerate(vals):
             x, y = sx0 + 12 + 118 * (i % 3), sy0 + 16 + 26 * (i // 3)
-            cv.create_text(x, y, text=k, anchor="w", fill=DIM, font=F(8), tags="dyn")
-            cv.create_text(x + 44, y, text=v, anchor="w", fill=TXT, font=FM(11), tags="dyn")
+            cv.create_text(x, y, text=k, anchor="w", fill=DIM, font=F(8), tags=OV)
+            cv.create_text(x + 44, y, text=v, anchor="w", fill=TXT, font=FM(11), tags=OV)
         # компас: курс ЛА и ветер (север вверху)
-        R, ccx, ccy = 50, self.MW - 72, self.MH - 92
-        cv.create_oval(ccx - R - 10, ccy - R - 10, ccx + R + 10, ccy + R + 10, fill=BAR, outline=EDGE, tags="dyn")
+        R, ccx, ccy = 50, MW - 72, MH - 92
+        cv.create_oval(ccx - R - 10, ccy - R - 10, ccx + R + 10, ccy + R + 10, fill=BAR, outline=EDGE, tags=OV)
         for a in range(0, 360, 30):
             t = math.radians(a)
             l = 12 if a % 90 == 0 else 7
             cv.create_line(ccx + R * math.sin(t), ccy - R * math.cos(t), ccx + (R - l) * math.sin(t),
-                           ccy - (R - l) * math.cos(t), fill="white", tags="dyn")
+                           ccy - (R - l) * math.cos(t), fill="white", tags=OV)
         for a, s in ((0, "N"), (90, "E"), (180, "S"), (270, "W")):
             t = math.radians(a)
             cv.create_text(ccx + (R - 22) * math.sin(t), ccy - (R - 22) * math.cos(t), text=s,
-                           fill=RED if s == "N" else "white", font=F(9, "bold"), tags="dyn")
+                           fill=RED if s == "N" else "white", font=F(9, "bold"), tags=OV)
         t = math.radians(m["psi"])
         f, rgt = (math.sin(t), -math.cos(t)), (math.cos(t), math.sin(t))
         tri = [(26, 0), (-14, 12), (-6, 0), (-14, -12)]
         cv.create_polygon(*[v for a, b in tri for v in (ccx + a * f[0] + b * rgt[0], ccy + a * f[1] + b * rgt[1])],
-                          fill=AC, outline="", tags="dyn")
+                          fill=AC, outline="", tags=OV)
         V = math.hypot(m["wind_n"], m["wind_e"])
         if V > 0.2:                                        # стрелка ветра снаружи круга — откуда дует
             ux, uy = m["wind_e"] / V, -m["wind_n"] / V      # куда дует, экранные оси
             cv.create_line(ccx - ux * (R + 44), ccy - uy * (R + 44), ccx - ux * (R + 12), ccy - uy * (R + 12),
-                           fill=CYAN, width=3, arrow="last", arrowshape=(10, 12, 4), tags="dyn")
+                           fill=CYAN, width=3, arrow="last", arrowshape=(10, 12, 4), tags=OV)
         cv.create_text(ccx, ccy + R + 22, text=f"{m['psi']:03.0f}°  WIND {V:.1f}", fill="white",
-                       font=F(9, "bold"), tags="dyn")
+                       font=F(9, "bold"), tags=OV)
 
     # --- правая колонка ----------------------------------------------------------------
     def _draw_side(self):
-        cv, m, W, H = self.side, self.last, SIDE_W, self.PH
-        cv.delete("all")
+        cv, m, W, H = self.side, self.last, SIDE_W, self.PH / UI
         if m is None:
             return
         pad, y = 10, 8
@@ -806,7 +861,5 @@ class Station:
 def run(q_cmd, q_tel, bg_path, extent, info, geometry="+0+0", h_new=150.0):
     """Точка входа процесса окна станции."""
     root = tk.Tk()
-    root.geometry(geometry)
-    root.resizable(False, False)
-    Station(root, q_cmd, q_tel, bg_path, extent, info, h_new)
+    Station(root, q_cmd, q_tel, bg_path, extent, info, h_new, pos=geometry)
     root.mainloop()
