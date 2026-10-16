@@ -256,9 +256,11 @@ class Bench(Game):
         self.sau.set_mode(Mode.ALTITUDE)
 
     def update(self):
-        self._poll_panel()
+        with self.view.perf("panel"):
+            self._poll_panel()
         super().update()
-        self._telemetry()
+        with self.view.perf("panel"):          # попадёт в следующий кадр — на среднее не влияет
+            self._telemetry()
 
     def _sau(self, s, Va, alpha, beta, dt):
         """САУ (с защитой по α и режимом «Срыв») + толчки рулём из окна схемы."""

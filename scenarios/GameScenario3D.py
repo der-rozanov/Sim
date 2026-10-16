@@ -31,7 +31,9 @@ h → θ_ref → δe, Va → δt.
 Измерения в САУ — истинные (без шума).
 
 Общие: Пробел — пауза, R — сброс, 1–4 — камера, M — масштаб силуэта, F1 — уровень HUD,
-Esc — выход. HUD — viz/hud3d.py (подписи по-английски).
+F2 — профилировщик кадра (viz/perf.py; итог печатается при выходе), Esc — выход.
+Внизу справа: FPS; «sim ×» — скорость модели относительно реального времени (1.00 — успевает,
+меньше — шагов физики на кадр не хватает, полёт замедлен); «lag» — накопленное отставание, с. HUD — viz/hud3d.py (подписи по-английски).
 
 Земля твёрдая (sim/ground.py, РЕШ-25): поверхность карты — World.surface(), как
 нарисована, с ВПП и покрытиями. ЛА садится на шасси, катится (Q/E — носовое
@@ -43,6 +45,7 @@ Esc — выход. HUD — viz/hud3d.py (подписи по-английски
     python scenarios/GameScenario3D.py --wind-n -5 --wind-e 3   # ветер, м/с
     python scenarios/GameScenario3D.py --ap --cam 3              # старт с включённой САУ
     python scenarios/GameScenario3D.py --no-map                  # без окна станции
+    python scenarios/GameScenario3D.py --ap --bench 60           # замер FPS: 60 с с САУ и выход
 """
 
 import sys
@@ -105,6 +108,8 @@ KH        = PitchControlParams().KH   # рад/м, расчёт control/tuning.p
 
 MANUAL_REF = ("маршрут: ручная уставка", "NAV: manual ref")   # событие: ручная уставка выключила маршрут
 MAX_STEPS_PER_FRAME = 10        # при просадке кадров — замедление, а не «рывок»
+RT_TAU    = 1.0                 # с — постоянная сглаживания скорости модели (строка «sim ×…»)
+RT_WARMUP = 2.0                 # с — отставание не считается с запуска окна (загрузка)
 TRAIL_MAX = 3000                # точек следа (0.1 с) — последние 5 мин
 
 
@@ -119,9 +124,10 @@ class Game(Entity):
             "Space pause  R reset  1-4 cam  Esc quit")
 
     def __init__(self, aircraft, wind_params, cfg, terrain, cam=1, ap=False, shot=None,
-                 q_station=None):
-        """q_station — (q_cmd, q_tel) окна станции (viz/station.py) или None."""
-        self.q_station = q_station
+                 q_station=None, bench=None):
+        """q_station — (q_cmd, q_tel) окна станции (viz/station.py) или None;
+        bench — выход через bench с (замер FPS, итог профилировщика — в консоль)."""
+        self.q_station, self.bench, self._t_wall = q_station, bench, 0.0
         self.nav = WaypointNavigator(NavParams())
         self.route, self.loop = [], False        # маршрут из окна станции: [(N, E, h), ...]
         super().__init__()
@@ -167,6 +173,7 @@ class Game(Entity):
             self.rec, self.events = [], []
         self.state = self.s0.copy()
         self.t, self.acc = 0.0, 0.0
+        self.t_real, self.rt_ratio = 0.0, 1.0   # реальное время полёта (без пауз), с; скорость модели
         self.paused, self.crashed = False, False
         self.on_ground, self.crash_msg, self.crash_en = False, "", ""
         self.ap = False
@@ -390,9 +397,11 @@ class Game(Entity):
                 held_keys[k] = 0
 
     def update(self):
-        self._focus_check()
-        self._poll_station()
-        dt = self.cfg.dt
+        perf = self.view.perf
+        with perf("station"):
+            self._focus_check()
+            self._poll_station()
+        dt, n = self.cfg.dt, 0
         if not (self.paused or self.crashed):
             self.acc += utime.dt
             n = int(self.acc / dt)
@@ -400,10 +409,21 @@ class Game(Entity):
                 n, self.acc = MAX_STEPS_PER_FRAME, 0.0
             else:
                 self.acc -= n * dt
-            for _ in range(n):
-                self._step()
-                if self.crashed:
-                    break
+            t0 = self.t
+            with perf("physics"):
+                for _ in range(n):
+                    self._step()
+                    if self.crashed:
+                        break
+            # отставание от реального времени: время модели теряется, когда шагов на кадр
+            # не хватает (MAX_STEPS_PER_FRAME) — модель идёт медленнее часов
+            self.t_real += utime.dt
+            if self._t_wall < RT_WARMUP:           # начало — загрузка (шейдеры, окна-спутники), не считать
+                self.t_real = self.t
+            elif utime.dt > 0:
+                k = min(1.0, utime.dt / RT_TAU)
+                self.rt_ratio += k * ((self.t - t0) / utime.dt - self.rt_ratio)
+        perf.count("steps/frame", n)
 
         s = self.state
         pos = ned_to_u(s[X], s[Y], -s[H])
@@ -413,11 +433,17 @@ class Game(Entity):
         self.view.render(pos, nose, up, c[0], c[2], c[3], c[1],
                          np.array(self.trail), utime.dt)
         self._hud()
-        self._station_telemetry()
+        with perf("station"):
+            self._station_telemetry()
+        perf.frame(utime.dt)
+        self.view.set_rate(utime.dt, lag=max(0.0, self.t_real - self.t), ratio=self.rt_ratio)
 
         self._frames += 1
         if self.shot and self._frames == 300:
             screenshot_and_quit(self.shot)
+        self._t_wall += utime.dt
+        if self.bench and self._t_wall >= self.bench:
+            application.quit()
 
     def _step(self):
         s, dt = self.state, self.cfg.dt
@@ -502,7 +528,9 @@ class Game(Entity):
             nose=ned_to_u(*x_b), vel=ned_to_u(*v))
 
     def _hud(self):
-        self.view.set_hud(self._hud_data())
+        with self.view.perf("hud data"):
+            d = self._hud_data()
+        self.view.set_hud(d)
 
     # --- сохранение -------------------------------------------------------------
     def save(self):
@@ -551,6 +579,7 @@ def main():
     ap.add_argument("--map", default="default", choices=list(MAPS), help="карта мира")
     ap.add_argument("--no-map", action="store_true", help="без окна станции (PFD + карта)")
     ap.add_argument("--aircraft", default="fpv", choices=list(AIRCRAFT_TYPES), help="тип ЛА")
+    ap.add_argument("--bench", type=float, default=None, help="замер FPS: выход через N с")
     a = ap.parse_args()
 
     aircraft = aircraft_by_name(a.aircraft)
@@ -560,10 +589,11 @@ def main():
     app, terrain = make_app(f"3D: пилотирование — {MAPS[a.map].title}", a.map)
     q_station = None if (a.no_map or a.shot) else start_station(terrain, aircraft, a.h0, "-0+0")
     game = Game(aircraft, wind_params, cfg, terrain, cam=a.cam, ap=a.ap, shot=a.shot,
-                q_station=q_station)
+                q_station=q_station, bench=a.bench)
     try:
         app.run()
     finally:
+        print(game.view.perf.summary())
         game.save()
 
 

@@ -13,6 +13,7 @@
     ↑ / ↓       — скорость проигрывания ×2 / ÷2
     1 2 3 4     — камера: за хвостом / из кабины / облёт мышью / обзор сверху
     F1          — уровень HUD: всё / режимы и предупреждения / пусто (viz/hud3d.py)
+    F2          — профилировщик кадра: FPS и время по участкам (viz/perf.py)
     правая кнопка мыши + движение, колесо — облёт и зум (камера 3)
     M           — увеличить силуэт ×10 (для обзора)    T — показать весь путь
     клик по полосе времени внизу — переход к моменту
@@ -44,6 +45,7 @@ from flight_logger import load_log
 from viz.world3d import World, make_world, MAPS
 from viz.aircraft3d import make_model
 from viz.hud3d import Hud, HudData
+from viz.perf import FrameProfiler
 
 from ursina import (Ursina, Entity, Mesh, Text, Sky, Vec3, Color, camera, scene,
                     window, mouse, held_keys, application, time as utime,
@@ -199,11 +201,34 @@ class View3D:
 
         font = _font()
         self.hud = Hud(font, help_text)
+        self.perf = FrameProfiler(font)
         if terrain.attribution:                 # условие использования снимков
             Text(parent=camera.ui, position=window.bottom_right + Vec3(-0.01, 0.012, 0),
                  origin=(0.5, -0.5), scale=0.55, font=font, color=Color(1, 1, 1, 0.6),
                  text=terrain.attribution)
+        # строка «FPS, отставание от реального времени» — справа, над строкой подсказки по
+        # клавишам (в узком окне подсказка доходит до правого края) и подписью снимка
+        self.rate_txt = Text(parent=camera.ui, origin=(0.5, -0.5), scale=0.6, font=font,
+                             color=Color(1, 1, 1, 0.7), text="")
+        self._rate_y = -0.445 if terrain.attribution else -0.468
+        self._rate_t = 0.0
         self.set_fog()
+
+    def set_rate(self, dt, lag=None, ratio=None):
+        """Строка внизу справа, раз в 0.25 с (пересборка текста дорогая).
+        dt — длительность кадра, с; lag — отставание модели от реального времени, с;
+        ratio — скорость модели относительно реального времени (1 — успевает)."""
+        self._rate_t += dt
+        if self._rate_t < 0.25:
+            return
+        self._rate_t = 0.0
+        s = f"FPS {1.0 / max(self.perf.ema.get('frame', 1.0), 1e-6):.0f}"
+        if lag is not None:
+            s += f"   sim ×{ratio:.2f}   lag {lag:.1f} s"
+        slow = ratio is not None and ratio < 0.98
+        self.rate_txt.color = Color(1, 0.72, 0.15, 0.95) if slow else Color(1, 1, 1, 0.7)
+        self.rate_txt.text = s
+        self.rate_txt.position = (window.aspect_ratio / 2 - 0.01, self._rate_y)
 
     def set_route(self, pts, loop=False):
         """Маршрут: линия через точки (N, 3) в СК Ursina и отвесы до земли."""
@@ -226,6 +251,8 @@ class View3D:
             self.set_fog()
         elif key == "f1":
             self.hud.cycle()
+        elif key == "f2":
+            self.perf.toggle()
         elif key == "m":
             self.big = not self.big
         elif key == "scroll up":
@@ -238,21 +265,26 @@ class View3D:
 
     def render(self, pos, nose, up, de, da, dr, thr, trail, dt, overview_pts=None):
         """trail — точки следа (N, 3) в СК Ursina; overview_pts — что охватить в обзоре."""
-        scale = 25.0 if self.cam_mode == 4 else (10.0 if self.big else 1.0)
-        self.ac.pose(pos, nose, up, scale)
-        self.ac.surfaces(de, da, dr, thr, dt)
-        self.ac.prop.enabled = self.cam_mode != 2           # винт закрывает обзор из кабины
+        perf = self.perf
+        with perf("aircraft"):
+            scale = 25.0 if self.cam_mode == 4 else (10.0 if self.big else 1.0)
+            self.ac.pose(pos, nose, up, scale)
+            self.ac.surfaces(de, da, dr, thr, dt)
+            self.ac.prop.enabled = self.cam_mode != 2           # винт закрывает обзор из кабины
 
-        trail = np.vstack([np.asarray(trail, float).reshape(-1, 3), pos])
-        _set_line(self.trail, trail)
-        g = trail.copy()
-        g[:, 1] = self.ter.height(g[:, 0], g[:, 2]) + 0.8
-        _set_line(self.shadow, g)
-        gy = float(self.ter.height(pos[0], pos[2]))
-        _set_line(self.drop, [pos, (pos[0], gy, pos[2])])
-        self.ter.follow(pos)
-
-        self._camera(pos, nose, up, dt, trail if overview_pts is None else overview_pts)
+        with perf("trail"):
+            trail = np.vstack([np.asarray(trail, float).reshape(-1, 3), pos])
+            _set_line(self.trail, trail)
+        with perf("shadow"):
+            g = trail.copy()
+            g[:, 1] = self.ter.height(g[:, 0], g[:, 2]) + 0.8
+            _set_line(self.shadow, g)
+            gy = float(self.ter.height(pos[0], pos[2]))
+            _set_line(self.drop, [pos, (pos[0], gy, pos[2])])
+        perf.count("trail pts", len(trail))
+        with perf("camera"):
+            self.ter.follow(pos)
+            self._camera(pos, nose, up, dt, trail if overview_pts is None else overview_pts)
 
     def _camera(self, pos, nose, up, dt, overview_pts):
         p = Vec3(*pos)
@@ -289,7 +321,8 @@ class View3D:
             camera.rotation_z = 0
 
     def set_hud(self, data: HudData):
-        self.hud.update(data, self.cam_mode, self.CAM_NAMES[self.cam_mode])
+        with self.perf("hud"):
+            self.hud.update(data, self.cam_mode, self.CAM_NAMES[self.cam_mode])
 
 
 def make_app(title: str, map_name: str = "default", size=(1600, 900)):
@@ -384,6 +417,8 @@ class Player3D(Entity):
         v.render(pos, tr.nose[i], tr.up[i], tr.de[i], tr.da[i], tr.dr[i], tr.thr[i],
                  tr.pos[self._sub[:j]], dt, overview_pts=tr.pos[self._sub])
         self._hud(i)
+        v.perf.frame(dt)
+        v.set_rate(dt)
 
         self._frames += 1
         if self.shot and self._frames == 40:
@@ -417,7 +452,10 @@ def play(path: str, speed: float = 1.0, cam: int = 1, shot: str = None,
     player = Player3D(track, terrain, speed=speed, cam=cam, shot=shot)
     if t_start is not None:
         player.t_play = float(t_start)
-    app.run()
+    try:
+        app.run()
+    finally:
+        print(player.view.perf.summary())
 
 
 def _latest_log() -> str:
