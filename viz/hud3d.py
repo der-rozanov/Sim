@@ -27,7 +27,8 @@ from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
-from panda3d.core import Point3, Point2
+from panda3d.core import (Point3, Point2, Geom, GeomLines, GeomVertexData, GeomVertexFormat,
+                          GeomEnums)
 from ursina import Entity, Mesh, Text, Color, Vec3, camera, window, application
 
 WHITE = Color(1.0, 1.0, 1.0, 0.96)          # символика и числа
@@ -69,14 +70,42 @@ class HudData:
     vel: Optional[np.ndarray] = None       # направление вектора воздушной скорости
 
 
+def _show(e, on):
+    """Включить/выключить элемент только при смене состояния (сеттер enabled Ursina дорогой)."""
+    if e.enabled != on:
+        e.enabled = on
+
+
+def _geom_lines(V, S):
+    """Отрезки одним примитивом GeomLines: V — вершины (n, 3), S — индексы концов парами."""
+    vd = GeomVertexData("hud", GeomVertexFormat.get_v3(), Geom.UH_dynamic)
+    vd.unclean_set_num_rows(len(V))
+    memoryview(vd.modify_array(0)).cast("B")[:] = np.asarray(V, np.float32).tobytes()
+    prim = GeomLines(Geom.UH_dynamic)
+    prim.set_index_type(GeomEnums.NT_uint32)
+    arr = prim.modify_vertices()
+    arr.unclean_set_num_rows(len(S))
+    memoryview(arr).cast("B")[:] = np.asarray(S, np.uint32).tobytes()
+    g = Geom(vd)
+    g.add_primitive(prim)
+    return g
+
+
 class _Lines:
-    """Набор ломаных в camera.ui одним объектом (+ тёмная обводка под ним)."""
+    """Набор ломаных в camera.ui одним объектом (+ тёмная обводка под ним).
+
+    Геометрия — сразу Panda3D (_geom_lines), один примитив на весь набор. Mesh Ursina
+    для линий так не умеет: mode="line" — непрерывная ломаная (GeomLinestrips), а отрезки
+    парами [(0, 1), (1, 2), …] дают по примитиву на отрезок — ≈ 330 примитивов на кадр,
+    75 % времени HUD (замер viz/perf.py, 2026-10-16). Entity + Mesh остаются ради толщины,
+    цвета и места в camera.ui."""
 
     def __init__(self, thickness=2.0, color=WHITE):
         mk = lambda th, c, z: Entity(parent=camera.ui, z=z, color=c, model=Mesh(
-            vertices=[(0, 0, 0), (0, 0, 0)], triangles=[(0, 1)], mode="line", thickness=th))
+            vertices=[(0, 0, 0), (0, 0, 0)], mode="line", thickness=th))
         self.bg = mk(thickness + 3.5, HALO, 0.01)
         self.fg = mk(thickness, color, 0.0)
+        self._last = None
 
     def set(self, polylines):
         V, S = [], []
@@ -84,12 +113,18 @@ class _Lines:
             pl = list(pl)
             k = len(V)
             V += [(float(x), float(y), 0.0) for x, y in pl]
-            S += [(k + i, k + i + 1) for i in range(len(pl) - 1)]
+            for i in range(k, k + len(pl) - 1):
+                S += (i, i + 1)
         if not S:
-            V, S = [(0, 0, 0), (0, 0, 0)], [(0, 1)]
+            V, S = [(0, 0, 0), (0, 0, 0)], [0, 1]
+        if (V, S) == self._last:                  # без изменений — геометрию не пересобирать
+            return
+        self._last = (V, S)
+        g = _geom_lines(V, S)
         for e in (self.bg, self.fg):
-            e.model.vertices, e.model.triangles = V, S
-            e.model.generate()
+            node = e.model.geomNode
+            node.remove_all_geoms()
+            node.add_geom(g)
 
     @property
     def enabled(self):
@@ -97,7 +132,8 @@ class _Lines:
 
     @enabled.setter
     def enabled(self, on):
-        self.fg.enabled = self.bg.enabled = on
+        _show(self.fg, on)
+        _show(self.bg, on)
 
     @property
     def color(self):
@@ -143,6 +179,7 @@ class Hud:
     def __init__(self, font: str, help_text: str):
         """font — моноширинный шрифт подсказки по клавишам (в нём есть стрелки ←/→)."""
         self.level = 2
+        self._wind_A = None                       # отношение сторон, для которого построена шкала ветра
         T = lambda **kw: Text(parent=camera.ui, font=HUD_FONT, text="", **{"color": WHITE, **kw})
         # уровень ≥ 1
         self.modes = T(origin=(0, 0), scale=1.15)
@@ -163,7 +200,8 @@ class Hud:
         self.sym = _Lines(2.6)                               # ось, вектор скорости
         self.ladder = _Lines(2.0)
         self.ladder_lbl = [T(origin=(0, 0), scale=0.85) for _ in range(8)]
-        self.wind = _Lines(1.6)
+        self.wind = _Lines(1.6)                              # шкала круга ветра (неподвижна)
+        self.wind_hdg = _Lines(1.6)                          # риска курса ЛА
         self.wind_arrow = _Lines(2.6, CYAN)
         self.wind_txt = T(origin=(0, 0), scale=0.9)
         self.wind_n = T(origin=(0, 0), scale=0.8, color=LABEL)
@@ -178,7 +216,7 @@ class Hud:
         self._lvl1 = [self.modes, self.alert_box, self.alert_txt, self.event_txt]
         self._lvl2 = [self.hdg, *self.hdg_lbl, self.hdg_val, *self.row_lbl, *self.row_val,
                       *self.row_unit, self.alt, self.alt_val, self.alt_unit, self.vh_val, self.sym,
-                      self.ladder, *self.ladder_lbl, self.wind, self.wind_arrow, self.wind_txt,
+                      self.ladder, *self.ladder_lbl, self.wind, self.wind_hdg, self.wind_arrow, self.wind_txt,
                       self.wind_n, self.status, self.help]
 
     def cycle(self):
@@ -200,9 +238,9 @@ class Hud:
     # --- кадр ----------------------------------------------------------------------
     def update(self, d: HudData, cam_mode: int, cam_name: str):
         for e in self._lvl1:
-            e.enabled = self.level >= 1
+            _show(e, self.level >= 1)
         for e in self._lvl2:
-            e.enabled = self.level >= 2
+            _show(e, self.level >= 2)
         if self.level == 0:
             return
         A = window.aspect_ratio
@@ -222,7 +260,8 @@ class Hud:
     def _alert(self, d):
         lvl = int(np.clip(d.alert, 0, 3))
         on = lvl > 0
-        self.alert_box.enabled = self.alert_txt.enabled = on
+        self.alert_box.enabled = on
+        _show(self.alert_txt, on)
         if not on:
             return
         word, c = ALERT[lvl]
@@ -248,9 +287,9 @@ class Hud:
                     a360 = a % 360
                     s = {0: "N", 90: "E", 180: "S", 270: "W"}.get(a360, f"{a360 // 10:02d}")
                     self._set(t, s, (x, y + 0.018))
-                    t.enabled = True
+                    _show(t, True)
         for t in lbl:
-            t.enabled = False
+            _show(t, False)
         segs.append([(-0.012, y - 0.05), (0, y - 0.032), (0.012, y - 0.05)])          # ψ
         xc = np.clip(((d.chi - d.psi + 180) % 360 - 180) * k, -half, half)             # χ
         segs.append([(xc, y - 0.026), (xc + 0.008, y - 0.036), (xc, y - 0.046),
@@ -297,14 +336,16 @@ class Hud:
 
     def _wind(self, d, A):
         cx, cy, R = A / 2 - 0.1, -0.30, 0.065
-        segs = [_circle(cx, cy, R), _circle(cx, cy, 0.6 * R, 18)]
-        for a in range(0, 360, 30):
-            t = np.radians(a)
-            r2 = R - (0.012 if a % 90 else 0.02)
-            segs.append([(cx + R * np.sin(t), cy + R * np.cos(t)), (cx + r2 * np.sin(t), cy + r2 * np.cos(t))])
+        if self._wind_A != A:                                     # шкала — только при смене окна
+            self._wind_A = A
+            segs = [_circle(cx, cy, R), _circle(cx, cy, 0.6 * R, 18)]
+            for a in range(0, 360, 30):
+                t = np.radians(a)
+                r2 = R - (0.012 if a % 90 else 0.02)
+                segs.append([(cx + R * np.sin(t), cy + R * np.cos(t)), (cx + r2 * np.sin(t), cy + r2 * np.cos(t))])
+            self.wind.set(segs)
         ps = np.radians(d.psi)                                    # курс ЛА — короткая риска
-        segs.append([(cx, cy), (cx + 0.45 * R * np.sin(ps), cy + 0.45 * R * np.cos(ps))])
-        self.wind.set(segs)
+        self.wind_hdg.set([[(cx, cy), (cx + 0.45 * R * np.sin(ps), cy + 0.45 * R * np.cos(ps))]])
         V = float(np.hypot(d.wind_n, d.wind_e))
         if V > 0.2:
             ux, uy = d.wind_e / V, d.wind_n / V                   # куда дует, север — вверх
@@ -322,7 +363,7 @@ class Hud:
         self.sym.enabled = self.ladder.enabled = on
         if not on or d.nose is None:
             for t in self.ladder_lbl:
-                t.enabled = False
+                _show(t, False)
             return
         segs = []
         b = _project(d.nose)                                     # продольная ось — «W»
@@ -361,7 +402,7 @@ class Hud:
                         if t is not None:
                             u = (p_out - p_in) / (np.linalg.norm(p_out - p_in) + 1e-9)
                             self._set(t, f"{abs(el)}", p_out + 0.022 * u)
-                            t.enabled = True
+                            _show(t, True)
         for t in lbl:
-            t.enabled = False
+            _show(t, False)
         self.ladder.set(lad)

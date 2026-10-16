@@ -137,9 +137,11 @@ class Lab(Game):
 
     # --- окно редактора -----------------------------------------------------------
     def update(self):
-        self._poll_editor()
+        with self.view.perf("panel"):
+            self._poll_editor()
         super().update()
-        self._telemetry()
+        with self.view.perf("panel"):          # попадёт в следующий кадр — на среднее не влияет
+            self._telemetry()
 
     def _poll_editor(self):
         while True:

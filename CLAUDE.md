@@ -94,6 +94,8 @@ viz/                  — отображение (принимает Log, не �
     hud3d.py          — HUD 3D-окна (Ursina): режимы, курсовая лента, ось ЛА и маркер вектора
                         скорости (проекция через объектив), линии тангажа, лента h, круг ветра,
                         рамка УА; HudData — что показать; F1 — уровень; подписи по-английски
+    perf.py           — профилировщик кадра 3D-окна: FPS, время по участкам (физика, HUD, след…)
+                        и остаток «engine» (Panda3D); F2 — таблица, итог — в консоль при выходе
     viewer3d.py       — 3D-тренажёр (Ursina): мир, модель ЛА с рулями, 4 камеры;
                         CLI: python viz/viewer3d.py [файл.flightlog] [--map realmap]
     bench_panel.py    — окно стенда САУ (tkinter): блок-схема, ползунки, осциллограф;
@@ -206,7 +208,7 @@ from viz.viewer   import show_flightlog
 - Интегратор пишется вручную (RK4 основной, Эйлер опционально).
 - scipy допустим только при явной необходимости и с согласования автора.
 - Исключение (РЕШ-16): `ursina` (Panda3D, тянет pillow) — только в `viz/viewer3d.py`, `viz/hud3d.py`, `viz/aircraft3d.py`,
-  `viz/world3d.py`, `viz/mapdata.py`, `viz/osmdata.py`, `viz/landcover.py`, `scenarios/GameScenario3D.py`
+  `viz/world3d.py`, `viz/perf.py`, `viz/mapdata.py`, `viz/osmdata.py`, `viz/landcover.py`, `scenarios/GameScenario3D.py`
   и `scenarios/Bench3D.py`.
   В `sim/`, `control/`, `runner.py` не импортировать. Спутниковые тайлы Esri — только
   локальный кэш `viz/map_cache/` (в .gitignore), в репозиторий не класть.
