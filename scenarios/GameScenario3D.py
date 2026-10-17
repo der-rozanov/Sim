@@ -62,8 +62,9 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from sim.turbulence import TURB_LEVELS
-from sim.config import WindParams, SimConfig, AIRCRAFT_TYPES, aircraft_by_name
+from sim.config import WindParams, SimConfig, SensorParams, AIRCRAFT_TYPES, aircraft_by_name
 from sim.integrators import step_rk4
+from sim.dynamics import specific_force
 from sim.actuators import actuator_init, actuator_step
 from sim.ground import contacts, near_ground
 from sim.wind import make_wind_fn
@@ -73,7 +74,7 @@ from runner import Log, compute_trim, trim_state
 from flight_logger import FlightLogger
 from control.controllers import PitchControlParams, wrap_angle
 from control.navigation import WaypointNavigator, NavParams
-from control.sau import SAU, SAUParams, TruthSensors, Mode
+from control.sau import SAU, SAUParams, TruthSensors, RealisticSensors, Mode
 from sim.aero import coef_CL
 from viz import station
 from viz.viewer3d import (View3D, make_app, MAPS, ned_to_u, body_axes, air_velocity_axis,
@@ -125,9 +126,11 @@ class Game(Entity):
             "T turb  Space pause  R reset  1-4 cam  Esc quit")
 
     def __init__(self, aircraft, wind_params, cfg, terrain, cam=1, ap=False, shot=None,
-                 q_station=None, bench=None):
+                 q_station=None, bench=None, sensors="truth"):
         """q_station — (q_cmd, q_tel) окна станции (viz/station.py) или None;
-        bench — выход через bench с (замер FPS, итог профилировщика — в консоль)."""
+        bench — выход через bench с (замер FPS, итог профилировщика — в консоль);
+        sensors — датчики САУ: "truth" (истина) | "real" (RealisticSensors)."""
+        self.sensors_kind = sensors
         self.q_station, self.bench, self._t_wall = q_station, bench, 0.0
         self.nav = WaypointNavigator(NavParams())
         self.route, self.loop = [], False        # маршрут из окна станции: [(N, E, h), ...]
@@ -152,11 +155,23 @@ class Game(Entity):
             self._toggle_ap()
 
     def _make_sau(self):
-        """САУ на истинных измерениях; стенд Bench3D подменяет её своей (защита по α)."""
+        """САУ (датчики — _make_sensors); стенд Bench3D подменяет её своей (защита по α)."""
         params = SAUParams(pitch=PitchControlParams(Va_ref=self.cfg.Va0),
                            h_min=H_MIN, h_max=H_MAX)
         return SAU(self.ac, (self.alpha_trim, self.de_trim, self.thr_trim),
-                   TruthSensors(), params, nav=self.nav)
+                   self._make_sensors(), params, nav=self.nav)
+
+    def _make_sensors(self):
+        """Датчики САУ: истинные значения или реалистичный набор (--sensors real)."""
+        if self.sensors_kind == "truth":
+            return TruthSensors()
+        return RealisticSensors(SensorParams(), np.random.default_rng(0),
+                                accel_fn=self._specific_force)
+
+    def _specific_force(self, t, s):
+        """Удельная сила для акселерометра: те же рули, ветер и земля, что у физики."""
+        gf = self.ground if near_ground(s, self.ac, self.ground) else None
+        return specific_force(s, self.controls, t, self.ac, self.wind_call, gf)
 
     @property
     def nav_on(self):
@@ -611,6 +626,8 @@ def main():
                     help="турбулентность Драйдена (табл. 4.1 B&M); в полёте — клавиша T")
     ap.add_argument("--turb-alt", default="low", choices=["low", "medium"],
                     help="параметры турбулентности: для 50 м (low) или 600 м (medium)")
+    ap.add_argument("--sensors", default="truth", choices=["truth", "real"],
+                    help="датчики САУ: истина или реалистичный набор (частоты, задержки, дрейф)")
     ap.add_argument("--h0", type=float, default=100.0, help="начальная высота, м")
     ap.add_argument("--cam", type=int, default=1, choices=[1, 2, 3, 4])
     ap.add_argument("--ap", action="store_true", help="старт с включённой САУ")
@@ -629,7 +646,7 @@ def main():
     app, terrain = make_app(f"3D: пилотирование — {MAPS[a.map].title}", a.map)
     q_station = None if (a.no_map or a.shot) else start_station(terrain, aircraft, a.h0, "-0+0")
     game = Game(aircraft, wind_params, cfg, terrain, cam=a.cam, ap=a.ap, shot=a.shot,
-                q_station=q_station, bench=a.bench)
+                q_station=q_station, bench=a.bench, sensors=a.sensors)
     try:
         app.run()
     finally:

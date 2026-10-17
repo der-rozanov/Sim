@@ -5,7 +5,7 @@
 
 Звенья — отдельные объекты, каждое заменяется другим с тем же методом:
 
-    sensors    TruthSensors | NoisySensors     measure(t, state, Va, alpha, beta) -> meas (dict)
+    sensors    Truth|Noisy|RealisticSensors    measure(t, state, Va, alpha, beta) -> meas (dict)
     estimator  None — оценка = измерения       update(meas, dt) -> est (dict с теми же ключами)
     nav        WaypointNavigator | None        step(pn, pe, chi) -> (chi_ref, h_ref) | None; .kappa
     lon        TECS | AltSpeedHold             step(refs, est, dt, hold_alt) -> (θ_cmd, δt);
@@ -25,7 +25,7 @@ ROUTE — курс и высота от навигатора. Скорость �
     тангаж по схеме крена (θ → q_ref → FF + ПИ, упреждение q в развороте) → новый pitch
     взлёт, посадка, кружение, возврат домой → новые значения Mode + ветки в _guidance / _outer
     L1 / NPFG / траектории Дубинса        → новый nav с тем же step и kappa
-    частоты, задержки, дрейф датчиков     → новый sensors (обёртка над NoisySensors)
+    частоты, задержки, дрейф датчиков     → RealisticSensors (сделано, DEV_PLAN п. 5.2)
     комплементарный фильтр / EKF          → estimator
     LQR / INDI / NMPC                     → подкласс SAU с переопределённым _control
                                             (или новые lon / pitch / lat.roll)
@@ -37,13 +37,14 @@ from enum import Enum
 
 import numpy as np
 
-from sim.state import THETA, Q, H, P, PHI, X, Y, earth_velocity
+from sim.state import THETA, Q, H, P, R, PHI, X, Y, earth_velocity
 from .controllers import (PitchController, PitchControlParams,
                           SpeedController, SpeedControlParams,
                           LateralController, LateralControlParams,
                           AltitudeHold, AltitudeHoldParams)
 from .sensors import (measure_gyro, measure_altitude, measure_airspeed, measure_attitude,
-                      measure_sideslip, measure_gps_course, measure_angle_of_attack)
+                      measure_sideslip, measure_gps_course, measure_angle_of_attack,
+                      GaussMarkov, SampledChannel)
 from .tecs import TECS, TECSParams
 
 
@@ -130,6 +131,84 @@ class NoisySensors:
             m["alpha"] = measure_angle_of_attack(alpha, sp.probe_bias, sp.probe_noise, rng)
         if self.gps_vz:
             m["hdot"] = Vh + rng.normal(0.0, sp.gps_vel_noise)
+        return m
+
+
+class RealisticSensors:
+    """
+    Реалистичный набор датчиков (3D-режимы, --sensors real; docs/SENSORS.md, раздел 4):
+    у каждого датчика — частота отсчётов, у GPS — запаздывание, между отсчётами выход
+    удерживается; смещения гироскопа и акселерометра — остаток калибровки (случайный,
+    постоянный в полёте) + у гироскопа дрейф (марковский процесс); координаты GPS
+    медленно уходят (марковский процесс, B&M 7.5). Параметры — SensorParams.
+
+    Ключи — как у TruthSensors + r (гироскоп), ax, ay, az (акселерометр, м/с², если
+    задана accel_fn(t, state) -> удельная сила, sim.dynamics.specific_force).
+    θ, φ — «ИНС» как истина + шум (до оценивателя, DEV_PLAN п. 5.3).
+    χ, Vg, ḣ — по GPS-скорости. Новое t меньше прежнего (сброс полёта) — reset().
+    """
+
+    def __init__(self, sensor_params, rng, accel_fn=None):
+        self.sp, self.rng, self.accel_fn = sensor_params, rng, accel_fn
+        sp = sensor_params
+        self.ch_imu = SampledChannel(1.0 / sp.imu_rate)
+        self.ch_baro = SampledChannel(1.0 / sp.baro_rate)
+        self.ch_va = SampledChannel(1.0 / sp.airspeed_rate)
+        self.ch_gps = SampledChannel(1.0 / sp.gps_rate, sp.gps_delay)
+        self.reset()
+
+    def reset(self):
+        """Новый полёт: новые остатки калибровки, каналы пустые."""
+        sp, rng = self.sp, self.rng
+        self.gyro_b0 = sp.gyro_bias0 * rng.standard_normal(3) + sp.gyro_bias
+        self.accel_b0 = sp.accel_bias0 * rng.standard_normal(3)
+        self.gyro_drift = GaussMarkov(sp.gyro_drift_sigma, sp.gyro_drift_tau, rng, 3)
+        self.gps_drift = GaussMarkov(sp.gps_pos_drift_sigma, sp.gps_pos_drift_tau, rng, 2)
+        for ch in (self.ch_imu, self.ch_baro, self.ch_va, self.ch_gps):
+            ch.reset()
+        self.t_last = None
+
+    def gyro_bias(self):
+        """Полное смещение гироскопа (p, q, r) сейчас, рад/с — для проверок и журнала."""
+        return self.gyro_b0 + self.gyro_drift.b
+
+    def measure(self, t, state, Va, alpha, beta):
+        sp, rng = self.sp, self.rng
+        if self.t_last is not None and t < self.t_last:
+            self.reset()
+        T = 0.0 if self.t_last is None else t - self.t_last
+        self.t_last = t
+        self.gyro_drift.step(T)
+        self.gps_drift.step(T)
+
+        def imu():
+            bg = self.gyro_bias()
+            m = {"p": state[P] + bg[0] + rng.normal(0.0, sp.gyro_noise),
+                 "q": state[Q] + bg[1] + rng.normal(0.0, sp.gyro_noise),
+                 "r": state[R] + bg[2] + rng.normal(0.0, sp.gyro_noise),
+                 "theta": measure_attitude(state[THETA], 0.0, sp.ins_angle_noise, rng),
+                 "phi": measure_attitude(state[PHI], 0.0, sp.ins_angle_noise, rng),
+                 "alpha": measure_angle_of_attack(alpha, sp.probe_bias, sp.probe_noise, rng),
+                 "beta": measure_sideslip(beta, sp.probe_beta_bias, sp.probe_beta_noise, rng)}
+            if self.accel_fn is not None:
+                f = self.accel_fn(t, state) + self.accel_b0 + rng.normal(0.0, sp.accel_noise, 3)
+                m["ax"], m["ay"], m["az"] = f
+            return m
+
+        def gps():
+            Vx, Vy, Vh = earth_velocity(state)
+            Vn, Ve, Vu = np.array([Vx, Vy, Vh]) + rng.normal(0.0, sp.gps_vel_noise, 3)
+            dn, de = self.gps_drift.b + rng.normal(0.0, sp.gps_pos_white, 2)
+            return {"pn": state[X] + dn, "pe": state[Y] + de, "hdot": Vu,
+                    "chi": np.arctan2(Ve, Vn), "Vg": np.hypot(Vn, Ve)}
+
+        m = {"t": t,
+             "h": self.ch_baro.update(t, lambda: measure_altitude(
+                 state[H], sp.baro_bias, sp.baro_noise, rng)),
+             "Va": self.ch_va.update(t, lambda: measure_airspeed(
+                 Va, sp.airspeed_bias, sp.airspeed_noise, rng))}
+        m.update(self.ch_imu.update(t, imu))
+        m.update(self.ch_gps.update(t, gps))
         return m
 
 

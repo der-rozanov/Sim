@@ -179,3 +179,55 @@ def measure_gps_course(Vx_true, Vy_true, noise_std, rng):
         Vx_true = Vx_true + rng.normal(0.0, noise_std)
         Vy_true = Vy_true + rng.normal(0.0, noise_std)
     return np.arctan2(Vy_true, Vx_true)
+
+
+# ---------------------------------------------------------------------------
+# Звенья реалистичного набора датчиков (RealisticSensors, control/sau.py)
+# ---------------------------------------------------------------------------
+
+class GaussMarkov:
+    """
+    Марковский процесс 1-го порядка (процесс Гаусса — Маркова) — медленный дрейф
+    смещения датчика:
+
+        b' = −b/τ + w,   b_{k+1} = e^{−T/τ}·b_k + σ·√(1 − e^{−2T/τ})·n_k,  n_k ~ N(0, 1)
+
+    σ — установившееся СКО, τ — время корреляции (за τ корреляция падает до 1/e).
+    Дискретизация точная при любом шаге T. Старт — из установившегося распределения.
+    """
+
+    def __init__(self, sigma, tau, rng, size=1):
+        self.sigma, self.tau, self.rng = sigma, tau, rng
+        self.b = sigma * rng.standard_normal(size)
+
+    def step(self, T):
+        if T > 0 and self.sigma > 0:
+            a = np.exp(-T / self.tau)
+            self.b = a * self.b + self.sigma * np.sqrt(1.0 - a * a) * self.rng.standard_normal(self.b.shape)
+        return self.b
+
+
+class SampledChannel:
+    """
+    Канал датчика с частотой отсчётов и запаздыванием: отсчёт берётся раз в
+    period с; на выход идёт последний отсчёт, взятый не позже t − delay; между
+    отсчётами выход удерживается (экстраполятор нулевого порядка).
+    До первого отсчёта старше delay — выдаётся самый первый отсчёт.
+    """
+
+    def __init__(self, period, delay=0.0):
+        self.period, self.delay = period, delay
+        self.reset()
+
+    def reset(self):
+        self.buf, self.t_next = [], None
+
+    def update(self, t, sample_fn):
+        """sample_fn() -> значение отсчёта; вызывается только в моменты отсчёта."""
+        eps = 1e-9
+        if self.t_next is None or t >= self.t_next - eps:
+            self.buf.append((t, sample_fn()))
+            self.t_next = (t if self.t_next is None else max(self.t_next, t - self.period)) + self.period
+        while len(self.buf) > 1 and self.buf[1][0] <= t - self.delay + eps:
+            self.buf.pop(0)
+        return self.buf[0][1]

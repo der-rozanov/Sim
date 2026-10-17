@@ -200,3 +200,32 @@ def derivatives(state: np.ndarray,
     dstate[X], dstate[Y], dstate[H] = earth_velocity(state)
 
     return dstate
+
+
+def specific_force(state: np.ndarray,
+                   controls: np.ndarray,
+                   t: float,
+                   params: AircraftParams,
+                   wind_fn,
+                   ground_fn=None) -> np.ndarray:
+    """
+    Кажущееся ускорение (удельная сила) в связанной СК — то, что измеряет
+    акселерометр в ЦМ: сумма сил без веса, делённая на массу, м/с².
+
+        f = (u̇ − r·v + q·w,  v̇ − p·w + r·u,  ẇ − q·u + p·v) − g_b,
+        g_b = g·(−sin θ,  cos θ·sin φ,  cos θ·cos φ)
+
+    В установившемся горизонтальном полёте f = −g_b: |f| = g, вектор направлен вверх
+    (ось z связанной СК — вниз, f_z ≈ −g). В координированном вираже |f| = g / cos φ.
+    Считается через derivatives — силы не дублируются.
+    """
+    d = derivatives(state, controls, t, params, wind_fn, ground_fn)
+    u, v, w = state[U], state[V], state[W]
+    p, q, r = state[P], state[Q], state[R]
+    phi, theta, g = state[PHI], state[THETA], params.g
+    g_b = g * np.array([-np.sin(theta),
+                        np.cos(theta) * np.sin(phi),
+                        np.cos(theta) * np.cos(phi)])
+    return np.array([d[U] - r * v + q * w,
+                     d[V] - p * w + r * u,
+                     d[W] - q * u + p * v]) - g_b
