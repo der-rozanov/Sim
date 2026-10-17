@@ -38,6 +38,7 @@ sim/                  — ядро физики (изолировано, без 
     dynamics.py       — derivatives() [полная 6DOF, чистая функция], thrust()
     aero.py           — aero_forces_moments() (продольный), aero_lateral() (боковой)
     dynamics.py: propeller() — мотор + винт (B&M 2-е изд.), реактивный момент по крену
+    dynamics.py: specific_force() — удельная сила (акселерометр), через derivatives
     integrators.py    — step_euler(), step_rk4()  [+ ground_fn=None — твёрдая земля]
     actuators.py      — приводы рулей (РЕШ-28): actuator_step(pos, cmd, dt, params) —
                         апериодическое звено τ + предел скорости + упоры; Log.controls —
@@ -56,7 +57,8 @@ control/              — управление (импортирует толь�
                         + ограничение скорости φ_ref и микс δa→δr (РЕШ-23),
                         RollHold + with_roll_hold() — крен φ=0 в продольных сценариях
                         PitchControlParams.gain_scheduling — масштабирование delta_e ∝ (Va_ref/Va)²
-    sensors.py        — measure_gyro/altitude/airspeed/angle_of_attack/gps_*,
+    sensors.py        — GaussMarkov (дрейф), SampledChannel (частота + запаздывание);
+                        measure_gyro/altitude/airspeed/angle_of_attack/gps_*,
                         measure_attitude/sideslip/gps_course (боковой канал)
     aua.py            — AngleOfAttackProtector (АУА, надзор над УА) — SAU, Bench3D, archive/probe/p10
     lqr.py            — LQRController продольного канала (scipy DARE) — s7
@@ -65,6 +67,8 @@ control/              — управление (импортирует толь�
     sau.py            — SAU: вся САУ одним классом (РЕШ-26): sensors → estimator → nav →
                         lon (h, Va → θ, δt) → [защита по α] → pitch; lat (χ → φ → δa, β → δr);
                         режимы Mode PITCH/ALTITUDE/ROUTE; звенья заменяемые (TECS, EKF, INDI…)
+                        датчики: TruthSensors | NoisySensors (s8–s10) | RealisticSensors (РЕШ-31,
+                        3D --sensors real: частоты, запаздывание GPS, дрейф, акселерометр)
     tecs.py           — TECS (РЕШ-27): газ ← Ė = γ + V̇/g, тангаж ← Ḃ = wγ − (2−w)V̇/g;
                         lon по умолчанию в SAU (SAUParams.lon = "tecs" | "split")
     navigation.py     — WaypointNavigator, NavParams: полёт по точкам (B&M 10–11): прямая/
@@ -146,6 +150,8 @@ checks/               — проверки здравого смысла
     check.py              — проверки всех модулей sim/ + раздел 7 (6DOF: вырождение
                             в продольный канал, знаки, Jxz, собственные движения)
                             + раздел 8 (знаки и логика LateralController)
+    check_sensors.py      — RealisticSensors: удельная сила, частоты/запаздывание, дрейф,
+                            замкнутый контур истина / Noisy / Realistic (checks/sensors_real.png)
     check_turbulence.py   — Драйден: σ и СПМ против B&M, t0, регрессия ветра, замкнутый контур
     check_ground.py       — контакт с землёй: стоянка (осадка vs статика), взлёт, посадка,
                             руление, уклоны 6° (скатывается) и 2° (стоит)
@@ -170,7 +176,7 @@ docs/                 — техническая документация (ка�
     SENSORS.md        — псевдодатчики: модель, параметры, кто что измеряет, влияние шума
     viewer3d.md       — 3D-тренажёр: запуск, клавиши, СК и ориентация, проверки
     architecture.md   — зависимости, Log, controls_fn, новый сценарий, viewer, интерфейсы
-    decisions.md      — журнал решений РЕШ-01…30 (почему сделано так)
+    decisions.md      — журнал решений РЕШ-01…31 (почему сделано так)
     scenarios_report.md — результаты сценариев С1–С10 (числа на прежнем ЛА)
 results/              — .flightlog файлы (генерируемые, в .gitignore)
 ```
@@ -317,7 +323,7 @@ from viz.viewer   import show_flightlog
 ## Текущий статус реализации
 
 Полный перечень сделанного и дальнейших шагов — docs/DEV_PLAN.md; почему сделано так —
-docs/decisions.md (РЕШ-01…30).
+docs/decisions.md (РЕШ-01…31).
 
 ### Реализовано (кратко)
 - Физика `sim/`: 6DOF, состояние `[u, w, q, θ, x, h, v, p, r, φ, ψ, y]` (индексы 0..5 —

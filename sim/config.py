@@ -244,6 +244,28 @@ class SensorParams:
     gps_pos_noise: float = 1.0  # м
     gps_vel_noise: float = 0.1  # м/с
 
+    # --- Реалистичный набор (control/sensors.RealisticSensors, только 3D) ---------
+    # [АНАЛОГ]: MEMS класса MPU-6000 / ICM-20602, u-blox M8, MS5611; B&M гл. 7.
+    # Шумы гироскопа, барометра, ПВД, ИНС, GPS-скорости — поля выше.
+    imu_rate:      float = 100.0   # Гц, гироскоп, акселерометр, ИНС (не чаще 1/dt)
+    baro_rate:     float = 20.0    # Гц
+    airspeed_rate: float = 20.0    # Гц
+    gps_rate:      float = 5.0     # Гц
+    gps_delay:     float = 0.2     # с, запаздывание решения GPS
+    # Гироскоп: остаток калибровки при включении (случайный, постоянный в полёте)
+    # + дрейф — марковский процесс 1-го порядка (СКО, время корреляции)
+    gyro_bias0:       float = 0.005   # рад/с (0.3 °/с), СКО остатка калибровки
+    gyro_drift_sigma: float = 0.001   # рад/с (0.05 °/с), установившееся СКО дрейфа
+    gyro_drift_tau:   float = 300.0   # с
+    # Акселерометр (B&M 7.1: σ = 0.0025·g)
+    accel_noise:   float = 0.025   # м/с², СКО
+    accel_bias0:   float = 0.05    # м/с², СКО остатка калибровки
+    # GPS-координаты (B&M 7.5): медленный уход — марковский процесс с k = 1/1100 1/с;
+    # установившееся СКО 4.9 м по N, E соответствует σ_η = 0.21 м при Ts = 1 с
+    gps_pos_drift_sigma: float = 4.9     # м
+    gps_pos_drift_tau:   float = 1100.0  # с
+    gps_pos_white:       float = 0.2     # м, белый шум отсчёта
+
 
 @dataclass
 class SimConfig:

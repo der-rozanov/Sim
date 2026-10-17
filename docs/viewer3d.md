@@ -182,6 +182,7 @@ Ursina — левая СК: X вправо, Y вверх, Z вперёд. Ото
 python scenarios/GameScenario3D.py                          # штиль, h0 = 100 м
 python scenarios/GameScenario3D.py --wind-n -5 --wind-e 3   # ветер на север / восток, м/с
 python scenarios/GameScenario3D.py --turb moderate          # турбулентность Драйдена (physics.md 4.5)
+python scenarios/GameScenario3D.py --ap --sensors real      # САУ на реалистичных датчиках (SENSORS.md 7)
 python scenarios/GameScenario3D.py --ap --cam 3 --h0 200    # старт с САУ, камера, высота
 python scenarios/GameScenario3D.py --map realmap             # аэродром [место], снимок (раздел 10)
 python scenarios/GameScenario3D.py --map realmap_osm         # аэродром [место], мультяшная (раздел 11)
@@ -229,7 +230,8 @@ python scenarios/GameScenario3D.py --map realmap_osm         # аэродром 
 
 САУ — `control/sau.py`, тот же класс, что в s8–s10 (docs/control.md, «Обзор»):
 высота и скорость — TECS, тангаж — каскад θ → q → δe, боковой канал — χ → φ_ref → δa,
-β → δr. Измерения в САУ истинные, без шума (`TruthSensors`).
+β → δr. Измерения в САУ по умолчанию истинные (`TruthSensors`); с `--sensors real` —
+реалистичный набор: частоты, запаздывание GPS, дрейф ([SENSORS.md, раздел 7](SENSORS.md)).
 
 Общие клавиши: T — турбулентность (выкл → слабая → умеренная; включается с текущего
 момента, событие в журнале), Пробел — пауза, R — сброс, 1–4 — камера, M — масштаб,
