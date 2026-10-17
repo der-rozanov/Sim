@@ -51,6 +51,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
+from sim.turbulence import TURB_LEVELS
 from sim.config import WindParams, SimConfig, AIRCRAFT_TYPES, aircraft_by_name
 from sim.state import H, PHI, THETA, air_data, earth_velocity
 from control.controllers import wrap_angle
@@ -70,7 +71,7 @@ KICKS = {"de": (0, math.radians(3.0), 1.0), "da": (2, math.radians(5.0), 0.5),
 class Lab(Game):
 
     HELP = ("W/S h_ref (θ_ref)  A/D χ_ref  X/Z Va_ref  H alt/pitch  P AP  "
-            "Space pause  R reset  1-4 cam  Esc quit")
+            "T turb  Space pause  R reset  1-4 cam  Esc quit")
 
     def __init__(self, aircraft, wind_params, cfg, terrain, q_cmd, q_tel, **kw):
         self.q_cmd, self.q_tel = q_cmd, q_tel
@@ -214,6 +215,10 @@ def main():
     ap = argparse.ArgumentParser(description="Конструктор САУ: 3D + редактор структурных схем")
     ap.add_argument("--wind-n", type=float, default=0.0, help="ветер на север, м/с")
     ap.add_argument("--wind-e", type=float, default=0.0, help="ветер на восток, м/с")
+    ap.add_argument("--turb", default="off", choices=TURB_LEVELS,
+                    help="турбулентность Драйдена (табл. 4.1 B&M); в полёте — клавиша T")
+    ap.add_argument("--turb-alt", default="low", choices=["low", "medium"],
+                    help="параметры турбулентности: для 50 м (low) или 600 м (medium)")
     ap.add_argument("--h0", type=float, default=200.0, help="начальная высота, м")
     ap.add_argument("--cam", type=int, default=1, choices=[1, 2, 3, 4])
     ap.add_argument("--map", default="default", choices=list(MAPS), help="карта мира")
@@ -224,7 +229,8 @@ def main():
     a = ap.parse_args()
 
     aircraft = aircraft_by_name(a.aircraft)
-    wind_params = WindParams(Vw_const=a.wind_n, Vw_cross=a.wind_e)
+    wind_params = WindParams(Vw_const=a.wind_n, Vw_cross=a.wind_e,
+                             turb_level=a.turb, turb_alt=a.turb_alt)
     cfg = SimConfig(Va0=16.0, h0=a.h0, theta0=0.0, dt=0.01, t_end=1e9)
 
     tpl = templates(aircraft, cfg.Va0)

@@ -1,5 +1,6 @@
 """
-Модель ветра wind(h, t, params) -> (Vwx, Vwh, Vwy).
+Модель ветра wind(h, t, params[, turb]) -> (Vwx, Vwh, Vwy);
+make_wind_fn(params) -> wind_fn(h, t) — с турбулентностью, если она включена.
 
 Возвращает компоненты ветра в земной СК (скорость воздушной массы):
   Vwx > 0 — ветер на север (при psi=0 — попутный), м/с
@@ -12,15 +13,28 @@
   1. Постоянный ветер (северный и восточный)
   2. Сдвиг ветра по высоте (северная составляющая, основной демонстрационный сценарий)
   3. Одиночный порыв (импульс) по всем трём осям
+  4. Турбулентность Драйдена (sim/turbulence.py), если params.turb_level != "off"
 """
 
 import numpy as np
 from .config import WindParams
+from .turbulence import DrydenTurbulence
 
 
-def wind(h: float, t: float, params: WindParams) -> tuple:
+def make_wind_fn(params: WindParams, t0: float = 0.0):
+    """
+    Функция ветра wind_fn(h, t) для derivatives / run(). Генератор турбулентности
+    создаётся один раз: его ряд порывов — общий для всех вызовов; t0 — момент
+    включения турбулентности.
+    """
+    turb = DrydenTurbulence(params, t0) if params.turb_level != "off" else None
+    return lambda h, t: wind(h, t, params, turb)
+
+
+def wind(h: float, t: float, params: WindParams, turb=None) -> tuple:
     """
     Суммарный ветер на высоте h в момент времени t.
+    turb — DrydenTurbulence или None (без турбулентности).
 
     Возвращает: (Vwx, Vwh, Vwy) в м/с
     """
@@ -29,6 +43,9 @@ def wind(h: float, t: float, params: WindParams) -> tuple:
     Vwx += _gust(t, params)
     Vwh  = _gust_vwh(t, params)
     Vwy  = params.Vw_cross + _gust_vwy(t, params)
+    if turb is not None:
+        ug, vg, wg = turb(t)
+        Vwx, Vwy, Vwh = Vwx + ug, Vwy + vg, Vwh + wg
     return Vwx, Vwh, Vwy
 
 

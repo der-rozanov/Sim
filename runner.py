@@ -8,7 +8,7 @@ import numpy as np
 from sim.config import AircraftParams, WindParams, SimConfig
 from sim.state import (initial_state, air_data, total_energy, full_controls,
                        U, W, Q, THETA, H, N_STATES, N_CONTROLS)
-from sim.wind import wind as _wind
+from sim.wind import make_wind_fn
 from sim.integrators import step_rk4
 from sim.actuators import actuator_init, actuator_step
 from sim.dynamics import thrust
@@ -70,7 +70,7 @@ def run(controls_fn,
     )
 
     state = initial_state(cfg) if state0 is None else state0.copy()
-    wind_call = lambda h, t: _wind(h, t, wind_params)
+    wind_call = make_wind_fn(wind_params)
     t = 0.0
     surf = None                    # положения рулей (привод)
 

@@ -61,11 +61,12 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from sim.turbulence import TURB_LEVELS
 from sim.config import WindParams, SimConfig, AIRCRAFT_TYPES, aircraft_by_name
 from sim.integrators import step_rk4
 from sim.actuators import actuator_init, actuator_step
 from sim.ground import contacts, near_ground
-from sim.wind import wind as _wind
+from sim.wind import make_wind_fn
 from sim.state import (air_data, earth_velocity, total_energy, full_controls, canonical_euler,
                        U, W, THETA, X, H, PHI, PSI, Y, N_STATES, N_CONTROLS)
 from runner import Log, compute_trim, trim_state
@@ -121,7 +122,7 @@ def _wrap180(a):
 class Game(Entity):
 
     HELP = ("W/S δe  A/D δa  Q/E δr  ↑/↓ trim  X/Z thr  P AP  H alt  N nav  "
-            "Space pause  R reset  1-4 cam  Esc quit")
+            "T turb  Space pause  R reset  1-4 cam  Esc quit")
 
     def __init__(self, aircraft, wind_params, cfg, terrain, cam=1, ap=False, shot=None,
                  q_station=None, bench=None):
@@ -132,7 +133,7 @@ class Game(Entity):
         self.route, self.loop = [], False        # маршрут из окна станции: [(N, E, h), ...]
         super().__init__()
         self.ac, self.wp, self.cfg = aircraft, wind_params, cfg
-        self.wind_call = lambda h, t: _wind(h, t, wind_params)
+        self.wind_call = make_wind_fn(wind_params)
         self.alpha_trim, self.de_trim, self.thr_trim = compute_trim(aircraft, cfg.Va0)
         self.s0 = trim_state(aircraft, cfg)
         self.s0[PSI] = terrain.start_psi          # старт вдоль ВПП карты
@@ -173,6 +174,7 @@ class Game(Entity):
             self.rec, self.events = [], []
         self.state = self.s0.copy()
         self.t, self.acc = 0.0, 0.0
+        self.wind_call = make_wind_fn(self.wp)  # ряд порывов — заново с t = 0
         self.t_real, self.rt_ratio = 0.0, 1.0   # реальное время полёта (без пауз), с; скорость модели
         self.paused, self.crashed = False, False
         self.on_ground, self.crash_msg, self.crash_en = False, "", ""
@@ -185,6 +187,14 @@ class Game(Entity):
         self.sau.set_mode(Mode.PITCH)
         self.sau.engage(theta=self.alpha_trim, h=self.cfg.h0, Va=self.cfg.Va0, chi=0.0)
         self.trail = []
+
+    def _cycle_turb(self):
+        """Турбулентность: выкл → слабая → умеренная → выкл; включается с текущего t."""
+        lv = TURB_LEVELS[(TURB_LEVELS.index(self.wp.turb_level) + 1) % len(TURB_LEVELS)]
+        self.wp.turb_level = lv
+        self.wind_call = make_wind_fn(self.wp, t0=self.t)
+        ru = {"off": "выкл", "light": "слабая", "moderate": "умеренная"}[lv]
+        self._event(f"турбулентность: {ru}", "gray", en=f"turbulence: {lv}")
 
     def _event(self, label, color="orange", en=None):
         """label — в лог (по-русски); en — подпись для окна станции (по-английски)."""
@@ -361,6 +371,8 @@ class Game(Entity):
             self.reset()
         elif key == "p":
             self._toggle_ap()
+        elif key == "t":
+            self._cycle_turb()
         elif key == "n":
             if self.nav_on:
                 self._nav_off()
@@ -595,6 +607,10 @@ def main():
     ap = argparse.ArgumentParser(description="Пилотирование ЛА в 3D (Ursina)")
     ap.add_argument("--wind-n", type=float, default=0.0, help="ветер на север, м/с")
     ap.add_argument("--wind-e", type=float, default=0.0, help="ветер на восток, м/с")
+    ap.add_argument("--turb", default="off", choices=TURB_LEVELS,
+                    help="турбулентность Драйдена (табл. 4.1 B&M); в полёте — клавиша T")
+    ap.add_argument("--turb-alt", default="low", choices=["low", "medium"],
+                    help="параметры турбулентности: для 50 м (low) или 600 м (medium)")
     ap.add_argument("--h0", type=float, default=100.0, help="начальная высота, м")
     ap.add_argument("--cam", type=int, default=1, choices=[1, 2, 3, 4])
     ap.add_argument("--ap", action="store_true", help="старт с включённой САУ")
@@ -606,7 +622,8 @@ def main():
     a = ap.parse_args()
 
     aircraft = aircraft_by_name(a.aircraft)
-    wind_params = WindParams(Vw_const=a.wind_n, Vw_cross=a.wind_e)
+    wind_params = WindParams(Vw_const=a.wind_n, Vw_cross=a.wind_e,
+                             turb_level=a.turb, turb_alt=a.turb_alt)
     cfg = SimConfig(Va0=16.0, h0=a.h0, theta0=0.0, dt=0.01, t_end=1e9)
 
     app, terrain = make_app(f"3D: пилотирование — {MAPS[a.map].title}", a.map)

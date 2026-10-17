@@ -206,6 +206,12 @@ class WindParams:
     gust_vwy:    float = 0.0    # м/с, амплитуда бокового порыва (> 0 = на восток)
     gust_t0:     float = 9999.0 # с, момент начала порыва
     gust_dur:    float = 1.0    # с, длительность порыва
+    # Турбулентность Драйдена (sim/turbulence.py; L, σ — табл. 4.1 B&M, УПРОЩЕНИЕ)
+    turb_level:  str   = "off"  # "off" | "light" | "moderate"
+    turb_alt:    str   = "low"  # "low" (табл. для 50 м) | "medium" (для 600 м)
+    turb_Va:     float = 16.0   # м/с, скорость, на которую рассчитаны фильтры (крейсер)
+    turb_seed:   int   = 0      # seed белого шума на входе фильтров
+    turb_dt:     float = 0.01   # с, шаг сетки ряда порывов
 
 
 @dataclass

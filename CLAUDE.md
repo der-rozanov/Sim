@@ -45,7 +45,9 @@ sim/                  — ядро физики (изолировано, без 
     ground.py         — контакт с землёй (РЕШ-25): колёса шасси + точки конструкции,
                         пружина-демпфер + трение; contacts(), ground_forces(), near_ground();
                         поверхность — ground_fn(N, E) -> h (в 3D — World.surface)
-    wind.py           — wind(h, t, params) -> (Vwx, Vwh, Vwy)
+    wind.py           — wind(h, t, params[, turb]) -> (Vwx, Vwh, Vwy); make_wind_fn(params, t0)
+    turbulence.py     — турбулентность Драйдена (РЕШ-30): DrydenTurbulence(params, t0)(t);
+                        земные оси, L и σ — табл. 4.1 B&M; включается только в 3D (--turb, T)
 
 control/              — управление (импортирует только sim/)
     controllers.py    — PitchController, SpeedController, AltitudeHold (ПИ h → θ_ref), PID, PIDParams,
@@ -144,6 +146,7 @@ checks/               — проверки здравого смысла
     check.py              — проверки всех модулей sim/ + раздел 7 (6DOF: вырождение
                             в продольный канал, знаки, Jxz, собственные движения)
                             + раздел 8 (знаки и логика LateralController)
+    check_turbulence.py   — Драйден: σ и СПМ против B&M, t0, регрессия ветра, замкнутый контур
     check_ground.py       — контакт с землёй: стоянка (осадка vs статика), взлёт, посадка,
                             руление, уклоны 6° (скатывается) и 2° (стоит)
     check_lateral.py      — боковой канал в открытом контуре: импульс элеронами,
@@ -167,7 +170,7 @@ docs/                 — техническая документация (ка�
     SENSORS.md        — псевдодатчики: модель, параметры, кто что измеряет, влияние шума
     viewer3d.md       — 3D-тренажёр: запуск, клавиши, СК и ориентация, проверки
     architecture.md   — зависимости, Log, controls_fn, новый сценарий, viewer, интерфейсы
-    decisions.md      — журнал решений РЕШ-01…29 (почему сделано так)
+    decisions.md      — журнал решений РЕШ-01…30 (почему сделано так)
     scenarios_report.md — результаты сценариев С1–С10 (числа на прежнем ЛА)
 results/              — .flightlog файлы (генерируемые, в .gitignore)
 ```
@@ -314,7 +317,7 @@ from viz.viewer   import show_flightlog
 ## Текущий статус реализации
 
 Полный перечень сделанного и дальнейших шагов — docs/DEV_PLAN.md; почему сделано так —
-docs/decisions.md (РЕШ-01…29).
+docs/decisions.md (РЕШ-01…30).
 
 ### Реализовано (кратко)
 - Физика `sim/`: 6DOF, состояние `[u, w, q, θ, x, h, v, p, r, φ, ψ, y]` (индексы 0..5 —
