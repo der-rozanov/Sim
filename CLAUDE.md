@@ -68,7 +68,10 @@ control/              — управление (импортирует толь�
                         lon (h, Va → θ, δt) → [защита по α] → pitch; lat (χ → φ → δa, β → δr);
                         режимы Mode PITCH/ALTITUDE/ROUTE; звенья заменяемые (TECS, EKF, INDI…)
                         датчики: TruthSensors | NoisySensors (s8–s10) | RealisticSensors (РЕШ-31,
-                        3D --sensors real: частоты, запаздывание GPS, дрейф, акселерометр)
+                        3D по умолчанию: частоты, запаздывание GPS, дрейф, акселерометр, магнитометр)
+    estimator.py      — StateEstimator (РЕШ-32): инерциальный EKF по схеме PX4 EKF2 — вектор ошибок 17
+                        (кватернион, v, p, смещения, ветер); IMU — вход прогноза; GPS, барометр,
+                        магнитометр, Va, β = 0; задержанный горизонт; 3D по умолчанию (--est none — без)
     tecs.py           — TECS (РЕШ-27): газ ← Ė = γ + V̇/g, тангаж ← Ḃ = wγ − (2−w)V̇/g;
                         lon по умолчанию в SAU (SAUParams.lon = "tecs" | "split")
     navigation.py     — WaypointNavigator, NavParams: полёт по точкам (B&M 10–11): прямая/
@@ -150,6 +153,8 @@ checks/               — проверки здравого смысла
     check.py              — проверки всех модулей sim/ + раздел 7 (6DOF: вырождение
                             в продольный канал, знаки, Jxz, собственные движения)
                             + раздел 8 (знаки и логика LateralController)
+    check_estimator.py    — EKF: якобианы, NEES по 6 прогонам, петля, выброс GPS, замкнутый
+                            контур истина / сырые / EKF (checks/estimator.png); --quick — быстрее
     check_sensors.py      — RealisticSensors: удельная сила, частоты/запаздывание, дрейф,
                             замкнутый контур истина / Noisy / Realistic (checks/sensors_real.png)
     check_turbulence.py   — Драйден: σ и СПМ против B&M, t0, регрессия ветра, замкнутый контур
@@ -176,7 +181,7 @@ docs/                 — техническая документация (ка�
     SENSORS.md        — псевдодатчики: модель, параметры, кто что измеряет, влияние шума
     viewer3d.md       — 3D-тренажёр: запуск, клавиши, СК и ориентация, проверки
     architecture.md   — зависимости, Log, controls_fn, новый сценарий, viewer, интерфейсы
-    decisions.md      — журнал решений РЕШ-01…31 (почему сделано так)
+    decisions.md      — журнал решений РЕШ-01…32 (почему сделано так)
     scenarios_report.md — результаты сценариев С1–С10 (числа на прежнем ЛА)
 results/              — .flightlog файлы (генерируемые, в .gitignore)
 ```
@@ -323,7 +328,7 @@ from viz.viewer   import show_flightlog
 ## Текущий статус реализации
 
 Полный перечень сделанного и дальнейших шагов — docs/DEV_PLAN.md; почему сделано так —
-docs/decisions.md (РЕШ-01…31).
+docs/decisions.md (РЕШ-01…32).
 
 ### Реализовано (кратко)
 - Физика `sim/`: 6DOF, состояние `[u, w, q, θ, x, h, v, p, r, φ, ψ, y]` (индексы 0..5 —

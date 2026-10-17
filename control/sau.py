@@ -37,7 +37,7 @@ from enum import Enum
 
 import numpy as np
 
-from sim.state import THETA, Q, H, P, R, PHI, X, Y, earth_velocity
+from sim.state import THETA, Q, H, P, R, PHI, PSI, X, Y, earth_velocity, rotation_body_to_earth
 from .controllers import (PitchController, PitchControlParams,
                           SpeedController, SpeedControlParams,
                           LateralController, LateralControlParams,
@@ -143,9 +143,12 @@ class RealisticSensors:
     медленно уходят (марковский процесс, B&M 7.5). Параметры — SensorParams.
 
     Ключи — как у TruthSensors + r (гироскоп), ax, ay, az (акселерометр, м/с², если
-    задана accel_fn(t, state) -> удельная сила, sim.dynamics.specific_force).
+    задана accel_fn(t, state) -> удельная сила, sim.dynamics.specific_force),
+    vn, ve, vd (GPS-скорость NED), mx, my, mz (магнитометр, Гс, связанная СК).
     θ, φ — «ИНС» как истина + шум (до оценивателя, DEV_PLAN п. 5.3).
-    χ, Vg, ḣ — по GPS-скорости. Новое t меньше прежнего (сброс полёта) — reset().
+    χ, Vg, ḣ — по GPS-скорости. Отметки времени отсчётов t_h, t_Va, t_gps — для
+    оценивателя (новый отсчёт, его запаздывание). Новое t меньше прежнего (сброс
+    полёта) — reset().
     """
 
     def __init__(self, sensor_params, rng, accel_fn=None):
@@ -155,6 +158,9 @@ class RealisticSensors:
         self.ch_baro = SampledChannel(1.0 / sp.baro_rate)
         self.ch_va = SampledChannel(1.0 / sp.airspeed_rate)
         self.ch_gps = SampledChannel(1.0 / sp.gps_rate, sp.gps_delay)
+        self.ch_mag = SampledChannel(1.0 / sp.mag_rate)
+        I, D = np.radians(sp.mag_incl), np.radians(sp.mag_decl)
+        self.mag_ned = sp.mag_field * np.array([np.cos(I) * np.cos(D), np.cos(I) * np.sin(D), np.sin(I)])
         self.reset()
 
     def reset(self):
@@ -164,7 +170,7 @@ class RealisticSensors:
         self.accel_b0 = sp.accel_bias0 * rng.standard_normal(3)
         self.gyro_drift = GaussMarkov(sp.gyro_drift_sigma, sp.gyro_drift_tau, rng, 3)
         self.gps_drift = GaussMarkov(sp.gps_pos_drift_sigma, sp.gps_pos_drift_tau, rng, 2)
-        for ch in (self.ch_imu, self.ch_baro, self.ch_va, self.ch_gps):
+        for ch in (self.ch_imu, self.ch_baro, self.ch_va, self.ch_gps, self.ch_mag):
             ch.reset()
         self.t_last = None
 
@@ -200,15 +206,22 @@ class RealisticSensors:
             Vn, Ve, Vu = np.array([Vx, Vy, Vh]) + rng.normal(0.0, sp.gps_vel_noise, 3)
             dn, de = self.gps_drift.b + rng.normal(0.0, sp.gps_pos_white, 2)
             return {"pn": state[X] + dn, "pe": state[Y] + de, "hdot": Vu,
-                    "chi": np.arctan2(Ve, Vn), "Vg": np.hypot(Vn, Ve)}
+                    "chi": np.arctan2(Ve, Vn), "Vg": np.hypot(Vn, Ve),
+                    "vn": Vn, "ve": Ve, "vd": -Vu, "t_gps": t}
 
-        m = {"t": t,
-             "h": self.ch_baro.update(t, lambda: measure_altitude(
-                 state[H], sp.baro_bias, sp.baro_noise, rng)),
-             "Va": self.ch_va.update(t, lambda: measure_airspeed(
-                 Va, sp.airspeed_bias, sp.airspeed_noise, rng))}
+        m = {"t": t}
+        m.update(self.ch_baro.update(t, lambda: {
+            "h": measure_altitude(state[H], sp.baro_bias, sp.baro_noise, rng), "t_h": t}))
+        m.update(self.ch_va.update(t, lambda: {
+            "Va": measure_airspeed(Va, sp.airspeed_bias, sp.airspeed_noise, rng), "t_Va": t}))
         m.update(self.ch_imu.update(t, imu))
         m.update(self.ch_gps.update(t, gps))
+
+        def mag():
+            Rbn = rotation_body_to_earth(state[PHI], state[THETA], state[PSI])
+            b = Rbn.T @ self.mag_ned + rng.normal(0.0, sp.mag_noise, 3)
+            return {"mx": b[0], "my": b[1], "mz": b[2], "t_mag": t}
+        m.update(self.ch_mag.update(t, mag))       # последним: порядок шума прочих датчиков прежний
         return m
 
 
@@ -327,11 +340,18 @@ class SAU:
         self.lon.reset_alt()
 
     # --- шаг ------------------------------------------------------------------
+    def observe(self, t, state, Va, alpha, beta, dt):
+        """
+        Датчики → оценка состояния, без управления. На борту оценка работает всегда, и
+        при ручном полёте тоже (3D-тренажёр): тогда к включению САУ фильтр уже сошёлся.
+        """
+        meas = self.sensors.measure(t, state, Va, alpha, beta)
+        self.est = meas if self.estimator is None else self.estimator.update(meas, dt)
+        return self.est
+
     def step(self, t, state, Va, alpha, beta, dt):
         """Истинные состояние и воздушные углы → датчики → … → [δe, δt, δa, δr]."""
-        meas = self.sensors.measure(t, state, Va, alpha, beta)
-        est = meas if self.estimator is None else self.estimator.update(meas, dt)
-        self.est = est
+        est = self.observe(t, state, Va, alpha, beta, dt)
         self._guidance(est)
         self.controls = self._control(est, dt)
         return self.controls

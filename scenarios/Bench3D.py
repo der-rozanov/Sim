@@ -245,7 +245,8 @@ class Bench(Game):
                            pitch=PitchControlParams(Va_ref=self.cfg.Va0),
                            h_min=H_MIN, h_max=H_MAX)
         return BenchSAU(self.ac, (self.alpha_trim, self.de_trim, self.thr_trim),
-                        self._make_sensors(), params, nav=self.nav, prot=self.prot)
+                        self._make_sensors(), params, nav=self.nav, prot=self.prot,
+                        estimator=self._make_estimator())
 
     def reset(self):
         super().reset()
@@ -385,8 +386,10 @@ def main():
                     help="турбулентность Драйдена (табл. 4.1 B&M); в полёте — клавиша T")
     ap.add_argument("--turb-alt", default="low", choices=["low", "medium"],
                     help="параметры турбулентности: для 50 м (low) или 600 м (medium)")
-    ap.add_argument("--sensors", default="truth", choices=["truth", "real"],
+    ap.add_argument("--sensors", default="real", choices=["truth", "real"],
                     help="датчики САУ: истина или реалистичный набор (частоты, задержки, дрейф)")
+    ap.add_argument("--est", default="ekf", choices=["ekf", "none"],
+                    help="оценка состояния при --sensors real: EKF или «сырые» измерения")
     ap.add_argument("--h0", type=float, default=200.0, help="начальная высота, м")
     ap.add_argument("--cam", type=int, default=1, choices=[1, 2, 3, 4])
     ap.add_argument("--map", default="default", choices=list(MAPS), help="карта мира")
@@ -407,7 +410,7 @@ def main():
     app, terrain = make_app(f"Стенд САУ — {MAPS[a.map].title}", a.map, size=WIN_3D)
     window.position = Vec2(0, 40)          # заголовок окна виден — можно перетащить
     q_station = None if a.no_map else start_station(terrain, aircraft, a.h0, "+0-40", px=640)
-    game = Bench(aircraft, wind_params, cfg, terrain, q_par, q_tel, cam=a.cam, q_station=q_station, sensors=a.sensors)
+    game = Bench(aircraft, wind_params, cfg, terrain, q_par, q_tel, cam=a.cam, q_station=q_station, sensors=a.sensors, est=a.est)
     try:
         app.run()
     finally:
