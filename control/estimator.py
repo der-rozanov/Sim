@@ -39,9 +39,13 @@ R_ист = Exp(δθ)·R. Линеаризация:
 состояния по буферу IMU от задержанного времени до текущего.
 """
 
+import time
+from collections import deque
 from dataclasses import dataclass
 
 import numpy as np
+
+from sim.state import X, Y, H, PHI, THETA, PSI, rotation_body_to_earth, earth_velocity, air_data
 
 G = 9.81
 I3 = np.eye(3)
@@ -50,6 +54,7 @@ I3 = np.eye(3)
 TH, VEL, POS, BG, BA, WND = (slice(0, 3), slice(3, 6), slice(6, 9), slice(9, 12),
                              slice(12, 15), slice(15, 17))
 N_ERR = 17
+NIS_K = 0.02                   # сглаживание NIS: среднее примерно по 50 последним коррекциям группы
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +207,11 @@ class StateEstimator:
         self.ready = False
         self.stats = {}            # по группам: [использовано, отбраковано]
         self.test_ratio = {}       # последнее отношение невязки к порогу
+        self.innov = {}            # по группам: последние невязка e и √S_ii (диагностика)
+        self.nis = {}              # по группам: средний NIS eᵀS⁻¹e / dim (норма ≈ 1)
         self.n_gps_reset = 0
+        self.n_init = 0            # выставок (первая + после сброса полёта)
+        self.t_ms = self.t_ms_max = 0.0    # время шага update, мс: среднее (скользящее) и наибольшее
 
     # --- инициализация ------------------------------------------------------
     def _init(self, m):
@@ -235,7 +244,10 @@ class StateEstimator:
         self.t_vel_ok = self.t_pos_ok = m["t"]     # последний принятый отсчёт GPS-скорости / положения
         self.stats = {k: [0, 0] for k in self.GROUPS}
         self.t_ok = {k: m["t"] for k in self.GROUPS}      # последний принятый отсчёт по группам
-        self.n_forced = 0
+        self.test_ratio, self.innov, self.nis = {}, {}, {}
+        self.n_forced = self.n_gps_reset = 0
+        self.n_init += 1
+        self.t_ms_max = 0.0
         self.ready = True
 
     def _mag_heading(self, m, phi, theta):
@@ -258,6 +270,14 @@ class StateEstimator:
 
     # --- шаг ---------------------------------------------------------------------
     def update(self, meas, dt):
+        t0 = time.perf_counter()
+        est = self._update(meas, dt)
+        ms = 1e3 * (time.perf_counter() - t0)
+        self.t_ms += 0.01 * (ms - self.t_ms)
+        self.t_ms_max = max(self.t_ms_max, ms)
+        return est
+
+    def _update(self, meas, dt):
         m = meas
         if not self.ready or m["t"] < self.t_last:          # первый шаг или сброс полёта
             self._init(m)
@@ -375,6 +395,9 @@ class StateEstimator:
         S = H @ self.P @ H.T + R
         ratio = e**2 / (gate**2 * np.diag(S))
         self.test_ratio[name] = float(ratio.max())
+        self.innov[name] = (e.copy(), np.sqrt(np.diag(S)))
+        nis = float(e @ np.linalg.solve(S, e)) / len(e)
+        self.nis[name] = nis if name not in self.nis else self.nis[name] + NIS_K * (nis - self.nis[name])
         lock = dict(self.pr.lockout_s).get(name)
         forced = lock is not None and self.t_f - self.t_ok[name] > lock
         if np.any(ratio > 1.0) and not forced:
@@ -414,3 +437,170 @@ class StateEstimator:
                     "b_gyro": self.bg.copy(), "b_acc": self.ba.copy(),
                     "vn": v[0], "ve": v[1], "vd": v[2], "quat": q})
         return est
+
+    # --- диагностика -----------------------------------------------------------------
+    def status(self, t):
+        """Внутреннее состояние фильтра для окна станции (без истины; None — до выставки).
+        Единицы — СИ, углы — рад. По группам измерений: принято / отбраковано, отношение
+        невязки к порогу (> 1 — отбраковка), средний NIS (норма ≈ 1), время с последней
+        принятой коррекции на горизонте фильтра, последние невязка e и √S_ii."""
+        if not self.ready:
+            return None
+        groups = {}
+        for k in self.GROUPS:
+            e, s = self.innov.get(k, (None, None))
+            groups[k] = {"used": self.stats[k][0], "rej": self.stats[k][1],
+                         "ratio": self.test_ratio.get(k), "nis": self.nis.get(k),
+                         "age": max(self.t_f - self.t_ok[k], 0.0),
+                         "e": None if e is None else [float(x) for x in e],
+                         "s": None if s is None else [float(x) for x in s]}
+        eig = np.linalg.eigvalsh(self.P)
+        return {"t_f": self.t_f, "lag": t - self.t_f, "delay": self.pr.delay,
+                "n_imu": len(self.imu), "n_obs": len(self.obs),
+                "ms": self.t_ms, "ms_max": self.t_ms_max,
+                "n_gps_reset": self.n_gps_reset, "n_forced": self.n_forced, "n_init": self.n_init,
+                "groups": groups,
+                "sample_age": {k: t - ts for k, ts in self.last.items()},   # возраст отсчёта датчика, с
+                "P_min": float(eig[0]), "P_max": float(eig[-1])}
+
+
+# ---------------------------------------------------------------------------
+# Сверка с истиной (только моделирование: в полёте истины нет)
+# ---------------------------------------------------------------------------
+
+def rot_err(R_true, R_est):
+    """Вектор поворота δθ (оси NED): R_true = Exp(δθ)·R_est."""
+    dR = R_true @ R_est.T
+    a = np.arccos(np.clip((np.trace(dR) - 1.0) / 2.0, -1.0, 1.0))
+    v = np.array([dR[2, 1] - dR[1, 2], dR[0, 2] - dR[2, 0], dR[1, 0] - dR[0, 1]])
+    return v * (0.5 if a < 1e-9 else a / (2.0 * np.sin(a)))
+
+
+def euler_sigma(q, P_th):
+    """СКО углов φ, θ, ψ по ковариации ошибки ориентации P_th (оси NED):
+    J = ∂(φ, θ, ψ)/∂δθ — конечными разностями, σ = √diag(J·P_th·Jᵀ)."""
+    R = quat_to_R(q)
+    e0, J, d = np.array(R_to_euler(R)), np.zeros((3, 3)), 1e-6
+    for i in range(3):
+        dv = np.zeros(3)
+        dv[i] = d
+        J[:, i] = _wrap(np.array(R_to_euler(quat_to_R(quat_exp(dv)) @ R)) - e0) / d
+    return np.sqrt(np.maximum(np.diag(J @ P_th @ J.T), 0.0))
+
+
+def _truth(s, w):
+    """Истина в обозначениях фильтра: R, v и p в NED, ветер (N, E), Va, (φ, θ, ψ)."""
+    Vx, Vy, Vh = earth_velocity(s)
+    return {"R": rotation_body_to_earth(s[PHI], s[THETA], s[PSI]), "v": np.array([Vx, Vy, -Vh]),
+            "p": np.array([s[X], s[Y], -s[H]]), "w": np.array([w[0], w[2]]),
+            "Va": air_data(s, w)[0], "eul": np.array([s[PHI], s[THETA], s[PSI]])}
+
+
+class EstimatorMonitor:
+    """
+    Сверка оценки состояния с истиной для окна станции (вкладка ESTIMATOR).
+
+        push(t, state, wind)            — каждый шаг модели: истина (ветер — (Vwx, Vwh, Vwy))
+        report(t, est, ekf, sensors)    -> dict: строки «оценка / истина / ошибка / σ», NEES
+
+    Две ошибки на строку:
+      err_out — выход оценивателя (то, что получает САУ) минус истина в момент t;
+      err_f   — состояние фильтра на задержанном горизонте t_f минус истина в момент t_f;
+                с ним сравнивается σ = √P (согласованность: |err_f| ≲ 3σ).
+    NEES группы = δxᵀ·P⁻¹·δx / dim, сглажен с постоянной времени NEES_TAU (норма ≈ 1;
+    > 2 — фильтр самоуверен, < 0.3 — перестраховывается). Положение — относительно
+    «истина + уход GPS»: уход фильтр не наблюдает (как в checks/check_estimator.py).
+    Без EKF (ekf = None) — только err_out: ошибка сырых измерений, которые получает САУ.
+    """
+
+    NEES_TAU = 10.0      # с
+    NEES_GROUPS = (("att", TH), ("vel", VEL), ("pos", POS), ("b_g", BG), ("b_a", BA), ("wind", WND))
+
+    def __init__(self, dt, horizon=1.0):
+        self.dt = dt
+        self.hist = deque(maxlen=int(horizon / dt) + 2)
+        self.reset()
+
+    def reset(self):
+        self.hist.clear()
+        self.nees, self.t_prev = {}, None
+
+    def push(self, t, state, wind):
+        if self.hist and t < self.hist[-1][0]:          # сброс полёта
+            self.reset()
+        self.hist.append((t, state, np.asarray(wind, float)))
+
+    def _truth_at(self, t):
+        k = len(self.hist) - 1 - int(round((self.hist[-1][0] - t) / self.dt))
+        return self.hist[min(max(k, 0), len(self.hist) - 1)]
+
+    def report(self, t, est, ekf, sensors):
+        if not self.hist:
+            return None
+        T = _truth(*self.hist[-1][1:])
+        bg_t = sensors.gyro_bias() if hasattr(sensors, "gyro_bias") else None
+        ba_t = getattr(sensors, "accel_b0", None)
+        drift = sensors.gps_drift.b.copy() if hasattr(sensors, "gps_drift") else None
+        f = ekf is not None and ekf.ready
+        rows = []
+
+        def row(key, label, unit, out, truth, filt=None, truth_f=None, sig=None, scale=1.0, wrap=False):
+            d = lambda a, b: float(_wrap(a - b) if wrap else a - b) * scale
+            rows.append({"key": key, "label": label, "unit": unit,
+                         "est": None if out is None else float(out) * scale,
+                         "truth": None if truth is None else float(truth) * scale,
+                         "err_out": None if out is None or truth is None else d(out, truth),
+                         "err_f": None if filt is None or truth_f is None else d(filt, truth_f),
+                         "sd": None if sig is None else float(sig) * scale})
+
+        no = (None, None, None)
+        deg = np.degrees(1.0)
+        if f:
+            Tf = _truth(*self._truth_at(ekf.t_f)[1:])
+            sd = np.sqrt(np.maximum(np.diag(ekf.P), 0.0))
+            eul_f, sd_eul = np.array(R_to_euler(quat_to_R(ekf.q))), euler_sigma(ekf.q, ekf.P[TH, TH])
+            Va_f, H_va = meas_airspeed(ekf.q, ekf.v, ekf.w)
+            v, Pv = ekf.v, ekf.P[3:5, 3:5]
+            vg = max(np.hypot(v[0], v[1]), 1.0)
+            J_chi, J_vg = np.array([-v[1], v[0]]) / vg**2, v[:2] / vg      # ∂χ/∂v, ∂Vg/∂v
+        for i, (k, lbl) in enumerate((("phi", "φ"), ("theta", "θ"), ("psi", "ψ"))):
+            row(k, lbl, "°", est.get(k), T["eul"][i],
+                *((eul_f[i], Tf["eul"][i], sd_eul[i]) if f else no), scale=deg, wrap=True)
+        row("chi", "χ", "°", est.get("chi"), np.arctan2(T["v"][1], T["v"][0]),
+            *((np.arctan2(v[1], v[0]), np.arctan2(Tf["v"][1], Tf["v"][0]), np.sqrt(J_chi @ Pv @ J_chi))
+              if f else no), scale=deg, wrap=True)
+        row("Vg", "Vg", "m/s", est.get("Vg"), np.hypot(*T["v"][:2]),
+            *((np.hypot(*v[:2]), np.hypot(*Tf["v"][:2]), np.sqrt(J_vg @ Pv @ J_vg)) if f else no))
+        row("Va", "Va", "m/s", est.get("Va"), T["Va"],
+            *((Va_f[0], Tf["Va"], np.sqrt((H_va @ ekf.P @ H_va.T)[0, 0])) if f else no))
+        for i, k in enumerate(("vn", "ve", "vd")):
+            row(k, "v" + k[1].upper(), "m/s", est.get(k), T["v"][i], *((v[i], Tf["v"][i], sd[3 + i]) if f else no))
+        for i, k in enumerate(("pn", "pe")):
+            row(k, "p" + k[1].upper(), "m", est.get(k), T["p"][i],
+                *((ekf.p[i], Tf["p"][i], sd[6 + i]) if f else no))
+        row("h", "h", "m", est.get("h"), -T["p"][2], *((-ekf.p[2], -Tf["p"][2], sd[8]) if f else no))
+        for i, k in enumerate(("wn", "we")):
+            row(k, "w" + k[1].upper(), "m/s", est.get(k), T["w"][i],
+                *((ekf.w[i], Tf["w"][i], sd[15 + i]) if f else no))
+        for i, ax in enumerate("pqr"):
+            bt = None if bg_t is None else bg_t[i]
+            fb = (ekf.bg[i], bt, sd[9 + i]) if f and bt is not None else no
+            row("bg_" + ax, "b_g " + ax, "°/s", ekf.bg[i] if f else None, bt, *fb, scale=deg)
+        for i, ax in enumerate("xyz"):
+            bt = None if ba_t is None else ba_t[i]
+            fb = (ekf.ba[i], bt, sd[12 + i]) if f and bt is not None else no
+            row("ba_" + ax, "b_a " + ax, "m/s²", ekf.ba[i] if f else None, bt, *fb)
+
+        nees = None
+        if f and bg_t is not None:
+            p_ref = Tf["p"] + (np.r_[drift, 0.0] if drift is not None else 0.0)
+            dx = np.r_[rot_err(Tf["R"], quat_to_R(ekf.q)), Tf["v"] - ekf.v, p_ref - ekf.p,
+                       bg_t - ekf.bg, ba_t - ekf.ba, Tf["w"] - ekf.w]
+            k = 1.0 if self.t_prev is None else min(1.0, max(t - self.t_prev, 0.0) / self.NEES_TAU)
+            for name, sl in self.NEES_GROUPS:
+                val = float(dx[sl] @ np.linalg.solve(ekf.P[sl, sl], dx[sl])) / len(dx[sl])
+                self.nees[name] = val if name not in self.nees else self.nees[name] + k * (val - self.nees[name])
+            self.t_prev = t
+            nees = dict(self.nees)
+        return {"t": t, "rows": rows, "nees": nees, "filter": ekf.status(t) if f else None,
+                "gps_drift": None if drift is None else [float(x) for x in drift]}

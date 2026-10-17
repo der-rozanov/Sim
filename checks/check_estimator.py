@@ -39,7 +39,7 @@ from sim.wind import make_wind_fn
 from runner import run, compute_trim, trim_state
 from control.controllers import PitchControlParams, wrap_angle
 from control.sau import SAU, SAUParams, Mode, TruthSensors, RealisticSensors
-from control.estimator import (StateEstimator, quat_to_R, quat_exp, quat_mult, euler_to_quat,
+from control.estimator import (StateEstimator, rot_err, quat_to_R, quat_exp, quat_mult, euler_to_quat,
                                meas_mag, meas_airspeed, meas_sideslip, N_ERR)
 
 ok_all = True
@@ -55,14 +55,6 @@ def check(name, ok, info=""):
 
 ac, sp = AircraftParams(), SensorParams()
 trim = compute_trim(ac, 16.0)
-
-
-def rot_err(R_true, R_est):
-    """Вектор поворота δθ (оси NED): R_true = Exp(δθ)·R_est."""
-    dR = R_true @ R_est.T
-    a = np.arccos(np.clip((np.trace(dR) - 1.0) / 2.0, -1.0, 1.0))
-    v = np.array([dR[2, 1] - dR[1, 2], dR[0, 2] - dR[2, 0], dR[1, 0] - dR[0, 1]])
-    return v * (0.5 if a < 1e-9 else a / (2.0 * np.sin(a)))
 
 
 # ---------------------------------------------------------------------------

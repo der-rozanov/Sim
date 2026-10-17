@@ -22,6 +22,12 @@ scenarios/GameScenario3D.py и scenarios/Bench3D.py.
   справа     — рули и газ (положение после привода и команда САУ), угол атаки и
                скольжения, производные энергии TECS, журнал событий.
 
+Вкладки (кнопки в строке статуса, клавиша Tab): FLIGHT — всё перечисленное выше;
+ESTIMATOR — оцениватель состояния (docs/control.md, 9.3): состояние фильтра, отношения
+невязки к порогу и NIS по группам измерений, NEES по группам состояния, таблица «оценка /
+истина / ошибка / 3σ» (ЛКМ по строке — история ошибки с полосой ±3σ), история отношений
+невязки к порогу. Данные — ключ "est" телеметрии (control/estimator.py, EstimatorMonitor.report).
+
 Мышь на карте:
   ЛКМ по пустому месту — новая точка в конец маршрута (высота — «WP ALT» на панели)
   ЛКМ по точке и тянуть — перенести точку;  ПКМ по точке — удалить
@@ -52,6 +58,7 @@ info — постоянные данные ЛА (пределы рулей, по
 
 import math
 import queue
+from collections import deque
 import multiprocessing as mp
 import tkinter as tk
 import tkinter.font as tkfont
@@ -67,6 +74,9 @@ PFD_K = 0.78                   # ширина PFD / номинальная вы�
 MAP_MIN = 620                  # ширина карты, ниже которой мельчает всё окно (плашки карты не налезают), номинальные пикс
 OV = ("dyn", "ovl")            # теги элементов поверх карты (масштабируются ×UI)
 MODES = (("MAN", "P"), ("PITCH", "H"), ("ALT", "H"), ("NAV", "N"))   # режим полёта, клавиша 3D-окна
+TABS = ("FLIGHT", "ESTIMATOR")  # вкладки окна (Tab — следующая)
+EST_WIN = 60.0                 # с — окно осциллограмм вкладки ESTIMATOR
+EST_HIST = 900                 # точек истории оценивателя (отчёт — 10 Гц, с запасом)
 
 # цвета (тёмная тема)
 BG, BAR, CARD, EDGE, DIM, TXT = "#101215", "#1c1f24", "#22262c", "#3a414b", "#8d99a6", "#e8ecf0"
@@ -74,6 +84,11 @@ GREEN, AMBER, RED, CYAN, MAG, YEL = "#3ddc84", "#ffb020", "#ff4545", "#4dd0ff", 
 SKY, GND, TAPE = "#2678c2", "#7a4220", "#3a3d42"
 ROUTE, WP, WP_CUR, AC, TRAIL = "#e8a33d", "#e8a33d", "#ffffff", "#ff3b30", "#ff5050"
 COL = {"g": GREEN, "c": CYAN, "w": TXT, "a": AMBER, "r": RED, "d": DIM}
+GROUPS = (("gps_pos", "GPS pos"), ("gps_vel", "GPS vel"), ("baro", "baro"), ("mag", "mag"),
+          ("tas", "airspd"), ("beta", "β = 0"))           # группы измерений EKF
+GRP_COL = {"gps_pos": AMBER, "gps_vel": YEL, "baro": CYAN, "mag": MAG, "tas": GREEN, "beta": "#b0bac4"}
+SAMPLE_OF = {"gps_pos": "gps", "gps_vel": "gps", "baro": "baro", "mag": "mag", "tas": "tas", "beta": "tas"}
+NEES_NAMES = (("att", "att"), ("vel", "vel"), ("pos", "pos†"), ("b_g", "b_g"), ("b_a", "b_a"), ("wind", "wind"))
 EV_COL = {"red": RED, "orange": AMBER, "green": GREEN, "dodgerblue": CYAN, "gray": DIM, "purple": MAG}
 
 UI = 1.0                       # масштаб интерфейса (пересчитывается при изменении размера окна)
@@ -146,6 +161,9 @@ class Station:
         self.buttons = []                 # (x0, y0, x1, y1, действие) на карте
         self.mode_buttons = []            # (x0, x1, режим) в строке статуса, номинальные пикс
         self._fonts = {}                  # кэш шрифтов для подбора размера
+        self.tab, self.tab_buttons = TABS[0], []          # вкладка; (x0, x1, вкладка) в строке статуса
+        self.est, self.est_sel = None, "psi"              # отчёт оценивателя; строка для истории
+        self.est_hist = deque(maxlen=EST_HIST)            # (t, {строка: (err_f, σ, err_out)}, {группа: ratio})
         self._size, self._job = None, None
 
         global PT
@@ -164,6 +182,11 @@ class Station:
         self.cv.grid(row=1, column=1)
         self.side = tk.Canvas(root, bg=BG, highlightthickness=0)
         self.side.grid(row=1, column=2)
+        self.dbg = tk.Canvas(root, bg=BG, highlightthickness=0)      # вкладка ESTIMATOR
+        self.dbg.grid(row=1, column=0, columnspan=3)
+        self.dbg.grid_remove()
+        self.dbg.bind("<Button-1>", self._est_click)
+        root.bind("<Tab>", lambda ev: (self._set_tab(TABS[(TABS.index(self.tab) + 1) % len(TABS)]), "break")[1])
 
         self.bg = self.cv.create_image(0, 0, anchor="nw")
         self.view = None
@@ -208,6 +231,8 @@ class Station:
         self.pfd.configure(width=self.PW, height=self.PH)
         self.cv.configure(width=self.MW, height=self.MH)
         self.side.configure(width=sw, height=self.PH)
+        self.MWfull = Ww
+        self.dbg.configure(width=Ww, height=self.PH)
         fit = max(1, math.ceil(max(self.SW / self.MW, self.SH / self.MH)))
         self.levels = [fit] + [s for s in (4, 2, 1) if s < fit]       # прореживание: вся карта … 1:1
         self._set_view(fit, 0, 0)
@@ -284,8 +309,21 @@ class Station:
                 return act
         return None
 
+    def _set_tab(self, tab):
+        if tab == self.tab:
+            return
+        self.tab = tab
+        for w in (self.pfd, self.cv, self.side):
+            w.grid() if tab == "FLIGHT" else w.grid_remove()
+        self.dbg.grid() if tab == "ESTIMATOR" else self.dbg.grid_remove()
+        self._draw_all()
+
     def _mode_click(self, ev):
         x = ev.x / UI
+        for x0, x1, tab in self.tab_buttons:
+            if x0 <= x <= x1:
+                self._set_tab(tab)
+                return
         for x0, x1, fm in self.mode_buttons:
             if x0 <= x <= x1 and (fm != "NAV" or self.wps):
                 self._put(("mode", fm))
@@ -381,6 +419,12 @@ class Station:
                 break
             if self.last and m["t"] < self.last["t"]:         # сброс полёта (R)
                 self.trail, self.flown = [], 0.0
+                self.est_hist.clear()
+            if "est" in m:                                     # отчёт оценивателя (10 Гц)
+                self.est = e = m["est"]
+                st = e["filter"]
+                self.est_hist.append((e["t"], {r["key"]: (r["err_f"], r["sd"], r["err_out"]) for r in e["rows"]},
+                                      {} if st is None else {g: d["ratio"] for g, d in st["groups"].items()}))
             if not self.trail or m["t"] - self._t_trail >= TRAIL_DT:
                 if self.trail:
                     self.flown += math.hypot(m["n"] - self.trail[-1][0], m["e"] - self.trail[-1][1])
@@ -395,12 +439,16 @@ class Station:
     # Рисование
     # ===========================================================================
     def _draw_all(self):
-        """Строка статуса, PFD и правая колонка рисуются в номинальных пикселях и масштабируются ×UI."""
-        for cv, draw in ((self.top, self._draw_top), (self.pfd, self._draw_pfd), (self.side, self._draw_side)):
+        """Строка статуса, PFD и правая колонка (или вкладка ESTIMATOR) рисуются в номинальных
+        пикселях и масштабируются ×UI."""
+        panes = (((self.pfd, self._draw_pfd), (self.side, self._draw_side)) if self.tab == "FLIGHT"
+                 else ((self.dbg, self._draw_est),))
+        for cv, draw in ((self.top, self._draw_top),) + panes:
             cv.delete("all")
             draw()
             cv.scale("all", 0, 0, UI, UI)
-        self._draw_map()
+        if self.tab == "FLIGHT":
+            self._draw_map()
 
     # --- строка статуса ----------------------------------------------------------
     def _draw_top(self):
@@ -425,6 +473,16 @@ class Station:
             cv.create_text(x + bw - 5, 12, text=key, anchor="ne", font=F(7), fill="#1b4d2e" if on else DIM)
             self.mode_buttons.append((x, x + bw, fm))
             x += bw + 4
+        # вкладки окна
+        x += 14
+        self.tab_buttons = []
+        for tab in TABS:
+            on, tw = tab == self.tab, 104
+            cv.create_rectangle(x, 7, x + tw, TOP_H - 7, fill="#1d3a4a" if on else BAR,
+                                outline=CYAN if on else EDGE)
+            cv.create_text(x + tw / 2, TOP_H / 2, text=tab, font=F(10, "bold"), fill=CYAN if on else DIM)
+            self.tab_buttons.append((x, x + tw, tab))
+            x += tw + 4
         wind = math.hypot(m["wind_n"], m["wind_e"])
         frm = (math.degrees(math.atan2(-m["wind_e"], -m["wind_n"])) % 360) if wind > 0.2 else None
         chips = [(f"WIND {wind:.1f} m/s" + (f" FROM {frm:03.0f}°" if frm is not None else ""), CYAN),
@@ -878,6 +936,234 @@ class Station:
             cv.create_text(x0 + 14, y, text=fmt_time(t), anchor="w", fill=DIM, font=FM(10))
             cv.create_text(x0 + 74, y, text=lbl, anchor="w", fill=EV_COL.get(c, TXT), font=F(10))
             y += 22
+
+    # ===========================================================================
+    # Вкладка ESTIMATOR: состояние оценивателя (EKF) и сверка с истиной
+    # ===========================================================================
+    def _draw_est(self):
+        cv, e = self.dbg, self.est
+        W, H = self.MWfull / UI, self.PH / UI
+        if e is None:
+            cv.create_text(W / 2, H / 2, text="NO ESTIMATOR TELEMETRY YET", fill=DIM, font=F(13, "bold"))
+            return
+        pad, xa, xb = 10, 0.30 * W, 0.665 * W
+        y = self._est_status(cv, e, pad, 8, xa - 4, 8 + 0.27 * H) + 8
+        y = self._est_aiding(cv, e, pad, y, xa - 4, y + 0.40 * H) + 8
+        self._est_nees(cv, e, pad, y, xa - 4, H - 8)
+        self._est_table(cv, e, xa + 4, 8, xb - 4, H - 8)
+        yh = 8 + 0.56 * (H - 16)
+        self._est_plot(cv, xb + 4, 8, W - pad, yh)
+        self._est_ratio_plot(cv, xb + 4, yh + 8, W - pad, H - 8)
+
+    def _kv(self, cv, x, y, k, v, c=TXT):
+        cv.create_text(x, y, text=k, anchor="w", fill=DIM, font=F(9))
+        cv.create_text(x + 112, y, text=v, anchor="w", fill=c, font=FM(10))
+
+    def _est_status(self, cv, e, x0, y0, x1, y1):
+        self._title(cv, x0, y0, x1, y1, "ESTIMATOR")
+        st = e["filter"]
+        cv.create_text(x1 - 12, y0 + 14, text=e["kind"], anchor="e", fill=CYAN if st else AMBER, font=F(9, "bold"))
+        if st is None:
+            msg = ("SAU uses true values" if e["kind"] == "TRUTH"
+                   else "SAU uses raw measurements (--est none)")
+            cv.create_text(x0 + 14, y0 + 46, text=msg, anchor="w", fill=DIM, font=F(10))
+            cv.create_text(x0 + 14, y0 + 70, text="table: measurement − truth", anchor="w", fill=DIM, font=F(9))
+            return y1
+        dy, cw = (y1 - y0 - 40) / 5, (x1 - x0) / 2
+        pmin = st["P_min"]
+        items = [("horizon lag", f"{st['lag']:.2f} s  (delay {st['delay']:.2f})", TXT),
+                 ("buffers", f"IMU {st['n_imu']}  obs {st['n_obs']}", TXT),
+                 ("update", f"{st['ms']:.2f} ms  (max {st['ms_max']:.1f})", TXT),
+                 ("eig P", f"{pmin:.1e} … {st['P_max']:.1e}", GREEN if pmin > 0 else RED),
+                 ("GPS drift", "—" if e["gps_drift"] is None else f"{math.hypot(*e['gps_drift']):.1f} m (truth)", DIM),
+                 ("alignments", f"{st['n_init']}", TXT),
+                 ("GPS resets", f"{st['n_gps_reset']}", AMBER if st["n_gps_reset"] else TXT),
+                 ("forced fusions", f"{st['n_forced']}", AMBER if st["n_forced"] else TXT)]
+        for i, (k, v, c) in enumerate(items):
+            col, r = divmod(i, 5)
+            self._kv(cv, x0 + 14 + col * cw * 1.08, y0 + 40 + dy * r, k, v, c)
+        return y1
+
+    def _est_aiding(self, cv, e, x0, y0, x1, y1):
+        """Группы измерений: отношение невязки к порогу (как «innovation test ratio» в QGC),
+        средний NIS, принято / отбраковано, время с последней коррекции, возраст отсчёта."""
+        self._title(cv, x0, y0, x1, y1, "AIDING: INNOVATION TEST RATIO  (> 1 — rejected)")
+        st = e["filter"]
+        if st is None:
+            cv.create_text((x0 + x1) / 2, (y0 + y1) / 2, text="—", fill=DIM, font=F(12))
+            return y1
+        hy = y0 + 36
+        cols = (("", 14), ("ratio", 82), ("NIS", 196), ("used", 244), ("rej", 300), ("age", 342), ("smp", 388))
+        for lbl, dx in cols:
+            cv.create_text(x0 + dx, hy, text=lbl, anchor="w", fill=DIM, font=F(8))
+        dy = (y1 - hy - 14) / len(GROUPS)
+        for i, (g, name) in enumerate(GROUPS):
+            d, y = st["groups"][g], hy + dy * (i + 0.8)
+            cv.create_text(x0 + 14, y, text=name, anchor="w", fill=GRP_COL[g], font=FM(10))
+            r = d["ratio"]
+            bx, bw = x0 + 82, 104
+            cv.create_rectangle(bx, y - 6, bx + bw, y + 6, fill="#2b3036", outline="#454c55")
+            if r is not None:
+                c = GREEN if r < 0.5 else AMBER if r < 1.0 else RED
+                cv.create_rectangle(bx, y - 6, bx + bw * min(r, 1.5) / 1.5, y + 6, fill=c, width=0)
+            cv.create_line(bx + bw / 1.5, y - 9, bx + bw / 1.5, y + 9, fill="white")       # порог
+            nis = d["nis"]
+            cv.create_text(x0 + 196, y, text="—" if nis is None else f"{nis:.2f}", anchor="w", font=FM(10),
+                           fill=DIM if nis is None else GREEN if 0.3 < nis < 2.0 else AMBER)
+            cv.create_text(x0 + 244, y, text=f"{d['used']}", anchor="w", fill=TXT, font=FM(10))
+            cv.create_text(x0 + 300, y, text=f"{d['rej']}", anchor="w", fill=RED if d["rej"] else DIM, font=FM(10))
+            cv.create_text(x0 + 342, y, text=f"{d['age']:.1f}", anchor="w", font=FM(10),
+                           fill=TXT if d["age"] < 1.0 else AMBER)
+            sa = st["sample_age"].get(SAMPLE_OF[g])
+            cv.create_text(x0 + 388, y, text="—" if sa is None else f"{sa:.2f}", anchor="w", fill=DIM, font=FM(10))
+        cv.create_text(x0 + 12, y1 - 10, text="NIS ≈ 1 — innovations match S;  age / smp — s since fusion / sample",
+                       anchor="w", fill=DIM, font=F(7))
+        return y1
+
+    def _est_nees(self, cv, e, x0, y0, x1, y1):
+        """NEES / dim по группам состояния (по истине): шкала логарифмическая 0.1…10,
+        зелёная полоса 0.3…2 — как допуск checks/check_estimator.py."""
+        self._title(cv, x0, y0, x1, y1, "CONSISTENCY vs TRUTH:  NEES / dim  (10 s mean)")
+        nees = e["nees"]
+        if nees is None:
+            cv.create_text((x0 + x1) / 2, (y0 + y1) / 2 + 8, text="—", fill=DIM, font=F(12))
+            return y1
+        bx, bw = x0 + 70, x1 - x0 - 150
+        X = lambda v: bx + bw * (math.log10(min(max(v, 0.1), 10.0)) + 1.0) / 2.0
+        dy = (y1 - y0 - 58) / len(NEES_NAMES)
+        for i, (g, name) in enumerate(NEES_NAMES):
+            y, v = y0 + 40 + dy * i, nees[g]
+            cv.create_text(bx - 10, y, text=name, anchor="e", fill=TXT, font=FM(10))
+            cv.create_rectangle(bx, y - 5, bx + bw, y + 5, fill="#2b3036", outline="#454c55")
+            cv.create_rectangle(X(0.3), y - 5, X(2.0), y + 5, fill="#1f4a30", width=0)
+            cv.create_line(X(1.0), y - 8, X(1.0), y + 8, fill="white")
+            c = GREEN if 0.3 < v < 2.0 else AMBER if 0.1 < v < 5.0 else RED
+            cv.create_oval(X(v) - 5, y - 5, X(v) + 5, y + 5, fill=c, outline="")
+            cv.create_text(bx + bw + 10, y, text=f"{v:.2f}", anchor="w", fill=c, font=FM(10))
+        for v in (0.1, 1.0, 10.0):
+            cv.create_text(X(v), y1 - 26, text=f"{v:g}", fill=DIM, font=F(7))
+        cv.create_text(x0 + 12, y1 - 10, text="> 2 overconfident, < 0.3 pessimistic;  pos† — vs truth + GPS drift",
+                       anchor="w", fill=DIM, font=F(7))
+        return y1
+
+    def _est_table(self, cv, e, x0, y0, x1, y1):
+        """Оценка / истина / ошибка выхода (то, что получает САУ) / ошибка фильтра на горизонте
+        t_f / 3σ и шкала err_f / σ (полоса ±3σ). ЛКМ по строке — её история справа."""
+        self._title(cv, x0, y0, x1, y1, "STATE vs TRUTH  (click a row → history)")
+        rows, self.est_rows = e["rows"], []
+        cols = (("est", 70), ("truth", 152), ("err out", 234), ("err filt", 310), ("3σ", 386))
+        hy = y0 + 36
+        for lbl, dx in cols:
+            cv.create_text(x0 + dx + 64, hy, text=lbl, anchor="e", fill=DIM, font=F(8))
+        gx0, gx1 = x0 + 466, x1 - 12
+        gc, gk = (gx0 + gx1) / 2, (gx1 - gx0) / 8                        # шкала ±4σ
+        cv.create_text(gc, hy, text="err filt / σ   (±3σ)", fill=DIM, font=F(8))
+        dy = (y1 - hy - 14) / len(rows)
+        for i, r in enumerate(rows):
+            ya, y = hy + 10 + dy * i, hy + 10 + dy * (i + 0.5)
+            self.est_rows.append((ya, ya + dy, r["key"]))
+            if r["key"] == self.est_sel:
+                cv.create_rectangle(x0 + 3, ya, x1 - 3, ya + dy, fill="#2d3a48", width=0)
+            elif i % 2:
+                cv.create_rectangle(x0 + 3, ya, x1 - 3, ya + dy, fill="#1e2227", width=0)
+            cv.create_text(x0 + 12, y, text=f"{r['label']}", anchor="w", fill=TXT, font=FM(10))
+            cv.create_text(x0 + 70, y, text=r["unit"], anchor="w", fill=DIM, font=F(7))
+            sd, ef = r["sd"], r["err_f"]
+            vals = (r["est"], r["truth"], r["err_out"], ef, None if sd is None else 3 * sd)
+            for k, ((_, dx), v) in enumerate(zip(cols, vals)):
+                c = TXT if k < 2 else DIM if k == 4 else YEL if k == 2 else GREEN
+                if k == 3 and sd and abs(ef) > 3 * sd:
+                    c = RED
+                cv.create_text(x0 + dx + 64, y, text=fnum(v, r["unit"], signed=k in (2, 3)), anchor="e",
+                               fill=c if v is not None else DIM, font=FM(10))
+            cv.create_line(gx0, y, gx1, y, fill="#3a414b")
+            cv.create_rectangle(gc - 3 * gk, y - 4, gc + 3 * gk, y + 4, fill="#1f4a30", width=0)
+            cv.create_line(gc, y - 6, gc, y + 6, fill="#888")
+            if sd and ef is not None:
+                z = ef / sd
+                xz = gc + max(-4.0, min(4.0, z)) * gk
+                cv.create_oval(xz - 4, y - 4, xz + 4, y + 4, fill=GREEN if abs(z) <= 3 else RED, outline="")
+        return y1
+
+    def _plot(self, cv, x0, y0, x1, y1, ts, series, band=None, ylim=None, hlines=()):
+        """Осциллограмма за EST_WIN с: series — [(значения, цвет, толщина)], band — (+3σ) по
+        точкам (закрашивается ±), ylim — (y_мин, y_макс) или None (симметрично по данным)."""
+        cv.create_rectangle(x0, y0, x1, y1, fill="#15181c", outline="#2b3036")
+        if len(ts) < 2:
+            return
+        t1 = ts[-1]
+        i0 = next(i for i, t in enumerate(ts) if t >= t1 - EST_WIN)          # только окно EST_WIN
+        ts, series = ts[i0:], [(v[i0:], c, w) for v, c, w in series]
+        band = band[i0:] if band else band
+        Xt = lambda t: x1 - (t1 - t) / EST_WIN * (x1 - x0)
+        if ylim is None:
+            m = max([abs(v) for s, _, _ in series for v in s if v is not None]
+                    + [v for v in (band or []) if v is not None] + [1e-6])
+            ylim = (-1.15 * m, 1.15 * m)
+        lo, hi = ylim
+        Y = lambda v: y1 - (min(max(v, lo), hi) - lo) / (hi - lo) * (y1 - y0)
+        if band:
+            pts = [(Xt(t), Y(b)) for t, b in zip(ts, band) if b is not None]
+            pts += [(Xt(t), Y(-b)) for t, b in reversed(list(zip(ts, band))) if b is not None]
+            if len(pts) > 2:
+                cv.create_polygon(*[v for p in pts for v in p], fill="#1f4a30", outline="")
+        for v, c in [(0.0, "#555")] + list(hlines):
+            if lo < v < hi:
+                cv.create_line(x0, Y(v), x1, Y(v), fill=c, dash=(3, 3))
+        for vals, c, w in series:
+            seg = []
+            for t, v in zip(ts, vals):
+                if v is None:
+                    if len(seg) > 2:
+                        cv.create_line(*seg, fill=c, width=w)
+                    seg = []
+                else:
+                    seg += [Xt(t), Y(v)]
+            if len(seg) > 2:
+                cv.create_line(*seg, fill=c, width=w)
+        cv.create_text(x0 + 4, y0 + 8, text=f"{hi:+.3g}", anchor="w", fill=DIM, font=FM(8))
+        cv.create_text(x0 + 4, y1 - 8, text=f"{lo:+.3g}", anchor="w", fill=DIM, font=FM(8))
+        cv.create_text(x1 - 4, y1 - 8, text=f"−{EST_WIN:.0f} s … now", anchor="e", fill=DIM, font=F(7))
+
+    def _est_plot(self, cv, x0, y0, x1, y1):
+        row = next((r for r in self.est["rows"] if r["key"] == self.est_sel), None)
+        name = "—" if row is None else f"{row['label']}, {row['unit']}"
+        self._title(cv, x0, y0, x1, y1, f"ERROR HISTORY:  {name}")
+        x = x1 - 12
+        for lbl, c in (("— err out (to SAU)", YEL), ("— err filt (t_f)", GREEN), ("■ ±3σ", "#3f8f5a")):
+            t = cv.create_text(x, y0 + 14, text=lbl, anchor="e", fill=c, font=F(8))
+            x -= (cv.bbox(t)[2] - cv.bbox(t)[0]) / UI + 12
+        h = [(t, rr[self.est_sel]) for t, rr, _ in self.est_hist if self.est_sel in rr]
+        ts = [t for t, _ in h]
+        ef, sd, eo = ([x[k] for _, x in h] for k in range(3))
+        self._plot(cv, x0 + 10, y0 + 30, x1 - 10, y1 - 10, ts, [(eo, YEL, 1), (ef, GREEN, 2)],
+                   band=[None if s is None else 3 * s for s in sd])
+
+    def _est_ratio_plot(self, cv, x0, y0, x1, y1):
+        self._title(cv, x0, y0, x1, y1, "TEST RATIO HISTORY")
+        x = x1 - 12
+        for g, name in reversed(GROUPS):
+            t = cv.create_text(x, y0 + 14, text=name, anchor="e", fill=GRP_COL[g], font=F(8))
+            x -= (cv.bbox(t)[2] - cv.bbox(t)[0]) / UI + 10
+        ts = [t for t, _, _ in self.est_hist]
+        series = [([gr.get(g) for _, _, gr in self.est_hist], GRP_COL[g], 1) for g, _ in GROUPS]
+        self._plot(cv, x0 + 10, y0 + 30, x1 - 10, y1 - 10, ts, series, ylim=(0.0, 1.5), hlines=((1.0, RED),))
+
+    def _est_click(self, ev):
+        y = ev.y / UI
+        for ya, yb, key in getattr(self, "est_rows", []):
+            if ya <= y < yb:
+                self.est_sel = key
+                self._draw_all()
+                return
+
+
+def fnum(v, unit, signed=False):
+    """Число для таблицы оценивателя: точность — по единицам."""
+    if v is None:
+        return "—"
+    nd = {"°": 2, "m/s": 2, "m": 1, "°/s": 3, "m/s²": 3}.get(unit, 2)
+    return f"{v:+.{nd}f}" if signed else f"{v:.{nd}f}"
 
 
 def run(q_cmd, q_tel, bg_path, extent, info, geometry="+0+0", h_new=150.0):

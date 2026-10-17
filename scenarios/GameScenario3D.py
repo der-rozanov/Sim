@@ -75,7 +75,7 @@ from flight_logger import FlightLogger
 from control.controllers import PitchControlParams, wrap_angle
 from control.navigation import WaypointNavigator, NavParams
 from control.sau import SAU, SAUParams, TruthSensors, RealisticSensors, Mode
-from control.estimator import StateEstimator
+from control.estimator import StateEstimator, EstimatorMonitor
 from sim.aero import coef_CL
 from viz import station
 from viz.viewer3d import (View3D, make_app, MAPS, ned_to_u, body_axes, air_velocity_axis,
@@ -112,6 +112,7 @@ KH        = PitchControlParams().KH   # рад/м, расчёт control/tuning.p
 MANUAL_REF = ("маршрут: ручная уставка", "NAV: manual ref")   # событие: ручная уставка выключила маршрут
 MAX_STEPS_PER_FRAME = 10        # при просадке кадров — замедление, а не «рывок»
 RT_TAU    = 1.0                 # с — постоянная сглаживания скорости модели (строка «sim ×…»)
+EST_TEL_DT = 0.1                # с — период отчёта оценивателя в окно станции (вкладка ESTIMATOR)
 RT_WARMUP = 2.0                 # с — отставание не считается с запуска окна (загрузка)
 TRAIL_MAX = 3000                # точек следа (0.1 с) — последние 5 мин
 
@@ -151,6 +152,8 @@ class Game(Entity):
                            aircraft_name=aircraft.name)
 
         self.sau = self._make_sau()
+        self.est_mon = EstimatorMonitor(cfg.dt)      # сверка оценки с истиной — вкладка ESTIMATOR станции
+        self._t_est_tel, self._ekf_seen = -1.0, (0, 0, 0)
 
         self.rec = []                  # (t, state, controls, Va, alpha, beta, wind, cmd)
         self.events = []
@@ -380,10 +383,38 @@ class Game(Entity):
                "circle": (tuple(nav.circle[:3])
                           if self.nav_on and nav.mode in ("fillet", "orbit") else None),
                "dist": float(np.hypot(tgt[0] - s[X], tgt[1] - s[Y])) if tgt is not None else 0.0}
+        est = self._est_telemetry()
+        if est is not None:
+            msg["est"] = est
         try:
             self.q_station[1].put_nowait(msg)
         except queue.Full:
             pass
+
+    def _est_telemetry(self):
+        """Вкладка ESTIMATOR станции: сверка оценки с истиной (control/estimator.py,
+        EstimatorMonitor) — не чаще EST_TEL_DT; события фильтра — в журнал."""
+        if self.t - self._t_est_tel < EST_TEL_DT and self.t >= self._t_est_tel:
+            return None
+        self._t_est_tel = self.t
+        ekf = self.sau.estimator
+        rep = self.est_mon.report(self.t, self.sau.est, ekf, self.sau.sensors)
+        if rep is None:
+            return None
+        rep["kind"] = ("TRUTH" if self.sensors_kind == "truth" else
+                       "REAL SENSORS + EKF" if ekf is not None else "REAL SENSORS, NO ESTIMATOR")
+        st = rep["filter"]
+        if st is not None:
+            n = (st["n_init"], st["n_gps_reset"], st["n_forced"])
+            seen = self._ekf_seen if n[0] == self._ekf_seen[0] else (n[0], 0, 0)
+            if n[0] != self._ekf_seen[0]:
+                self._event("EKF: выставка", "green", en="EKF: aligned")
+            if n[1] > seen[1]:
+                self._event("EKF: сброс к GPS", "orange", en="EKF: reset to GPS")
+            if n[2] > seen[2]:
+                self._event("EKF: коррекция без проверки (блокировка)", "orange", en="EKF: forced fusion")
+            self._ekf_seen = n
+        return rep
 
     # --- ввод ---------------------------------------------------------------
     def input(self, key):
@@ -516,8 +547,10 @@ class Game(Entity):
         self.cmd = full_controls(self._sau(s, Va, alpha, beta, dt) if self.ap
                                  else self._manual(dt))
         self.controls = actuator_step(self.controls, self.cmd, dt, self.ac)  # рули — с приводом
-        self.rec.append((self.t, s.copy(), self.controls.copy(), Va, alpha, beta,
+        s_rec = s.copy()
+        self.rec.append((self.t, s_rec, self.controls.copy(), Va, alpha, beta,
                          np.asarray(w_vec, float), self.cmd.copy()))
+        self.est_mon.push(self.t, s_rec, w_vec)
         if round(self.t / dt) % 10 == 0:
             self.trail.append(ned_to_u(s[X], s[Y], -s[H]))
             del self.trail[:-TRAIL_MAX]
