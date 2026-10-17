@@ -219,8 +219,10 @@ def main():
                     help="турбулентность Драйдена (табл. 4.1 B&M); в полёте — клавиша T")
     ap.add_argument("--turb-alt", default="low", choices=["low", "medium"],
                     help="параметры турбулентности: для 50 м (low) или 600 м (medium)")
-    ap.add_argument("--sensors", default="truth", choices=["truth", "real"],
+    ap.add_argument("--sensors", default="real", choices=["truth", "real"],
                     help="датчики САУ: истина или реалистичный набор (частоты, задержки, дрейф)")
+    ap.add_argument("--est", default="ekf", choices=["ekf", "none"],
+                    help="оценка состояния при --sensors real: EKF или «сырые» измерения")
     ap.add_argument("--h0", type=float, default=200.0, help="начальная высота, м")
     ap.add_argument("--cam", type=int, default=1, choices=[1, 2, 3, 4])
     ap.add_argument("--map", default="default", choices=list(MAPS), help="карта мира")
@@ -249,7 +251,7 @@ def main():
 
     app, terrain = make_app(f"Конструктор САУ — {MAPS[a.map].title}", a.map, size=WIN_3D)
     window.position = Vec2(0, 40)
-    game = Lab(aircraft, wind_params, cfg, terrain, q_cmd, q_tel, cam=a.cam, sensors=a.sensors)
+    game = Lab(aircraft, wind_params, cfg, terrain, q_cmd, q_tel, cam=a.cam, sensors=a.sensors, est=a.est)
     try:
         app.run()
     finally:
