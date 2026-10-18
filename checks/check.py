@@ -379,7 +379,8 @@ try:
                     lc.phi_ref > 0, f"phi_ref={np.degrees(lc.phi_ref):.1f}°")
 
     lc = LateralController(ap, LateralControlParams())
-    _, dr = lc.step({**level, 'beta': np.radians(3)}, cfg.dt)
+    for _ in range(2):                        # фильтр β: выход — состояние до обновления (шаг)
+        _, dr = lc.step({**level, 'beta': np.radians(3)}, cfg.dt)
     all_ok &= check("beta > 0 -> delta_r < 0 (нос вправо, на поток)", dr < 0,
                     f"δr={np.degrees(dr):.2f}°")
     lc = LateralController(ap, LateralControlParams(beta_hold=False))

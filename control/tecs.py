@@ -26,8 +26,19 @@ TECS — система управления полной энергией (Lamb
   δt*(V), α*(V) — балансировка горизонтального полёта (таблица по скорости),
   K_E = ∂δt/∂Ė = g/a_V2 — упреждение газа по требуемой производной энергии.
 
-V̇ — производная отфильтрованной Va (фильтр 1-го порядка τ_f); ḣ — вертикальная
-скорость GPS. Расчёт коэффициентов — control/tuning.py (design_sau → d.tecs).
+Va и V̇ — фильтр воздушной скорости (как TECSAirspeedFilter в PX4: показание ПВД, а не
+оценка EKF, плюс продольное ускорение). Есть акселерометр (est["ax"]) — комплементарный
+фильтр 2-го порядка:
+    V̇_f = f_x − g·sin θ + b,   Va_f' = V̇_f + 2ζ_V·ω_V·e,   b' = ω_V²·e,   e = Va_ПВД − Va_f
+  f_x — удельная сила по продольной оси (акселерометр минус оценка его смещения), м/с².
+  При постоянном ветре V̇a = â·(f + Rᵀg), â — орт воздушной скорости в связанной СК
+  (член ω × a перпендикулярен a); при малых α, β â ≈ (1, 0, 0) → f_x − g·sin θ. Ошибка
+  этого приближения (≈ q·w в развороте) и смещение акселерометра — медленные, их
+  убирает b. Передаточная функция по Va_ПВД — (2ζω s + ω²)/(s² + 2ζω s + ω²): выше ω_V
+  Va и V̇ идут от акселерометра, белый шум ПВД в V̇ не проходит (V̇_f не содержит e).
+Нет акселерометра (TruthSensors, NoisySensors: s8–s10) — V̇ = производная Va после фильтра
+1-го порядка τ_f (прежняя схема). ḣ — вертикальная скорость GPS (оценка EKF).
+Расчёт коэффициентов — control/tuning.py (design_sau → d.tecs).
 
 Режим PITCH (тангаж задан вручную): γ_ref = γ — высоту не держим, газ держит скорость.
 Защита от потери скорости: при Va < Va_min (полностью — на Va_min − Va_band)
@@ -46,7 +57,9 @@ class TECSParams:
     K_V: float = 0.5           # 1/с, контур скорости: V̇_ref = K_V·ΔV
     acc_max: float = 5.398     # м/с², предел |V̇_ref| = 0.7·(T(1) − D)/m
     w: float = 1.0             # вес высоты в балансе энергии
-    tau_f: float = 0.15        # с, фильтр Va перед дифференцированием
+    tau_f: float = 0.15        # с, фильтр Va перед дифференцированием (без акселерометра)
+    spd_w0: float = 1.0        # рад/с, ω_V фильтра Va (ПВД + акселерометр): ниже — по ПВД, выше — по f_x
+    spd_zeta: float = 0.9      # ζ_V фильтра Va
     K_E: float = 0.8516        # ∂δt/∂Ė = g/a_V2
     thr_Kp: float = 0.0        # газ: ПИ по e_E (П = 0: шум ПВД через V̇, tuning.py)
     thr_Ki: float = 1.703      # = ω_T·K_E, ω_T = 2 рад/с
@@ -87,6 +100,7 @@ class TECS:
         self.iE = 0.0          # ∫e_E — ошибка полной энергии
         self.reset_alt()
         self._Vf = None        # отфильтрованная Va
+        self._b = 0.0          # поправка продольного ускорения фильтра Va, м/с²
         self.V_ref = self.params.Va_tab[1]
         # Последний шаг — для журнала и окна стенда
         self.E_ref = self.E = self.B_ref = self.B = 0.0
@@ -99,16 +113,30 @@ class TECS:
         """Новая уставка высоты / смена режима: интеграл баланса с нуля."""
         self.iB = 0.0
 
+    def _airspeed(self, est, dt):
+        """Фильтр воздушной скорости → Va для контуров (возврат), self.Vdot. ПВД — est["Va_tas"]
+        (оцениватель заменяет est["Va"] своей оценкой), без оценивателя — est["Va"].
+        Без акселерометра контуры получают Va без фильтра (прежняя схема), фильтр τ_f —
+        только перед дифференцированием."""
+        pr, g = self.params, self.ac.g
+        Va_m = max(est.get("Va_tas", est["Va"]), 1.0)
+        if self._Vf is None:
+            self._Vf = Va_m
+        if "ax" not in est:                                  # нет акселерометра
+            Vf = self._Vf + dt / (pr.tau_f + dt) * (Va_m - self._Vf)
+            self.Vdot, self._Vf = (Vf - self._Vf) / dt, Vf
+            return Va_m
+        fx = est["ax"] - (est["b_acc"][0] if "b_acc" in est else 0.0)
+        e = Va_m - self._Vf
+        self.Vdot = fx - g * np.sin(est["theta"]) + self._b
+        self._b += pr.spd_w0**2 * e * dt
+        self._Vf += (self.Vdot + 2.0 * pr.spd_zeta * pr.spd_w0 * e) * dt
+        return self._Vf
+
     def step(self, refs, est, dt, hold_alt=True):
         pr, ac, g = self.params, self.ac, self.ac.g
-        V = max(est["Va"], 1.0)
         self.V_ref = refs.Va
-
-        # V̇ — производная отфильтрованной Va
-        if self._Vf is None:
-            self._Vf = V
-        Vf = self._Vf + dt / (pr.tau_f + dt) * (V - self._Vf)
-        self.Vdot, self._Vf = (Vf - self._Vf) / dt, Vf
+        V = max(self._airspeed(est, dt), 1.0)
         gamma = float(np.clip(est["hdot"] / V, -1.0, 1.0))
 
         # Защита от потери скорости: 0 — нет, 1 — полная

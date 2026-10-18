@@ -848,7 +848,7 @@ def lateral_standard(aircraft, lat=None):
     Боковой канал (LateralController):
       курс:  χ_ref − χ (кратчайшим путём) → [K_χ] + χ̇_уп = ω → [крен разворота arctg(Vg·ω/g)]
              → [насыщение ±φ_max] → [ограничение производной] = φ_ref → крен → δa
-      скольжение: β → [ПИ, предел И] → [×(−1)] + [K_mix]·δa → [насыщение ±δr_max] → δr
+      скольжение: β → [апериодическое τ_β] → [ПИ, предел И] → [×(−1)] + [K_mix]·δa → [насыщение ±δr_max] → δr
     Ограничитель уставки крена стартует с первой команды (LateralController — с текущего φ).
     """
     from .controllers import LateralControlParams
@@ -873,6 +873,7 @@ def lateral_standard(aircraft, lat=None):
         _blk("sc_phi", "Scope", 240, y_r + 230, title="крен φ, °"),
 
         _blk("in_beta", "Input", 20, y_b, signal="beta"),
+        _blk("f_b", "Aperiodic", 20, y_b + 80, K=1.0, T=lat.beta_tau),
         _blk("k_b", "PI", 170, y_b + 8, Kp=lat.beta_Kp, Ki=lat.beta_Ki,
              i_max=deg(lat.beta_Ki * lat.beta_integral_limit)),
         _blk("neg_b", "Gain", 330, y_b + 8, K=-1.0),
@@ -888,13 +889,13 @@ def lateral_standard(aircraft, lat=None):
         _w("in_Vg", "tb", 1), _w("tb", "sat_phi"), _w("sat_phi", "rl_phi"),
         _w("in_chi_ref", "sc_chi", 0), _w("in_chi", "sc_chi", 1),
         _w("rl_phi", "sc_phi", 0), _w("in_phi", "sc_phi", 1),
-        _w("in_beta", "k_b"), _w("k_b", "neg_b"), _w("neg_b", "s_dr", 0),
+        _w("in_beta", "f_b"), _w("f_b", "k_b"), _w("k_b", "neg_b"), _w("neg_b", "s_dr", 0),
         _w("sat_da", "k_mix"), _w("k_mix", "s_dr", 1), _w("s_dr", "sat_dr"),
         _w("sat_dr", "out_dr"), _w("in_beta", "sc_b", 0),
     ]
     if not lat.beta_hold:                    # РН в нейтрали: канал скольжения не нужен
         keep = {b["id"] for b in blocks if b["id"] not in
-                ("in_beta", "k_b", "neg_b", "k_mix", "s_dr", "sat_dr", "out_dr", "sc_b")}
+                ("in_beta", "f_b", "k_b", "neg_b", "k_mix", "s_dr", "sat_dr", "out_dr", "sc_b")}
         blocks = [b for b in blocks if b["id"] in keep]
         wires = [w for w in wires if w["src"] in keep and w["dst"] in keep]
     return {"blocks": blocks, "wires": wires}

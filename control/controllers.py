@@ -483,6 +483,12 @@ class LateralControlParams:
     beta_Kp: float = 0.5
     beta_Ki: float = 0.550   # ζ_β = 0.7
     beta_integral_limit: float = 0.2  # рад·с
+    # Фильтр β зонда — апериодическое звено 1/(τ_β·s + 1) перед ПИ (как Aperiodic в blocks.py:
+    # выход — состояние до обновления, старт с нуля). Без него белый шум зонда 0.57° идёт в δr
+    # с усилением Kp: ход δr за 50 с в штиль ≈ 1600° (моделирование). τ_β = 0.1 с — частота
+    # среза 10 рад/с выше голландского шага (7.4 рад/с на 16 м/с). ВРЕМЕННО: DEV_PLAN —
+    # контур рыскания по r и a_y, как в PX4 / ArduPilot (без датчика β).
+    beta_tau: float = 0.1     # с; 0 — без фильтра
     # Подмешивание элеронов в РН (ArduPilot KFF_RDDRMIX): δr += K·δa гасит момент
     # рыскания от элеронов сразу, не дожидаясь роста β. K = −N_δa / N_δr (tuning.py)
     da_dr_mix: float = -0.6536
@@ -504,7 +510,7 @@ class LateralController:
 
         beta_meas (зонд: УС)
           v
-        −[PI_beta] + da_dr_mix·delta_a -> delta_r  [Saturation ±delta_r_max]
+        [1/(τ_β·s + 1)] -> −[PI_beta] + da_dr_mix·delta_a -> delta_r  [Saturation ±delta_r_max]
         (beta_hold = False — руль направления в нейтрали, микс тоже выключен)
 
     Знаки (docs/physics.md, раздел 2): delta_a > 0 — крен вправо,
@@ -519,6 +525,7 @@ class LateralController:
         self.roll = RollController(aircraft, params.roll)
         self.pid_beta = PID(PIDParams(Kp=params.beta_Kp, Ki=params.beta_Ki,
                                       integral_limit=params.beta_integral_limit), name="beta")
+        self.beta_f = 0.0    # β после фильтра (состояние апериодического звена), рад
 
         self.chi_ref = 0.0
         self.kappa = 0.0     # кривизна заданной траектории, 1/м
@@ -530,6 +537,7 @@ class LateralController:
         """Сброс интегралов; ограничитель уставки крена стартует с текущего крена."""
         self.roll.reset()
         self.pid_beta.reset()
+        self.beta_f = 0.0
         self._phi_init = True
 
     def set_course(self, chi_ref: float, kappa: float = 0.0):
@@ -578,7 +586,10 @@ class LateralController:
         # Контур скольжения + микс элеронов -> руль направления
         if pr.beta_hold:
             self.dr_mix = pr.da_dr_mix * delta_a
-            delta_r = saturation(-self.pid_beta.step(meas['beta'], dt) + self.dr_mix,
+            beta = self.beta_f if pr.beta_tau > 0 else meas['beta']
+            a = np.exp(-dt / pr.beta_tau) if pr.beta_tau > 0 else 0.0
+            self.beta_f = a * self.beta_f + (1.0 - a) * meas['beta']
+            delta_r = saturation(-self.pid_beta.step(beta, dt) + self.dr_mix,
                                  -ac.delta_r_max, ac.delta_r_max)
         else:
             self.dr_mix, delta_r = 0.0, 0.0
