@@ -68,7 +68,9 @@ class SAUSpecs:
     tecs_K_V: float = 0.5     # 1/с, контур скорости
     tecs_w_T: float = 2.0     # рад/с, полоса контура полной энергии (газ)
     tecs_w_B: float = 2.0     # рад/с, полоса контура баланса (тангаж)
-    tecs_tau_f: float = 0.15  # с, фильтр Va перед дифференцированием (шум ПВД 0.2 м/с)
+    tecs_tau_f: float = 0.15  # с, фильтр Va перед дифференцированием (без акселерометра)
+    tecs_spd_w0: float = 1.0  # рад/с, ω_V фильтра Va (ПВД + акселерометр), ≈ 2·K_V
+    tecs_spd_zeta: float = 0.9
     tecs_w: float = 1.0       # вес высоты в балансе
     tecs_margin: float = 0.7  # доля располагаемой тяги на набор/разгон и газа на снижение
     tecs_Va_min: float = 1.25 # начало защиты от потери скорости, доля Va_stall
@@ -200,6 +202,10 @@ def design_sau(aircraft, Va: float, specs: SAUSpecs = None) -> SAUDesign:
     # П-часть (PX4 FW_T_THR_DAMP) не берём: шум ПВД проходит через дифференцирование
     # V̇ с усилением ω_T·K_E·σ_V/g независимо от τ_f (σ_газ 0.049 против 0.018 без
     # шума ПВД); интеграл V̇ — сама отфильтрованная Va, почти без шума.
+    # С акселерометром (RealisticSensors, 3D) V̇ — комплементарный фильтр ПВД + f_x
+    # (tecs.py): ω_V = 1 рад/с — вдвое выше полосы контура скорости K_V = 0.5 рад/с, чтобы
+    # фильтр не ограничивал контур; выше ω_V шум ПВД подавляется (ход δt за 50 с в штиль
+    # 9.1 → 0.8, моделирование).
     # Тангаж: Ḃ = 2γ − (2 − w)Ė → ∂Ḃ/∂θ ≈ 2 (γ ≈ θ − α*), так же: И с полосой ω_B.
     K_E = g / k["a_V2"]
     tf = sp.tecs_tau_f
@@ -213,7 +219,7 @@ def design_sau(aircraft, Va: float, specs: SAUSpecs = None) -> SAUDesign:
     tecs = TECSParams(
         K_h=sp.tecs_K_h, K_V=sp.tecs_K_V,
         acc_max=sp.tecs_margin * k["E_max"] * g,
-        w=sp.tecs_w, tau_f=tf, K_E=K_E,
+        w=sp.tecs_w, tau_f=tf, spd_w0=sp.tecs_spd_w0, spd_zeta=sp.tecs_spd_zeta, K_E=K_E,
         thr_Kp=0.0, thr_Ki=sp.tecs_w_T * K_E,
         pit_Kp=0.0, pit_Ki=sp.tecs_w_B / 2,
         theta_max=np.radians(sp.theta_max), theta_min=-np.radians(sp.theta_max),

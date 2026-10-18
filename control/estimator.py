@@ -429,6 +429,7 @@ class StateEstimator:
         om = np.array([m["p"], m["q"], m["r"]]) - self.bg
         Va = meas_airspeed(q, v, self.w)[0][0] if self.pr.use_airdata else m["Va"]
         est = dict(m)
+        est["Va_tas"] = m["Va"]                     # показание ПВД — для фильтра Va в TECS
         est.update({"phi": phi, "theta": theta, "psi": psi,
                     "p": om[0], "q": om[1], "r": om[2],
                     "h": -p[2], "hdot": -v[2], "pn": p[0], "pe": p[1],

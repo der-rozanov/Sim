@@ -56,7 +56,7 @@ SLIDER_POS = {
     "pit_Kp": (500, 196, 100, C_BOX), "pit_Ki": (500, 241, 100, C_BOX),
     "theta_lim": (680, 230, 66, C_SAT),
     "Va_min": (830, 110, 110, C_BOX),
-    "tau_f": (850, 300, 120, C_BOX),
+    "spd_w0": (850, 300, 120, C_BOX),
     # тангаж
     "theta_Kp": (350, 55, 100, C_BOX), "theta_Ki": (350, 112, 100, C_BOX),
     "theta_Kd": (350, 169, 100, C_BOX),
@@ -68,6 +68,7 @@ SLIDER_POS = {
     "beta_hold": (215, 80, 0, C_BOX),
     "beta_Kp": (215, 108, 110, C_BOX), "beta_Ki": (215, 165, 110, C_BOX),
     "dr_mix": (340, 240, 90, C_BOX),
+    "beta_tau": (92, 275, 84, C_BOX),
     "dr_max": (480, 152, 80, C_SAT),
     # защита по α
     "prot_on": (1010, 60, 0, C_BOX),
@@ -394,7 +395,7 @@ class Panel:
         V(cv, 250, 349, lambda m: f"Va = {m['Va']:.2f} м/с", C_MEAS)
         self._box(cv, 770, 296, 930, 348, "")                            # фильтр Va
         A(cv, 995, 280, 995, 322, 930, 322)
-        cv.create_text(1000, 300, text="ḣ, Va", font=FONT_B, fill=C_MEAS, anchor="w")
+        cv.create_text(1000, 300, text="ḣ, Va, f_x", font=FONT_B, fill=C_MEAS, anchor="w")
         A(cv, 770, 322, 760, 322)
         self._box(cv, 430, 302, 760, 348, "Ė = ḣ/Va + V̇/g,   Ḃ = wγ − (2−w)V̇/g")
         V(cv, 595, 335, lambda m: f"Ė·Va = {m['E']:+.2f}   Ḃ·Va = {m['B']:+.2f} м/с", C_MEAS)
@@ -429,7 +430,9 @@ class Panel:
         V(cv, 565, Y - 15, lambda m: f"{m['dr']:+.2f}°", C_CTRL)
         self._box(cv, 600, 110, 690, 190, "ЛА")
         cv.create_text(645, 155, text="6DOF", font=FONT)
-        A(cv, 690, Y, 740, Y, 740, 355, 95, 355, 95, 161)                # β (зонд УС)
+        A(cv, 690, Y, 740, Y, 740, 355, 95, 355, 95, 335)                # β (зонд УС)
+        self._box(cv, 40, 245, 145, 335, "фильтр β")                       # 1/(τ_β·s + 1)
+        A(cv, 95, 245, 95, 161)
         cv.create_text(700, 142, text="β", font=FONT_B, fill=C_MEAS, anchor="w")
         V(cv, 560, 343, lambda m: f"β = {m['beta']:+.2f}°", C_MEAS)
         cv.create_text(760, 70, anchor="nw", font=FONT, fill="#555", justify="left",
@@ -441,7 +444,7 @@ class Panel:
                             "ступеньку курса и сравните\nс выключенным контуром.\n"
                             "Толчок δr — возмущение по рысканию.")
         self._footer(cv, "δr = −(Kp·β + Ki·∫β) + K·δa;  флажок выкл — РН в нейтрали (δr = 0, микс тоже). "
-                         "β измеряется истинный (без шума).")
+                         "β — зонд УС через фильтр 1/(τ_β·s + 1).")
 
     def _draw_prot(self, cv):
         A, V = self._arrow, self._val

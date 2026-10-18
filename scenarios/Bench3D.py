@@ -111,7 +111,7 @@ def param_spec(aircraft):
         ("tecs", "pit_Ki", "Ki", 0.0, 3.0, 0.01, tp.pit_Ki),
         ("tecs", "theta_lim", "±θ_max, °", 5.0, 30.0, 1.0, deg(tp.theta_max)),
         ("tecs", "Va_min", "Va_min, м/с", 5.0, 14.0, 0.1, round(tp.Va_min, 1)),
-        ("tecs", "tau_f", "τ_f, с", 0.02, 0.5, 0.01, tp.tau_f),
+        ("tecs", "spd_w0", "ω_V фильтра Va, рад/с", 0.2, 5.0, 0.05, tp.spd_w0),
 
         ("pitch", "theta_Kp", "Kp", 0.0, 40.0, 0.1, pit.theta_Kp),
         ("pitch", "theta_Ki", "Ki", 0.0, 2.0, 0.02, pit.theta_Ki),
@@ -126,6 +126,7 @@ def param_spec(aircraft):
         ("yaw", "beta_hold", "контур β вкл", None, None, None, lat.beta_hold),
         ("yaw", "beta_Kp", "Kp", 0.0, 2.0, 0.02, lat.beta_Kp),
         ("yaw", "beta_Ki", "Ki", 0.0, 2.0, 0.01, lat.beta_Ki),
+        ("yaw", "beta_tau", "τ_β, с", 0.0, 0.5, 0.01, lat.beta_tau),
         ("yaw", "dr_mix", "K δa→δr", -1.5, 0.5, 0.005, round(lat.da_dr_mix, 3)),
         ("yaw", "dr_max", "±δr_max, °", 2.0, 30.0, 1.0, deg(aircraft.delta_r_max)),
 
@@ -178,7 +179,7 @@ def apply_params(g, v):
     tp.gamma_sink_tab = tuple(min(x, r(v["g_sink"])) for x in dn)
     tp.thr_Kp, tp.thr_Ki, tp.pit_Kp, tp.pit_Ki = v["thr_Kp"], v["thr_Ki"], v["pit_Kp"], v["pit_Ki"]
     tp.theta_max, tp.theta_min = r(v["theta_lim"]), -r(v["theta_lim"])
-    tp.Va_min, tp.tau_f = v["Va_min"], v["tau_f"]
+    tp.Va_min, tp.spd_w0 = v["Va_min"], v["spd_w0"]
     pit.pid_theta.Kp, pit.pid_theta.Ki, pit.pid_theta.Kd = v["theta_Kp"], v["theta_Ki"], v["theta_Kd"]
     pit.q_max, pit.q_min = r(v["q_max"]), -r(v["q_max"])
     pit.pid_q.Kp, pit.pid_q.Ki, pit.pid_q.Kd = v["q_Kp"], v["q_Ki"], v["q_Kd"]
@@ -187,6 +188,7 @@ def apply_params(g, v):
 
     lat.params.beta_hold = bool(v["beta_hold"])
     lat.pid_beta.Kp, lat.pid_beta.Ki = v["beta_Kp"], v["beta_Ki"]
+    lat.params.beta_tau = v["beta_tau"]
     lat.params.da_dr_mix = v["dr_mix"]
     lat.aircraft.delta_r_max = r(v["dr_max"])
 
