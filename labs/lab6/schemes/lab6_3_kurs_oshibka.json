@@ -1,0 +1,551 @@
+{
+ "blocks": [
+  {
+   "id": "in_phi",
+   "type": "Input",
+   "x": 20,
+   "y": 450,
+   "p": {
+    "signal": "phi"
+   }
+  },
+  {
+   "id": "in_p",
+   "type": "Input",
+   "x": 400,
+   "y": 550,
+   "p": {
+    "signal": "p"
+   }
+  },
+  {
+   "id": "in_Va",
+   "type": "Input",
+   "x": 560,
+   "y": 640,
+   "p": {
+    "signal": "Va"
+   }
+  },
+  {
+   "id": "s_phi",
+   "type": "Sum",
+   "x": 170,
+   "y": 360,
+   "p": {
+    "signs": "+-"
+   }
+  },
+  {
+   "id": "k_tau",
+   "type": "Gain",
+   "x": 240,
+   "y": 368,
+   "p": {
+    "K": 4.0
+   }
+  },
+  {
+   "id": "sat_p",
+   "type": "Sat",
+   "x": 400,
+   "y": 368,
+   "p": {
+    "min": -119.99999999999999,
+    "max": 119.99999999999999
+   }
+  },
+  {
+   "id": "k_ff",
+   "type": "Gain",
+   "x": 560,
+   "y": 368,
+   "p": {
+    "K": 0.09438
+   }
+  },
+  {
+   "id": "gs_ff",
+   "type": "VaScale",
+   "x": 720,
+   "y": 360,
+   "p": {
+    "V0": 16.0,
+    "n": 1.0,
+    "k_min": 0.5,
+    "k_max": 2.0
+   }
+  },
+  {
+   "id": "s_p",
+   "type": "Sum",
+   "x": 560,
+   "y": 490,
+   "p": {
+    "signs": "+-"
+   }
+  },
+  {
+   "id": "k_p",
+   "type": "PI",
+   "x": 640,
+   "y": 498,
+   "p": {
+    "Kp": 0.03211,
+    "Ki": 0.1284,
+    "i_max": 3.4356153677870527,
+    "y_max": 0.0
+   }
+  },
+  {
+   "id": "gs_p",
+   "type": "VaScale",
+   "x": 800,
+   "y": 490,
+   "p": {
+    "V0": 16.0,
+    "n": 2.0,
+    "k_min": 0.25,
+    "k_max": 4.0
+   }
+  },
+  {
+   "id": "s_da",
+   "type": "Sum",
+   "x": 960,
+   "y": 420,
+   "p": {
+    "signs": "++"
+   }
+  },
+  {
+   "id": "sat_da",
+   "type": "Sat",
+   "x": 1040,
+   "y": 428,
+   "p": {
+    "min": -24.99814860155782,
+    "max": 24.99814860155782
+   }
+  },
+  {
+   "id": "out_da",
+   "type": "Output",
+   "x": 1200,
+   "y": 428,
+   "p": {
+    "act": "da"
+   }
+  },
+  {
+   "id": "sc_p",
+   "type": "Scope",
+   "x": 960,
+   "y": 580,
+   "p": {
+    "title": "угл. скорость крена p, °/с",
+    "n": 2
+   }
+  },
+  {
+   "id": "in_chi_ref",
+   "type": "Input",
+   "x": 20,
+   "y": 50,
+   "p": {
+    "signal": "chi_ref"
+   }
+  },
+  {
+   "id": "in_chi",
+   "type": "Input",
+   "x": 20,
+   "y": 140,
+   "p": {
+    "signal": "chi"
+   }
+  },
+  {
+   "id": "in_chidot_ff",
+   "type": "Input",
+   "x": 330,
+   "y": 140,
+   "p": {
+    "signal": "chidot_ff"
+   }
+  },
+  {
+   "id": "in_Vg",
+   "type": "Input",
+   "x": 500,
+   "y": 160,
+   "p": {
+    "signal": "Vg"
+   }
+  },
+  {
+   "id": "e_chi",
+   "type": "Sum",
+   "x": 170,
+   "y": 50,
+   "p": {
+    "signs": "+-"
+   }
+  },
+  {
+   "id": "k_chi",
+   "type": "Gain",
+   "x": 330,
+   "y": 58,
+   "p": {
+    "K": 1.0
+   }
+  },
+  {
+   "id": "s_w",
+   "type": "Sum",
+   "x": 500,
+   "y": 60,
+   "p": {
+    "signs": "++"
+   }
+  },
+  {
+   "id": "tb",
+   "type": "TurnBank",
+   "x": 580,
+   "y": 60,
+   "p": {
+    "g": 9.81
+   }
+  },
+  {
+   "id": "sat_phi",
+   "type": "Sat",
+   "x": 760,
+   "y": 68,
+   "p": {
+    "min": -29.999999999999996,
+    "max": 29.999999999999996
+   }
+  },
+  {
+   "id": "rl_phi",
+   "type": "RateLim",
+   "x": 920,
+   "y": 68,
+   "p": {
+    "rate": 90.0
+   }
+  },
+  {
+   "id": "sc_chi",
+   "type": "Scope",
+   "x": 760,
+   "y": 200,
+   "p": {
+    "title": "путевой угол χ, °",
+    "n": 2
+   }
+  },
+  {
+   "id": "sc_phi",
+   "type": "Scope",
+   "x": 240,
+   "y": 590,
+   "p": {
+    "title": "крен φ, °",
+    "n": 2
+   }
+  },
+  {
+   "id": "in_beta",
+   "type": "Input",
+   "x": 20,
+   "y": 720,
+   "p": {
+    "signal": "beta"
+   }
+  },
+  {
+   "id": "f_b",
+   "type": "Aperiodic",
+   "x": 20,
+   "y": 800,
+   "p": {
+    "K": 1.0,
+    "T": 0.1
+   }
+  },
+  {
+   "id": "k_b",
+   "type": "PI",
+   "x": 170,
+   "y": 728,
+   "p": {
+    "Kp": 0.5,
+    "Ki": 0.55,
+    "i_max": 6.302535746439056,
+    "y_max": 0.0
+   }
+  },
+  {
+   "id": "neg_b",
+   "type": "Gain",
+   "x": 330,
+   "y": 728,
+   "p": {
+    "K": -1.0
+   }
+  },
+  {
+   "id": "k_mix",
+   "type": "Gain",
+   "x": 330,
+   "y": 820,
+   "p": {
+    "K": -0.6536
+   }
+  },
+  {
+   "id": "s_dr",
+   "type": "Sum",
+   "x": 500,
+   "y": 730,
+   "p": {
+    "signs": "++"
+   }
+  },
+  {
+   "id": "sat_dr",
+   "type": "Sat",
+   "x": 580,
+   "y": 738,
+   "p": {
+    "min": -24.99814860155782,
+    "max": 24.99814860155782
+   }
+  },
+  {
+   "id": "out_dr",
+   "type": "Output",
+   "x": 740,
+   "y": 738,
+   "p": {
+    "act": "dr"
+   }
+  },
+  {
+   "id": "sc_b",
+   "type": "Scope",
+   "x": 740,
+   "y": 830,
+   "p": {
+    "title": "скольжение β, °",
+    "n": 1
+   }
+  }
+ ],
+ "wires": [
+  {
+   "src": "rl_phi",
+   "dst": "s_phi",
+   "port": 0
+  },
+  {
+   "src": "in_phi",
+   "dst": "s_phi",
+   "port": 1
+  },
+  {
+   "src": "s_phi",
+   "dst": "k_tau",
+   "port": 0
+  },
+  {
+   "src": "k_tau",
+   "dst": "sat_p",
+   "port": 0
+  },
+  {
+   "src": "sat_p",
+   "dst": "k_ff",
+   "port": 0
+  },
+  {
+   "src": "k_ff",
+   "dst": "gs_ff",
+   "port": 0
+  },
+  {
+   "src": "in_Va",
+   "dst": "gs_ff",
+   "port": 1
+  },
+  {
+   "src": "sat_p",
+   "dst": "s_p",
+   "port": 0
+  },
+  {
+   "src": "in_p",
+   "dst": "s_p",
+   "port": 1
+  },
+  {
+   "src": "s_p",
+   "dst": "k_p",
+   "port": 0
+  },
+  {
+   "src": "k_p",
+   "dst": "gs_p",
+   "port": 0
+  },
+  {
+   "src": "in_Va",
+   "dst": "gs_p",
+   "port": 1
+  },
+  {
+   "src": "gs_ff",
+   "dst": "s_da",
+   "port": 0
+  },
+  {
+   "src": "gs_p",
+   "dst": "s_da",
+   "port": 1
+  },
+  {
+   "src": "s_da",
+   "dst": "sat_da",
+   "port": 0
+  },
+  {
+   "src": "sat_da",
+   "dst": "out_da",
+   "port": 0
+  },
+  {
+   "src": "sat_p",
+   "dst": "sc_p",
+   "port": 0
+  },
+  {
+   "src": "in_p",
+   "dst": "sc_p",
+   "port": 1
+  },
+  {
+   "src": "in_chi_ref",
+   "dst": "e_chi",
+   "port": 0
+  },
+  {
+   "src": "in_chi",
+   "dst": "e_chi",
+   "port": 1
+  },
+  {
+   "src": "e_chi",
+   "dst": "k_chi",
+   "port": 0
+  },
+  {
+   "src": "k_chi",
+   "dst": "s_w",
+   "port": 0
+  },
+  {
+   "src": "in_chidot_ff",
+   "dst": "s_w",
+   "port": 1
+  },
+  {
+   "src": "s_w",
+   "dst": "tb",
+   "port": 0
+  },
+  {
+   "src": "in_Vg",
+   "dst": "tb",
+   "port": 1
+  },
+  {
+   "src": "tb",
+   "dst": "sat_phi",
+   "port": 0
+  },
+  {
+   "src": "sat_phi",
+   "dst": "rl_phi",
+   "port": 0
+  },
+  {
+   "src": "in_chi_ref",
+   "dst": "sc_chi",
+   "port": 0
+  },
+  {
+   "src": "in_chi",
+   "dst": "sc_chi",
+   "port": 1
+  },
+  {
+   "src": "rl_phi",
+   "dst": "sc_phi",
+   "port": 0
+  },
+  {
+   "src": "in_phi",
+   "dst": "sc_phi",
+   "port": 1
+  },
+  {
+   "src": "in_beta",
+   "dst": "f_b",
+   "port": 0
+  },
+  {
+   "src": "f_b",
+   "dst": "k_b",
+   "port": 0
+  },
+  {
+   "src": "k_b",
+   "dst": "neg_b",
+   "port": 0
+  },
+  {
+   "src": "neg_b",
+   "dst": "s_dr",
+   "port": 0
+  },
+  {
+   "src": "sat_da",
+   "dst": "k_mix",
+   "port": 0
+  },
+  {
+   "src": "k_mix",
+   "dst": "s_dr",
+   "port": 1
+  },
+  {
+   "src": "s_dr",
+   "dst": "sat_dr",
+   "port": 0
+  },
+  {
+   "src": "sat_dr",
+   "dst": "out_dr",
+   "port": 0
+  },
+  {
+   "src": "in_beta",
+   "dst": "sc_b",
+   "port": 0
+  }
+ ]
+}
