@@ -58,8 +58,10 @@
 ```bash
 git clone https://github.com/der-rozanov/Sim
 cd Sim
-pip install numpy matplotlib scipy ursina
+pip install -r requirements.txt
 ```
+
+Версии в `requirements.txt` закреплены (`==`) — на них проверен проект.
 
 | Пакет | Где нужен |
 |---|---|
@@ -67,7 +69,7 @@ pip install numpy matplotlib scipy ursina
 | `scipy` | только LQR (`control/lqr.py`) |
 | `ursina` (тянет `pillow`) | только 3D: тренажёр, стенд, карты |
 
-Python 3.10+. Спутниковый снимок и рельеф для карты [место] скачиваются при первом
+Python 3.12 (проверено на 3.12.10). Спутниковый снимок и рельеф для карты [место] скачиваются при первом
 запуске в `viz/map_cache/` (в репозиторий не входят).
 
 ---
