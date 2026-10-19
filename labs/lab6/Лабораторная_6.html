@@ -1,0 +1,644 @@
+<meta charset="utf-8">
+<title>Лабораторная 6 · Синтез САУ</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Russo+One&family=PT+Sans:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: лётный протокол — шапка-карта, три задания с цветной полосой канала, рабочие таблицы */
+:root {
+  --bg: #eef2f7; --surface: #ffffff; --ink: #14233a; --muted: #56677d; --line: #d3dce8;
+  --m1: #1f6fd1; --m1-soft: #e3eefc;
+  --m2: #c87500; --m2-soft: #fdf0dc;
+  --m3: #c2337a; --m3-soft: #fbe5f0;
+  --ok: #1d8a5b;
+  --f-display: "Russo One", "Arial Black", system-ui, sans-serif;
+  --f-body: "PT Sans", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", Consolas, "Courier New", monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0d1520; --surface: #152132; --ink: #e5ecf5; --muted: #9db0c6; --line: #2a3a50;
+  --m1: #63a6ff; --m1-soft: #16304f; --m2: #ffb347; --m2-soft: #3a2a10; --m3: #ff6fb1; --m3-soft: #3d1a2c;
+  --ok: #4fd39a; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0d1520; --surface: #152132; --ink: #e5ecf5; --muted: #9db0c6; --line: #2a3a50;
+  --m1: #63a6ff; --m1-soft: #16304f; --m2: #ffb347; --m2-soft: #3a2a10; --m3: #ff6fb1; --m3-soft: #3d1a2c;
+  --ok: #4fd39a; color-scheme: dark }
+
+* { box-sizing: border-box }
+body { background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 17px; line-height: 1.55;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 32px 64px }
+.wrap { max-width: 980px; margin: 0 auto; display: grid; gap: 40px }
+h1, h2, h3 { font-family: var(--f-display); font-weight: 400; text-wrap: balance; margin: 0; line-height: 1.15 }
+h1 { font-size: clamp(30px, 5vw, 48px) }
+h2 { font-size: clamp(24px, 3.4vw, 32px) }
+h3 { font-size: 19px; margin-top: 8px }
+p, li { max-width: 72ch }
+p { margin: 0 }
+code, .mono { font-family: var(--f-mono); font-size: 0.86em }
+code { background: color-mix(in srgb, var(--line) 55%, transparent); padding: 1px 5px; border-radius: 4px }
+.muted { color: var(--muted) }
+.eyebrow { font-family: var(--f-mono); font-size: 13px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted) }
+
+/* шапка */
+.hero { display: grid; gap: 18px }
+.hero .lead { font-size: 19px; max-width: 64ch }
+.missions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px }
+.missions a { text-decoration: none; color: var(--ink); background: var(--surface); border: 1px solid var(--line);
+  border-top: 6px solid var(--c); border-radius: 10px; padding: 14px 16px; display: grid; gap: 4px }
+.missions a:hover, .missions a:focus-visible { background: var(--soft); outline: none }
+.missions b { font-family: var(--f-display); font-weight: 400; font-size: 18px; color: var(--c) }
+.missions span { font-size: 14px; color: var(--muted) }
+@media (max-width: 720px) { .missions { grid-template-columns: 1fr } }
+
+/* общие блоки */
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px 22px; display: grid; gap: 12px; min-width: 0 }
+.cmd { font-family: var(--f-mono); font-size: 14px; background: var(--ink); color: var(--bg); border-radius: 8px;
+  padding: 10px 14px; overflow-x: auto; white-space: pre }
+ol, ul { margin: 0; padding-left: 1.3em; display: grid; gap: 6px }
+.two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px }
+@media (max-width: 720px) { .two { grid-template-columns: 1fr } }
+
+/* задания */
+.mission { display: grid; gap: 18px; scroll-margin-top: 16px }
+.band { border-radius: 14px; padding: 22px 24px; background: var(--soft); border-left: 10px solid var(--c); display: grid; gap: 8px }
+.band .eyebrow { color: var(--c) }
+.band h2 { color: var(--ink) }
+.band .goal { font-size: 18px }
+.slides { display: flex; flex-wrap: wrap; gap: 6px }
+.chip { font-family: var(--f-mono); font-size: 12.5px; border: 1px solid var(--c); color: var(--c); border-radius: 99px; padding: 2px 10px; background: var(--surface) }
+.m1 { --c: var(--m1); --soft: var(--m1-soft) }
+.m2 { --c: var(--m2); --soft: var(--m2-soft) }
+.m3 { --c: var(--m3); --soft: var(--m3-soft) }
+.step-h { font-family: var(--f-display); font-size: 17px; color: var(--c); display: flex; gap: 10px; align-items: baseline }
+.step-h .tag { font-family: var(--f-mono); font-size: 13px; background: var(--c); color: var(--surface); padding: 1px 8px; border-radius: 5px }
+.trap { border: 2px dashed var(--c); border-radius: 12px; padding: 14px 18px; display: grid; gap: 6px; background: var(--surface) }
+.trap b { color: var(--c) }
+.q { display: grid; gap: 8px }
+.q li::marker { color: var(--c); font-weight: 700 }
+.star { border-radius: 12px; padding: 14px 18px; background: var(--surface); border: 1px solid var(--line); display: grid; gap: 6px }
+.star h3 { color: var(--c); font-size: 17px }
+
+figure { margin: 0; display: grid; gap: 8px }
+figure img { background: #fff; border-radius: 10px; border: 1px solid var(--line); width: 100%; height: auto; display: block }
+figcaption { font-size: 14.5px; color: var(--muted) }
+
+/* структурные схемы */
+.diagram { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 10px }
+.diagram svg { display: block; min-width: 760px; width: 100%; height: auto }
+.diagram .bx { fill: var(--surface); stroke: var(--c); stroke-width: 2 }
+.diagram .bx.plant { fill: var(--soft) }
+.diagram .bx.hot { fill: var(--soft); stroke-dasharray: 5 4 }
+.diagram .sm { fill: var(--surface); stroke: var(--ink); stroke-width: 1.6 }
+.diagram text { fill: var(--ink); font-family: var(--f-mono); font-size: 13px }
+.diagram text.s { font-size: 11px; fill: var(--muted) }
+.diagram text.big { font-family: var(--f-display); font-size: 14px }
+.diagram .ar { stroke: var(--muted); stroke-width: 1.6; fill: none }
+.m1 .ar { marker-end: url(#a1) } .m2 .ar { marker-end: url(#a2) } .m3 .ar { marker-end: url(#a3) }
+.diagram .fb { stroke: var(--c); stroke-width: 1.6; fill: none; stroke-dasharray: 6 4 }
+.m1 .fb { marker-end: url(#b1) } .m2 .fb { marker-end: url(#b2) } .m3 .fb { marker-end: url(#b3) }
+.diagram marker path { fill: var(--muted) }
+.diagram marker.c path { fill: var(--c) }
+
+
+/* схемы сборки — вид окна редактора (светлый холст в обеих темах, как в самом редакторе) */
+.edcanvas { overflow-x: auto; background: #ffffff; border: 1px solid var(--line); border-radius: 10px; padding: 12px;
+  background-image: radial-gradient(#dfe5ee 1px, transparent 1px); background-size: 10px 10px }
+.edcanvas svg.ed { display: block; min-width: 860px; width: 100%; height: auto }
+.ed .bt { font-family: "Segoe UI", var(--f-body); font-size: 15.5px; font-weight: 700; fill: #1b1b1b; text-anchor: middle }
+.ed .bp { font-family: var(--f-mono); font-size: 14px; fill: #2f4f8a; text-anchor: middle }
+.ed .sg { font-family: var(--f-mono); font-size: 13px; fill: #1b1b1b }
+.ed .wr { stroke: #2b4a7a; stroke-width: 1.8; fill: none }
+.ed .wl { font-family: var(--f-mono); font-size: 14px; fill: #b0306a }
+
+/* таблицы */
+.tbl { overflow-x: auto }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; font-size: 15px; min-width: 520px }
+th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left }
+th { background: var(--soft, var(--bg)); font-weight: 700 }
+td.blank { min-width: 80px }
+td.blank::after { content: ""; display: block; height: 1.1em }
+
+.report { display: grid; gap: 10px }
+footer { font-size: 14px; color: var(--muted) }
+@media (prefers-reduced-motion: no-preference) { .missions a { transition: background .15s } }
+</style>
+
+<div class="wrap">
+
+<header class="hero">
+  <div class="eyebrow">Лекция 6 · Синтез САУ · B&amp;M, гл. 6 · Конструктор САУ (BlockLab3D)</div>
+  <h1>Лабораторная работа 6. Синтез контуров САУ методом последовательного замыкания</h1>
+  <p class="lead">В работе контуры САУ собираются из типовых звеньев в редакторе структурных схем, испытываются
+    на 6DOF-модели FPV-самолёта и оцениваются по показателям качества переходного процесса. Исходный код
+    симулятора не изменяется: параметры задаются в редакторе схем, воздействия — кнопками уставок,
+    условия опыта — аргументами запуска.</p>
+  <nav class="missions" aria-label="Задания">
+    <a class="m1" href="#m1"><b>Задание 1 · Контур тангажа</b><span>П-регулятор, граница устойчивости, каскад θ → q</span></a>
+    <a class="m2" href="#m2"><b>Задание 2 · Контур высоты</b><span>насыщение и защита интегратора от накопления</span></a>
+    <a class="m3" href="#m3"><b>Задание 3 · Контур курса</b><span>нормализация угла, полоса пропускания контура</span></a>
+  </nav>
+</header>
+
+<section class="panel" aria-labelledby="prep">
+  <h2 id="prep">Условия опытов и методика измерений</h2>
+  <p>Команды выполняются из корня проекта. Флаг <code>--sensors truth</code> исключает шум и запаздывание
+    датчиков; это обеспечивает воспроизводимость результатов и их сопоставимость между бригадами.</p>
+  <div class="cmd">python scenarios/BlockLab3D.py --sensors truth --template "Заготовка: тангаж → δe"</div>
+  <div class="two">
+    <div class="q">
+      <h3>Работа со стендом</h3>
+      <ul>
+        <li>«▶ Применить» (<code>Ctrl+Enter</code>) проверяет схему; «Схема: ВКЛ» подключает её выходы к приводам рулей.
+          Приводы, не подключённые к схеме, управляются штатной САУ.</li>
+        <li>При расходящихся колебаниях нажмите «Схема: ВЫКЛ»: управление вернётся к штатной САУ.</li>
+        <li>Параметры блока открываются двойным щелчком. Текущие значения сигналов отображаются рядом с блоками.</li>
+        <li>Клавиша <code>R</code> в 3D-окне начинает новый опыт; запись предыдущего сохраняется в <code>results/*.flightlog</code>.</li>
+      </ul>
+    </div>
+    <div class="q">
+      <h3>Показатели качества</h3>
+      <ul>
+        <li>Перерегулирование σ = (y_max − y_уст) / Δy · 100 %.</li>
+        <li>Время установления t_уст — интервал от подачи ступенчатого воздействия до момента, после которого
+          |y − y_уст| ≤ 0.05·|Δy|.</li>
+        <li>Осциллограф отображает последние 20 с. Количественные значения определяются по записи опыта:
+          <code>python viz/viewer.py results/&lt;файл&gt;.flightlog --static</code></li>
+      </ul>
+    </div>
+  </div>
+  <figure>
+    <img src="img/fig1_metrics.png" alt="Переходный процесс по тангажу при ступенчатом воздействии +5 градусов: перерегулирование 32 процента, время установления 0.6 с, П-регулятор с Kp 1.5" loading="lazy">
+    <figcaption>Рис. 1. Определение σ и t_уст по переходному процессу. П-регулятор тангажа, Kp = 1.5;
+      FPV-самолёт, Va = 16 м/с, штиль. Моделирование.</figcaption>
+  </figure>
+</section>
+
+<!-- ===================================================== ЗАДАНИЕ 1 -->
+<section class="mission m1" id="m1">
+  <div class="band">
+    <div class="eyebrow">Задание 1 · продольный канал · δe</div>
+    <h2>Контур тангажа: от П-регулятора к каскадной структуре</h2>
+    <p class="goal">Определить границу устойчивости контура тангажа с П-регулятором по углу θ и оценить влияние
+      внутреннего контура по угловой скорости q на перерегулирование и время установления каскадной системы.</p>
+    <div class="slides"><span class="chip">слайды 4–6: последовательное замыкание контуров</span><span class="chip">слайд 19: удержание тангажа</span><span class="chip">слайды 29–30: ПИД-регулятор</span></div>
+  </div>
+
+  <div class="diagram" role="img" aria-label="Структурная схема каскадного контура тангажа: уставка тангажа, сумматор, коэффициент K тета, уставка угловой скорости, сумматор, коэффициент Kq, смена знака, прибавка балансировочного отклонения руля, насыщение плюс-минус 25 градусов, руль высоты, объект управления; обратные связи по q и по тета">
+    <svg viewBox="0 0 980 210" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="b1" class="c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <text x="6" y="66">θ_ref</text>
+      <line class="ar" x1="50" y1="62" x2="84" y2="62"/>
+      <circle class="sm" cx="98" cy="62" r="14"/><text x="91" y="67">Σ</text><text class="s" x="80" y="92">−</text>
+      <line class="ar" x1="112" y1="62" x2="146" y2="62"/>
+      <rect class="bx" x="148" y="40" width="74" height="44" rx="6"/><text class="big" x="165" y="67">Kθ</text>
+      <line class="ar" x1="222" y1="62" x2="292" y2="62"/><text x="232" y="54" class="s">q_ref</text>
+      <circle class="sm" cx="306" cy="62" r="14"/><text x="299" y="67">Σ</text><text class="s" x="288" y="92">−</text>
+      <line class="ar" x1="320" y1="62" x2="352" y2="62"/>
+      <rect class="bx" x="354" y="40" width="74" height="44" rx="6"/><text class="big" x="372" y="67">Kq</text>
+      <line class="ar" x1="428" y1="62" x2="458" y2="62"/>
+      <rect class="bx" x="460" y="40" width="58" height="44" rx="6"/><text class="big" x="473" y="67">−1</text>
+      <line class="ar" x1="518" y1="62" x2="550" y2="62"/>
+      <circle class="sm" cx="564" cy="62" r="14"/><text x="557" y="67">Σ</text>
+      <text class="s" x="530" y="20">δe*</text><line class="ar" x1="564" y1="26" x2="564" y2="46"/>
+      <line class="ar" x1="578" y1="62" x2="610" y2="62"/>
+      <rect class="bx" x="612" y="40" width="92" height="44" rx="6"/><text x="622" y="60">насыщ.</text><text class="s" x="624" y="76">±25°</text>
+      <line class="ar" x1="704" y1="62" x2="752" y2="62"/><text x="718" y="54">δe</text>
+      <rect class="bx plant" x="754" y="34" width="150" height="56" rx="8"/><text class="big" x="776" y="60">привод + ЛА</text><text class="s" x="776" y="78">6DOF, FPV 2 кг</text>
+      <line class="ar" x1="904" y1="62" x2="972" y2="62"/><text x="930" y="54">θ</text>
+      <path class="fb" d="M 830 90 L 830 132 L 306 132 L 306 78"/><text x="560" y="126" class="s">q — гироскоп (внутренний контур)</text>
+      <path class="fb" d="M 940 62 L 940 180 L 98 180 L 98 78"/><text x="460" y="174" class="s">θ — внешний контур</text>
+    </svg>
+  </div>
+
+  <div class="panel">
+    <div class="step-h"><span class="tag">А</span>П-регулятор по углу тангажа</div>
+    <figure>
+      <div class="edcanvas"><!--EDA-->
+<svg viewBox="0 0 958 262" xmlns="http://www.w3.org/2000/svg" class="ed">
+<path d="M116,57.0 L176,57.0 L176,55.33333333333333 L196,55.33333333333333" class="wr"/>
+<text x="124" y="50.0" class="wl">θ_ref</text>
+<path d="M176,57.0 L176,146.66666666666666 L276,146.66666666666666" class="wr"/>
+<circle cx="176" cy="57.0" r="3.5" fill="#2b4a7a"/>
+<path d="M116,127.0 L164,127.0 L164,76.66666666666666 L196,76.66666666666666" class="wr"/>
+<text x="124" y="120.0" class="wl">θ</text>
+<path d="M164,127.0 L164,165.33333333333334 L276,165.33333333333334" class="wr"/>
+<circle cx="164" cy="127.0" r="3.5" fill="#2b4a7a"/>
+<path d="M240,66.0 L276,66.0" class="wr"/>
+<text x="246" y="58.0" class="wl">e_θ</text>
+<path d="M404,66.0 L440,66.0" class="wr"/>
+<path d="M580,66.0 L600,66.0 L600,55.33333333333333 L616,55.33333333333333" class="wr"/>
+<path d="M116,223.0 L608,223.0 L608,76.66666666666666 L616,76.66666666666666" class="wr"/>
+<text x="124" y="216.0" class="wl">δe*</text>
+<path d="M660,66.0 L690,66.0" class="wr"/>
+<path d="M814,66.0 L850,66.0" class="wr"/>
+<text x="822" y="58.0" class="wl">δe</text>
+<rect x="20" y="34" width="96" height="46" rx="6" fill="#e3f1e3" stroke="#6aa66a" stroke-width="1.6"/>
+<text x="68.0" y="53.0" class="bt">Вход</text>
+<text x="68.0" y="70.0" class="bp">θ_ref</text>
+<circle cx="116" cy="57.0" r="4" fill="#333"/>
+<rect x="20" y="104" width="96" height="46" rx="6" fill="#e3f1e3" stroke="#6aa66a" stroke-width="1.6"/>
+<text x="68.0" y="123.0" class="bt">Вход</text>
+<text x="68.0" y="140.0" class="bp">θ</text>
+<circle cx="116" cy="127.0" r="4" fill="#333"/>
+<rect x="20" y="200" width="96" height="46" rx="6" fill="#e3f1e3" stroke="#6aa66a" stroke-width="1.6"/>
+<text x="68.0" y="219.0" class="bt">Вход</text>
+<text x="68.0" y="236.0" class="bp">δe*</text>
+<circle cx="116" cy="223.0" r="4" fill="#333"/>
+<rect x="196" y="34" width="44" height="64" rx="6" fill="#f4f4f4" stroke="#9a9a9a" stroke-width="1.6"/>
+<text x="218.0" y="71.0" class="bt">Σ</text>
+<path d="M195,50.33333333333333 L203,55.33333333333333 L195,60.33333333333333 z" fill="#333"/>
+<text x="207" y="59.33333333333333" class="sg">+</text>
+<path d="M195,71.66666666666666 L203,76.66666666666666 L195,81.66666666666666 z" fill="#333"/>
+<text x="207" y="80.66666666666666" class="sg">−</text>
+<circle cx="240" cy="66.0" r="4" fill="#333"/>
+<rect x="276" y="43" width="128" height="46" rx="6" fill="#e6eefb" stroke="#5b84c9" stroke-width="1.6"/>
+<text x="340.0" y="62.0" class="bt">П-регулятор</text>
+<text x="340.0" y="79.0" class="bp">Kp</text>
+<path d="M275,61.0 L283,66.0 L275,71.0 z" fill="#333"/>
+<circle cx="404" cy="66.0" r="4" fill="#333"/>
+<rect x="440" y="43" width="140" height="46" rx="6" fill="#f4f4f4" stroke="#9a9a9a" stroke-width="1.6"/>
+<text x="510.0" y="62.0" class="bt">Усилит. звено</text>
+<text x="510.0" y="79.0" class="bp">K = −1</text>
+<path d="M439,61.0 L447,66.0 L439,71.0 z" fill="#333"/>
+<circle cx="580" cy="66.0" r="4" fill="#333"/>
+<rect x="616" y="34" width="44" height="64" rx="6" fill="#f4f4f4" stroke="#9a9a9a" stroke-width="1.6"/>
+<text x="638.0" y="71.0" class="bt">Σ</text>
+<path d="M615,50.33333333333333 L623,55.33333333333333 L615,60.33333333333333 z" fill="#333"/>
+<text x="627" y="59.33333333333333" class="sg">+</text>
+<path d="M615,71.66666666666666 L623,76.66666666666666 L615,81.66666666666666 z" fill="#333"/>
+<text x="627" y="80.66666666666666" class="sg">+</text>
+<circle cx="660" cy="66.0" r="4" fill="#333"/>
+<rect x="690" y="43" width="124" height="46" rx="6" fill="#fff4e0" stroke="#d39a3a" stroke-width="1.6"/>
+<text x="752.0" y="62.0" class="bt">Насыщение</text>
+<text x="752.0" y="79.0" class="bp">−25 … 25</text>
+<path d="M689,61.0 L697,66.0 L689,71.0 z" fill="#333"/>
+<circle cx="814" cy="66.0" r="4" fill="#333"/>
+<rect x="850" y="43" width="92" height="46" rx="6" fill="#fde8e8" stroke="#d16a6a" stroke-width="1.6"/>
+<text x="896.0" y="62.0" class="bt">Выход</text>
+<text x="896.0" y="79.0" class="bp">δe</text>
+<path d="M849,61.0 L857,66.0 L849,71.0 z" fill="#333"/>
+<rect x="276" y="128" width="128" height="56" rx="6" fill="#fde8e8" stroke="#d16a6a" stroke-width="1.6"/>
+<text x="340.0" y="152.0" class="bt">Осциллограф</text>
+<text x="340.0" y="169.0" class="bp">θ_ref, θ</text>
+<path d="M275,141.66666666666666 L283,146.66666666666666 L275,151.66666666666666 z" fill="#333"/>
+<path d="M275,160.33333333333334 L283,165.33333333333334 L275,170.33333333333334 z" fill="#333"/>
+</svg>
+<!--/EDA--></div>
+      <figcaption>Рис. 2. Схема для сборки в редакторе (часть А). δe* — вход «δe_бал — балансировочный δe».
+        Знаки входов сумматора задаются параметром «знаки входов»: «+−» или «++».</figcaption>
+    </figure>
+    <ol>
+      <li>Шаблон «Заготовка: тангаж → δe». Соберите схему по рис. 2. Вход q в этой части не используется.</li>
+      <li>Звено K = −1 учитывает принятое правило знаков: δe &gt; 0 создаёт пикирующий момент. Убедитесь, что без него
+        обратная связь становится положительной.</li>
+      <li>Для каждого значения Kp: «Применить», «Схема: ВКЛ», ступенчатое воздействие «θ_ref +5°»; определите σ и t_уст.
+        Затем увеличивайте Kp с шагом 0.5 до появления незатухающих колебаний и определите граничный коэффициент Kp_гр.</li>
+    </ol>
+    <div class="tbl"><table>
+      <tr><th>Kp, °/°</th><th>σ, %</th><th>t_уст, с</th><th>характер переходного процесса</th></tr>
+      <tr><td>0.3</td><td class="blank"></td><td class="blank"></td><td class="blank"></td></tr>
+      <tr><td>0.6</td><td class="blank"></td><td class="blank"></td><td class="blank"></td></tr>
+      <tr><td>1.5</td><td class="blank"></td><td class="blank"></td><td class="blank"></td></tr>
+      <tr><td>3.0</td><td class="blank"></td><td class="blank"></td><td class="blank"></td></tr>
+      <tr><td>Kp_гр = …</td><td class="blank"></td><td class="blank"></td><td class="blank"></td></tr>
+    </table></div>
+  </div>
+
+  <div class="panel">
+    <div class="step-h"><span class="tag">Б</span>Каскадная структура с внутренним контуром по q</div>
+    <figure>
+      <div class="edcanvas"><!--EDB-->
+<svg viewBox="0 0 974 352" xmlns="http://www.w3.org/2000/svg" class="ed">
+<path d="M116,57.0 L176,57.0 L176,55.33333333333333 L196,55.33333333333333" class="wr"/>
+<text x="124" y="50.0" class="wl">θ_ref</text>
+<path d="M116,127.0 L164,127.0 L164,76.66666666666666 L196,76.66666666666666" class="wr"/>
+<text x="124" y="120.0" class="wl">θ</text>
+<path d="M240,66.0 L276,66.0" class="wr"/>
+<text x="246" y="58.0" class="wl">e_θ</text>
+<path d="M404,66.0 L444,66.0 L444,160 L176,160 L176,221.33333333333334 L196,221.33333333333334" class="wr"/>
+<text x="412" y="58.0" class="wl">q_ref</text>
+<text x="300" y="152" class="wl">q_ref — уставка внутреннего контура</text>
+<path d="M116,233.0 L180,233.0 L180,242.66666666666666 L196,242.66666666666666" class="wr"/>
+<text x="124" y="226.0" class="wl">q</text>
+<path d="M240,232.0 L276,232.0" class="wr"/>
+<text x="245" y="224.0" class="wl">e_q</text>
+<path d="M404,232.0 L440,232.0" class="wr"/>
+<path d="M580,232.0 L598,232.0 L598,221.33333333333334 L624,221.33333333333334" class="wr"/>
+<path d="M116,313.0 L610,313.0 L610,242.66666666666666 L624,242.66666666666666" class="wr"/>
+<text x="124" y="306.0" class="wl">δe*</text>
+<path d="M668,232.0 L704,232.0" class="wr"/>
+<path d="M828,232.0 L866,232.0" class="wr"/>
+<text x="836" y="224.0" class="wl">δe</text>
+<text x="196" y="22" class="sg">внешний контур: θ → q_ref</text>
+<rect x="20" y="34" width="96" height="46" rx="6" fill="#e3f1e3" stroke="#6aa66a" stroke-width="1.6"/>
+<text x="68.0" y="53.0" class="bt">Вход</text>
+<text x="68.0" y="70.0" class="bp">θ_ref</text>
+<circle cx="116" cy="57.0" r="4" fill="#333"/>
+<rect x="20" y="104" width="96" height="46" rx="6" fill="#e3f1e3" stroke="#6aa66a" stroke-width="1.6"/>
+<text x="68.0" y="123.0" class="bt">Вход</text>
+<text x="68.0" y="140.0" class="bp">θ</text>
+<circle cx="116" cy="127.0" r="4" fill="#333"/>
+<rect x="20" y="210" width="96" height="46" rx="6" fill="#e3f1e3" stroke="#6aa66a" stroke-width="1.6"/>
+<text x="68.0" y="229.0" class="bt">Вход</text>
+<text x="68.0" y="246.0" class="bp">q</text>
+<circle cx="116" cy="233.0" r="4" fill="#333"/>
+<rect x="20" y="290" width="96" height="46" rx="6" fill="#e3f1e3" stroke="#6aa66a" stroke-width="1.6"/>
+<text x="68.0" y="309.0" class="bt">Вход</text>
+<text x="68.0" y="326.0" class="bp">δe*</text>
+<circle cx="116" cy="313.0" r="4" fill="#333"/>
+<rect x="196" y="34" width="44" height="64" rx="6" fill="#f4f4f4" stroke="#9a9a9a" stroke-width="1.6"/>
+<text x="218.0" y="71.0" class="bt">Σ</text>
+<path d="M195,50.33333333333333 L203,55.33333333333333 L195,60.33333333333333 z" fill="#333"/>
+<text x="207" y="59.33333333333333" class="sg">+</text>
+<path d="M195,71.66666666666666 L203,76.66666666666666 L195,81.66666666666666 z" fill="#333"/>
+<text x="207" y="80.66666666666666" class="sg">−</text>
+<circle cx="240" cy="66.0" r="4" fill="#333"/>
+<rect x="276" y="43" width="128" height="46" rx="6" fill="#e6eefb" stroke="#5b84c9" stroke-width="1.6"/>
+<text x="340.0" y="62.0" class="bt">П-регулятор</text>
+<text x="340.0" y="79.0" class="bp">Kp = Kθ</text>
+<path d="M275,61.0 L283,66.0 L275,71.0 z" fill="#333"/>
+<circle cx="404" cy="66.0" r="4" fill="#333"/>
+<rect x="196" y="200" width="44" height="64" rx="6" fill="#f4f4f4" stroke="#9a9a9a" stroke-width="1.6"/>
+<text x="218.0" y="237.0" class="bt">Σ</text>
+<path d="M195,216.33333333333334 L203,221.33333333333334 L195,226.33333333333334 z" fill="#333"/>
+<text x="207" y="225.33333333333334" class="sg">+</text>
+<path d="M195,237.66666666666666 L203,242.66666666666666 L195,247.66666666666666 z" fill="#333"/>
+<text x="207" y="246.66666666666666" class="sg">−</text>
+<circle cx="240" cy="232.0" r="4" fill="#333"/>
+<rect x="276" y="209" width="128" height="46" rx="6" fill="#e6eefb" stroke="#5b84c9" stroke-width="1.6"/>
+<text x="340.0" y="228.0" class="bt">П-регулятор</text>
+<text x="340.0" y="245.0" class="bp">Kp = Kq</text>
+<path d="M275,227.0 L283,232.0 L275,237.0 z" fill="#333"/>
+<circle cx="404" cy="232.0" r="4" fill="#333"/>
+<rect x="440" y="209" width="140" height="46" rx="6" fill="#f4f4f4" stroke="#9a9a9a" stroke-width="1.6"/>
+<text x="510.0" y="228.0" class="bt">Усилит. звено</text>
+<text x="510.0" y="245.0" class="bp">K = −1</text>
+<path d="M439,227.0 L447,232.0 L439,237.0 z" fill="#333"/>
+<circle cx="580" cy="232.0" r="4" fill="#333"/>
+<rect x="624" y="200" width="44" height="64" rx="6" fill="#f4f4f4" stroke="#9a9a9a" stroke-width="1.6"/>
+<text x="646.0" y="237.0" class="bt">Σ</text>
+<path d="M623,216.33333333333334 L631,221.33333333333334 L623,226.33333333333334 z" fill="#333"/>
+<text x="635" y="225.33333333333334" class="sg">+</text>
+<path d="M623,237.66666666666666 L631,242.66666666666666 L623,247.66666666666666 z" fill="#333"/>
+<text x="635" y="246.66666666666666" class="sg">+</text>
+<circle cx="668" cy="232.0" r="4" fill="#333"/>
+<rect x="704" y="209" width="124" height="46" rx="6" fill="#fff4e0" stroke="#d39a3a" stroke-width="1.6"/>
+<text x="766.0" y="228.0" class="bt">Насыщение</text>
+<text x="766.0" y="245.0" class="bp">−25 … 25</text>
+<path d="M703,227.0 L711,232.0 L703,237.0 z" fill="#333"/>
+<circle cx="828" cy="232.0" r="4" fill="#333"/>
+<rect x="866" y="209" width="92" height="46" rx="6" fill="#fde8e8" stroke="#d16a6a" stroke-width="1.6"/>
+<text x="912.0" y="228.0" class="bt">Выход</text>
+<text x="912.0" y="245.0" class="bp">δe</text>
+<path d="M865,227.0 L873,232.0 L865,237.0 z" fill="#333"/>
+<text x="704" y="290" class="sg">внутренний контур: q → δe</text>
+</svg>
+<!--/EDB--></div>
+      <figcaption>Рис. 3. Схема для сборки в редакторе (часть Б): к схеме части А добавлены вход q, второй сумматор
+        и П-регулятор внутреннего контура. Первый П-регулятор формирует уставку угловой скорости q_ref. Осциллограф подключается так же, как в части А.</figcaption>
+    </figure>
+    <ol>
+      <li>Дополните схему части А по рис. 3.</li>
+      <li>Установившийся коэффициент передачи от рассогласования по θ к δe равен Kθ·Kq. Сохраняйте его равным 3
+        (как при Kp = 3 в части А) и изменяйте распределение усиления между контурами.</li>
+    </ol>
+    <div class="tbl"><table>
+      <tr><th>Kq, с</th><th>Kθ, 1/с</th><th>σ, %</th><th>t_уст, с</th></tr>
+      <tr><td>0.020</td><td>150</td><td class="blank"></td><td class="blank"></td></tr>
+      <tr><td>0.0381</td><td>78.7</td><td class="blank"></td><td class="blank"></td></tr>
+      <tr><td>0.080</td><td>37.5</td><td class="blank"></td><td class="blank"></td></tr>
+      <tr><td>0.150</td><td>20.0</td><td class="blank"></td><td class="blank"></td></tr>
+    </table></div>
+  </div>
+
+  <div class="panel">
+    <div class="step-h"><span class="tag">В</span>Разделение полос пропускания контуров</div>
+    <p>При Kq = 0.15 с увеличивайте Kθ: 10; 16.2; 30; 45; 60 1/с. Определите значение Kθ, при котором внешний контур
+      теряет запас устойчивости. Сравните лучший вариант со штатной настройкой — шаблон «Штатная САУ: тангаж»
+      (Kθ = 16.2 1/с, Kq = 0.0381 с).</p>
+    <div class="tbl"><table>
+      <tr><th>Kθ, 1/с</th><th>10</th><th>16.2</th><th>30</th><th>45</th><th>60</th></tr>
+      <tr><td>σ, %</td><td class="blank"></td><td class="blank"></td><td class="blank"></td><td class="blank"></td><td class="blank"></td></tr>
+      <tr><td>t_уст, с</td><td class="blank"></td><td class="blank"></td><td class="blank"></td><td class="blank"></td><td class="blank"></td></tr>
+    </table></div>
+  </div>
+
+  <h3>Контрольные вопросы</h3>
+  <ul class="q">
+    <li>Короткопериодическое движение FPV-самолёта при Va = 16 м/с имеет относительный коэффициент демпфирования
+      ζ = 0.84. Почему контур с П-регулятором только по углу θ имеет конечный граничный коэффициент? Какую составляющую
+      вносит в закон управления слагаемое −Kq·q?</li>
+    <li>В части Б установившийся коэффициент передачи во всех строках одинаков. Чем обусловлено различие в перерегулировании?</li>
+    <li>Сформулируйте по полученным данным условие применимости метода последовательного замыкания (слайды 5–6):
+      каким должно быть отношение полос пропускания внешнего и внутреннего контуров?</li>
+  </ul>
+
+  <div class="star">
+    <h3>Дополнительное задание. Масштабирование коэффициентов по скорости</h3>
+    <p>Увеличьте воздушную скорость до 22 м/с (шесть нажатий «Va_ref +1») и повторите опыт с выбранной настройкой.
+      Эффективность руля высоты пропорциональна Va². Включите после звена −1 блок «Перестройка по Va» (V0 = 16 м/с, n = 2)
+      и сравните переходные процессы с масштабированием и без него.</p>
+  </div>
+</section>
+
+<!-- ===================================================== ЗАДАНИЕ 2 -->
+<section class="mission m2" id="m2">
+  <div class="band">
+    <div class="eyebrow">Задание 2 · стабилизация высоты через тангаж · δe</div>
+    <h2>Контур высоты: насыщение и накопление интегральной составляющей</h2>
+    <p class="goal">Исследовать переходный процесс по высоте в схеме с внесённой ошибкой, при которой на ступенчатом
+      воздействии 50 м перерегулирование превышает 50 %. Установить причину по сигналам схемы и сравнить способы
+      защиты интегратора от накопления.</p>
+    <div class="slides"><span class="chip">слайды 18–22: высота через тангаж</span><span class="chip">слайд 31: защита интегратора от насыщения</span><span class="chip">слайд 32: ПИД-регулятор на Python</span></div>
+  </div>
+
+  <div class="cmd">python scenarios/BlockLab3D.py --sensors truth --scheme labs/lab6/schemes/lab6_2_vysota_oshibka.json</div>
+
+  <div class="diagram" role="img" aria-label="Структурная схема контура высоты: уставка высоты, сумматор, ПИ-регулятор высоты, прибавка балансировочного угла атаки, насыщение плюс-минус 15 градусов, уставка тангажа, каскад тангажа, объект управления; обратная связь по высоте">
+    <svg viewBox="0 0 980 170" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="b2" class="c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <text x="6" y="66">h_ref</text>
+      <line class="ar" x1="50" y1="62" x2="84" y2="62"/>
+      <circle class="sm" cx="98" cy="62" r="14"/><text x="91" y="67">Σ</text><text class="s" x="80" y="92">−</text>
+      <line class="ar" x1="112" y1="62" x2="150" y2="62"/>
+      <rect class="bx hot" x="152" y="36" width="130" height="52" rx="6"/><text class="big" x="166" y="60">ПИ высоты</text><text class="s" x="166" y="78">Kp, Ki, I_max, y_max</text>
+      <line class="ar" x1="282" y1="62" x2="320" y2="62"/>
+      <circle class="sm" cx="334" cy="62" r="14"/><text x="327" y="67">Σ</text>
+      <text class="s" x="318" y="20">α*</text><line class="ar" x1="334" y1="26" x2="334" y2="46"/>
+      <line class="ar" x1="348" y1="62" x2="384" y2="62"/>
+      <rect class="bx" x="386" y="40" width="92" height="44" rx="6"/><text x="396" y="60">насыщ.</text><text class="s" x="398" y="76">±15°</text>
+      <line class="ar" x1="478" y1="62" x2="530" y2="62"/><text x="484" y="54">θ_ref</text>
+      <rect class="bx" x="532" y="36" width="160" height="52" rx="6"/><text class="big" x="548" y="60">каскад тангажа</text><text class="s" x="548" y="78">см. задание 1</text>
+      <line class="ar" x1="692" y1="62" x2="740" y2="62"/><text x="706" y="54">δe</text>
+      <rect class="bx plant" x="742" y="34" width="150" height="56" rx="8"/><text class="big" x="764" y="60">привод + ЛА</text><text class="s" x="764" y="78">δt — штатный TECS</text>
+      <line class="ar" x1="892" y1="62" x2="972" y2="62"/><text x="922" y="54">h</text>
+      <path class="fb" d="M 940 62 L 940 140 L 98 140 L 98 78"/><text x="460" y="134" class="s">h — барометр / GPS</text>
+    </svg>
+  </div>
+
+  <div class="panel">
+    <div class="step-h"><span class="tag">А</span>Исследование схемы с внесённой ошибкой</div>
+    <ol>
+      <li>«Применить», «Схема: ВКЛ», режим САУ «высота». Подайте ступенчатое воздействие «h_ref +10 м» и дождитесь установления.</li>
+      <li>Подайте воздействие +50 м: пять нажатий «h_ref +10 м» в течение 1 с.</li>
+      <li>В процессе набора высоты контролируйте значения сигналов на выходе ПИ-регулятора и звена насыщения.
+        Определите, какой сигнал выходит за пределы ±15°.</li>
+    </ol>
+  </div>
+
+  <figure>
+    <img src="img/fig2_windup.png" alt="Переходный процесс по высоте при ступенчатом воздействии 50 м в схеме с внесённой ошибкой: максимальная высота 277 м; выход ПИ-регулятора достигает 370 градусов, уставка тангажа находится на ограничении 15 градусов" loading="lazy">
+    <figcaption>Рис. 4. Переходный процесс в схеме с внесённой ошибкой: θ_ref около 27 с находится на ограничении +15°,
+      выход ПИ-регулятора превышает 300°. Моделирование, Va = 16 м/с, штиль.</figcaption>
+  </figure>
+
+  <div class="trap">
+    <p><b>Указание.</b> Откройте шаблон «Штатная САУ: высота + тангаж» и сравните параметры одноимённых блоков
+      со схемой из файла. Схемы различаются параметрами одного блока.</p>
+  </div>
+
+  <div class="panel">
+    <div class="step-h"><span class="tag">Б</span>Сравнение способов защиты интегратора</div>
+    <p>Для каждого варианта настройки ПИ-регулятора высоты повторите воздействия +10 м и +50 м. После изменения
+      параметров нажмите «Применить»; перед каждым опытом верните уставку h_ref = 200 м.</p>
+    <div class="tbl"><table>
+      <tr><th>настройка ПИ-регулятора высоты</th><th>+10 м: σ, %</th><th>+50 м: σ, %</th><th>+50 м: h_max, м</th><th>+50 м: t_уст, с</th></tr>
+      <tr><td>исходная: без ограничений</td><td class="blank"></td><td class="blank"></td><td class="blank"></td><td class="blank"></td></tr>
+      <tr><td>ограничение интегральной составляющей I_max = 15°</td><td class="blank"></td><td class="blank"></td><td class="blank"></td><td class="blank"></td></tr>
+      <tr><td>ограничение выхода y_max = 15° (условное интегрирование)</td><td class="blank"></td><td class="blank"></td><td class="blank"></td><td class="blank"></td></tr>
+      <tr><td>Ki = 0 (П-регулятор)</td><td class="blank"></td><td class="blank"></td><td class="blank"></td><td class="blank"></td></tr>
+    </table></div>
+  </div>
+
+  <h3>Контрольные вопросы</h3>
+  <ul class="q">
+    <li>Почему звено насыщения, установленное после регулятора, не предотвращает перерегулирование? Объясните по рис. 4
+      механизм возникновения перерегулирования после достижения h_ref.</li>
+    <li>Почему ограничение I_max снижает перерегулирование при воздействии +50 м и не влияет на него при +10 м?</li>
+    <li>При Ki = 0 перерегулирование отсутствует. Какую задачу решает интегральная составляющая? Установите Ki = 0,
+      уменьшите воздушную скорость до 12 м/с (четыре нажатия «Va_ref −1») и определите установившуюся ошибку h − h_ref.
+      Объясните результат через балансировочный угол атаки α*, подаваемый на вход схемы.</li>
+  </ul>
+</section>
+
+<!-- ===================================================== ЗАДАНИЕ 3 -->
+<section class="mission m3" id="m3">
+  <div class="band">
+    <div class="eyebrow">Задание 3 · боковой канал · δa, δr</div>
+    <h2>Контур путевого угла: нормализация рассогласования и выбор коэффициента</h2>
+    <p class="goal">Исследовать схему с внесённой ошибкой в вычислении рассогласования по путевому углу, проявляющейся
+      при переходе через χ = ±180°. Затем определить допустимый коэффициент контура курса из условия разделения
+      полос пропускания с контуром крена.</p>
+    <div class="slides"><span class="chip">слайды 7–13: боковой канал, крен, курс</span><span class="chip">слайд 28: нормализация угла</span><span class="chip">слайды 5–6: последовательное замыкание</span></div>
+  </div>
+
+  <div class="cmd">python scenarios/BlockLab3D.py --sensors truth --scheme labs/lab6/schemes/lab6_3_kurs_oshibka.json</div>
+
+  <div class="diagram" role="img" aria-label="Структурная схема контура путевого угла: уставка путевого угла, вычисление рассогласования, коэффициент K хи, прибавка упреждения, крен координированного разворота арктангенс Vg омега на g, насыщение, уставка крена, контур крена, элероны, объект управления; обратная связь по путевому углу">
+    <svg viewBox="0 0 980 170" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="b3" class="c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <text x="6" y="66">χ_ref</text>
+      <line class="ar" x1="50" y1="62" x2="80" y2="62"/>
+      <rect class="bx hot" x="82" y="38" width="96" height="48" rx="6"/><text x="92" y="60">e_χ = ?</text><text class="s" x="92" y="77">χ_ref − χ</text>
+      <line class="ar" x1="178" y1="62" x2="206" y2="62"/>
+      <rect class="bx" x="208" y="40" width="58" height="44" rx="6"/><text class="big" x="220" y="67">Kχ</text>
+      <line class="ar" x1="266" y1="62" x2="292" y2="62"/>
+      <circle class="sm" cx="306" cy="62" r="14"/><text x="299" y="67">Σ</text>
+      <text class="s" x="282" y="20">χ̇_уп</text><line class="ar" x1="306" y1="26" x2="306" y2="46"/>
+      <line class="ar" x1="320" y1="62" x2="346" y2="62"/><text class="s" x="324" y="54">ω</text>
+      <rect class="bx" x="348" y="36" width="138" height="52" rx="6"/><text x="358" y="60">arctg(Vg·ω/g)</text><text class="s" x="358" y="78">крен разворота</text>
+      <line class="ar" x1="486" y1="62" x2="510" y2="62"/>
+      <rect class="bx" x="512" y="40" width="78" height="44" rx="6"/><text x="520" y="60">насыщ.</text><text class="s" x="522" y="76">±φ_max</text>
+      <line class="ar" x1="590" y1="62" x2="626" y2="62"/><text class="s" x="594" y="54">φ_ref</text>
+      <rect class="bx" x="628" y="36" width="116" height="52" rx="6"/><text class="big" x="640" y="60">контур крена</text><text class="s" x="640" y="78">φ → p → δa</text>
+      <line class="ar" x1="744" y1="62" x2="776" y2="62"/><text x="750" y="54">δa</text>
+      <rect class="bx plant" x="778" y="34" width="120" height="56" rx="8"/><text class="big" x="796" y="60">привод + ЛА</text><text class="s" x="796" y="78">β → δr — в схеме</text>
+      <line class="ar" x1="898" y1="62" x2="972" y2="62"/><text x="930" y="54">χ</text>
+      <path class="fb" d="M 945 62 L 945 140 L 130 140 L 130 88"/><text x="460" y="134" class="s">χ — путевой угол по GPS, диапазон (−180°, 180°]</text>
+    </svg>
+  </div>
+
+  <div class="panel">
+    <div class="step-h"><span class="tag">А</span>Рассогласование по путевому углу при переходе через ±180°</div>
+    <ol>
+      <li>Карта по умолчанию: начальный путевой угол χ = 0° (север). «Применить», «Схема: ВКЛ».</li>
+      <li>Подавайте воздействия «χ_ref +30°», каждый раз дожидаясь окончания разворота. Контролируйте χ_ref и χ
+        на осциллографе «путевой угол χ».</li>
+      <li>При седьмом воздействии (χ_ref = 210°) зарегистрируйте направление разворота и знак уставки крена φ_ref.</li>
+      <li>Определите блок, неверно вычисляющий рассогласование, замените его и повторите опыт.</li>
+    </ol>
+  </div>
+
+  <figure>
+    <img src="img/fig3_course_top.png" alt="Траектории в горизонтальной плоскости: штатная схема выполняет разворот на 30 градусов вправо, схема с внесённой ошибкой — разворот на 330 градусов влево" loading="lazy">
+    <figcaption>Рис. 5. Траектории в горизонтальной плоскости. Первые шесть разворотов по 30° обе схемы выполняют
+      одинаково; при седьмом схема с внесённой ошибкой выполняет разворот на 330° в противоположную сторону.
+      Моделирование, Va = 16 м/с, штиль.</figcaption>
+  </figure>
+
+  <div class="trap">
+    <p><b>Указание.</b> Вычислите выход сумматора «+−» при χ_ref = 210° (на входе схемы −150°) и χ = 180°.
+      Какой блок группы «Математические операции» приводит рассогласование к диапазону [−180°, 180°)?</p>
+  </div>
+
+  <div class="panel">
+    <div class="step-h"><span class="tag">Б</span>Выбор коэффициента контура курса</div>
+    <p>В исправленной схеме изменяйте Kχ (усилительное звено после вычисления рассогласования) и пределы насыщения
+      уставки крена. Ступенчатое воздействие χ_ref +90° — три нажатия «χ_ref +30°» в течение 1 с. Потерю высоты
+      определяйте по записи опыта.</p>
+    <div class="tbl"><table>
+      <tr><th>Kχ, 1/с</th><th>φ_max, °</th><th>σ, %</th><th>t_уст, с</th><th>|φ|max, °</th><th>потеря h, м</th></tr>
+      <tr><td>0.3</td><td>30</td><td class="blank"></td><td class="blank"></td><td class="blank"></td><td class="blank"></td></tr>
+      <tr><td>1.0</td><td>30</td><td class="blank"></td><td class="blank"></td><td class="blank"></td><td class="blank"></td></tr>
+      <tr><td>3.0</td><td>30</td><td class="blank"></td><td class="blank"></td><td class="blank"></td><td class="blank"></td></tr>
+      <tr><td>10</td><td>30</td><td class="blank"></td><td class="blank"></td><td class="blank"></td><td class="blank"></td></tr>
+      <tr><td>1.0</td><td>80</td><td class="blank"></td><td class="blank"></td><td class="blank"></td><td class="blank"></td></tr>
+      <tr><td>3.0</td><td>80</td><td class="blank"></td><td class="blank"></td><td class="blank"></td><td class="blank"></td></tr>
+      <tr><td>10</td><td>80</td><td class="blank"></td><td class="blank"></td><td class="blank"></td><td class="blank"></td></tr>
+    </table></div>
+  </div>
+
+  <h3>Контрольные вопросы</h3>
+  <ul class="q">
+    <li>Запишите функцию нормализации угла (слайд 28). Почему ошибка схемы проявляется только при переходе путевого
+      угла через ±180°?</li>
+    <li>Постоянная времени контура крена τ_φ = 0.25 с. При каком Kχ полоса пропускания контура курса приближается
+      к полосе контура крена? Сопоставьте с результатами части Б.</li>
+    <li>Почему при φ_max = 80° высота уменьшается, несмотря на работу TECS и контура высоты? Свяжите ответ с вертикальной
+      составляющей подъёмной силы, пропорциональной cos φ.</li>
+  </ul>
+
+  <div class="star">
+    <h3>Дополнительное задание. Путевой угол и курс при боковом ветре</h3>
+    <p>Запустите исправленную схему с аргументом <code>--wind-e 5</code> (ветер 5 м/с с запада). При χ_ref = 0°
+      выведите на осциллограф путевой угол χ и угол рыскания ψ. Определите угол сноса и сравните его с оценкой
+      по треугольнику скоростей: arcsin(5 / 16) ≈ 18°.</p>
+  </div>
+</section>
+
+<section class="panel report" aria-labelledby="rep">
+  <h2 id="rep">Содержание отчёта</h2>
+  <ol>
+    <li>Для каждого задания — изображение итоговой структурной схемы (окно редактора) и заполненные таблицы.</li>
+    <li>Для каждой части А — график переходного процесса по записи опыта (<code>viz/viewer.py … --static</code>).</li>
+    <li>Ответы на контрольные вопросы в форме: утверждение, подтверждающее числовое значение из таблицы, вывод.</li>
+    <li>Исправленные схемы заданий 2 и 3 в формате <code>.json</code> (команда «Сохранить…» редактора).</li>
+  </ol>
+  <p class="muted">Результаты получены моделированием на 6DOF-модели FPV-самолёта (m = 2 кг, крейсерская скорость 16 м/с)
+    и не являются данными лётного эксперимента. Числовые значения приводятся с указанием условий: воздушная скорость,
+    ветер, модель датчиков.</p>
+</section>
+
+<footer>Лабораторная работа 6 к лекции 6 «Синтез САУ» (Beard &amp; McLain, Small Unmanned Aircraft, гл. 6).
+  Схемы — <code>labs/lab6/schemes/</code>; рисунки и эталонные значения формирует <code>python labs/lab6/make_lab6.py</code>.</footer>
+
+</div>

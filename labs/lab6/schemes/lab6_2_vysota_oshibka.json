@@ -1,0 +1,361 @@
+{
+ "blocks": [
+  {
+   "id": "in_theta",
+   "type": "Input",
+   "x": 640,
+   "y": 140,
+   "p": {
+    "signal": "theta"
+   }
+  },
+  {
+   "id": "in_q",
+   "type": "Input",
+   "x": 640,
+   "y": 270,
+   "p": {
+    "signal": "q"
+   }
+  },
+  {
+   "id": "in_Va",
+   "type": "Input",
+   "x": 640,
+   "y": 360,
+   "p": {
+    "signal": "Va"
+   }
+  },
+  {
+   "id": "in_de_trim",
+   "type": "Input",
+   "x": 640,
+   "y": 450,
+   "p": {
+    "signal": "de_trim"
+   }
+  },
+  {
+   "id": "s_th",
+   "type": "Sum",
+   "x": 790,
+   "y": 50,
+   "p": {
+    "signs": "+-"
+   }
+  },
+  {
+   "id": "k_th",
+   "type": "P",
+   "x": 870,
+   "y": 58,
+   "p": {
+    "Kp": 16.2,
+    "y_max": 0.0
+   }
+  },
+  {
+   "id": "sat_q",
+   "type": "Sat",
+   "x": 1040,
+   "y": 58,
+   "p": {
+    "min": -648.0,
+    "max": 648.0
+   }
+  },
+  {
+   "id": "s_q",
+   "type": "Sum",
+   "x": 790,
+   "y": 220,
+   "p": {
+    "signs": "+-"
+   }
+  },
+  {
+   "id": "k_q",
+   "type": "P",
+   "x": 870,
+   "y": 228,
+   "p": {
+    "Kp": 0.0381,
+    "y_max": 0.0
+   }
+  },
+  {
+   "id": "neg_q",
+   "type": "Gain",
+   "x": 1040,
+   "y": 228,
+   "p": {
+    "K": -1.0
+   }
+  },
+  {
+   "id": "gs_q",
+   "type": "VaScale",
+   "x": 1200,
+   "y": 220,
+   "p": {
+    "V0": 16.0,
+    "n": 2.0,
+    "k_min": 0.25,
+    "k_max": 9.0
+   }
+  },
+  {
+   "id": "s_de",
+   "type": "Sum",
+   "x": 1380,
+   "y": 230,
+   "p": {
+    "signs": "++"
+   }
+  },
+  {
+   "id": "sat_de",
+   "type": "Sat",
+   "x": 1460,
+   "y": 238,
+   "p": {
+    "min": -24.99814860155782,
+    "max": 24.99814860155782
+   }
+  },
+  {
+   "id": "out_de",
+   "type": "Output",
+   "x": 1620,
+   "y": 238,
+   "p": {
+    "act": "de"
+   }
+  },
+  {
+   "id": "sc_q",
+   "type": "Scope",
+   "x": 1220,
+   "y": 110,
+   "p": {
+    "title": "угл. скорость тангажа q, °/с",
+    "n": 2
+   }
+  },
+  {
+   "id": "sc_de",
+   "type": "Scope",
+   "x": 1620,
+   "y": 340,
+   "p": {
+    "title": "руль высоты δe, °",
+    "n": 1
+   }
+  },
+  {
+   "id": "in_h_ref",
+   "type": "Input",
+   "x": 20,
+   "y": 50,
+   "p": {
+    "signal": "h_ref"
+   }
+  },
+  {
+   "id": "in_h",
+   "type": "Input",
+   "x": 20,
+   "y": 140,
+   "p": {
+    "signal": "h"
+   }
+  },
+  {
+   "id": "in_alpha_trim",
+   "type": "Input",
+   "x": 170,
+   "y": 170,
+   "p": {
+    "signal": "alpha_trim"
+   }
+  },
+  {
+   "id": "s_h",
+   "type": "Sum",
+   "x": 170,
+   "y": 50,
+   "p": {
+    "signs": "+-"
+   }
+  },
+  {
+   "id": "k_h",
+   "type": "PI",
+   "x": 250,
+   "y": 58,
+   "p": {
+    "Kp": 5.371479329351468,
+    "Ki": 0.8938141604040842,
+    "i_max": 0.0,
+    "y_max": 0.0
+   }
+  },
+  {
+   "id": "s_a",
+   "type": "Sum",
+   "x": 400,
+   "y": 60,
+   "p": {
+    "signs": "++"
+   }
+  },
+  {
+   "id": "sat_th",
+   "type": "Sat",
+   "x": 470,
+   "y": 68,
+   "p": {
+    "min": -14.999999999999998,
+    "max": 14.999999999999998
+   }
+  },
+  {
+   "id": "sc_h",
+   "type": "Scope",
+   "x": 250,
+   "y": 270,
+   "p": {
+    "title": "высота h, м",
+    "n": 2
+   }
+  }
+ ],
+ "wires": [
+  {
+   "src": "sat_th",
+   "dst": "s_th",
+   "port": 0
+  },
+  {
+   "src": "in_theta",
+   "dst": "s_th",
+   "port": 1
+  },
+  {
+   "src": "s_th",
+   "dst": "k_th",
+   "port": 0
+  },
+  {
+   "src": "k_th",
+   "dst": "sat_q",
+   "port": 0
+  },
+  {
+   "src": "sat_q",
+   "dst": "s_q",
+   "port": 0
+  },
+  {
+   "src": "in_q",
+   "dst": "s_q",
+   "port": 1
+  },
+  {
+   "src": "s_q",
+   "dst": "k_q",
+   "port": 0
+  },
+  {
+   "src": "k_q",
+   "dst": "neg_q",
+   "port": 0
+  },
+  {
+   "src": "neg_q",
+   "dst": "gs_q",
+   "port": 0
+  },
+  {
+   "src": "in_Va",
+   "dst": "gs_q",
+   "port": 1
+  },
+  {
+   "src": "gs_q",
+   "dst": "s_de",
+   "port": 0
+  },
+  {
+   "src": "in_de_trim",
+   "dst": "s_de",
+   "port": 1
+  },
+  {
+   "src": "s_de",
+   "dst": "sat_de",
+   "port": 0
+  },
+  {
+   "src": "sat_de",
+   "dst": "out_de",
+   "port": 0
+  },
+  {
+   "src": "sat_q",
+   "dst": "sc_q",
+   "port": 0
+  },
+  {
+   "src": "in_q",
+   "dst": "sc_q",
+   "port": 1
+  },
+  {
+   "src": "sat_de",
+   "dst": "sc_de",
+   "port": 0
+  },
+  {
+   "src": "in_h_ref",
+   "dst": "s_h",
+   "port": 0
+  },
+  {
+   "src": "in_h",
+   "dst": "s_h",
+   "port": 1
+  },
+  {
+   "src": "s_h",
+   "dst": "k_h",
+   "port": 0
+  },
+  {
+   "src": "k_h",
+   "dst": "s_a",
+   "port": 0
+  },
+  {
+   "src": "in_alpha_trim",
+   "dst": "s_a",
+   "port": 1
+  },
+  {
+   "src": "s_a",
+   "dst": "sat_th",
+   "port": 0
+  },
+  {
+   "src": "in_h_ref",
+   "dst": "sc_h",
+   "port": 0
+  },
+  {
+   "src": "in_h",
+   "dst": "sc_h",
+   "port": 1
+  }
+ ]
+}
