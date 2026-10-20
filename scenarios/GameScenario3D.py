@@ -66,7 +66,7 @@ from sim.config import WindParams, SimConfig, SensorParams, AIRCRAFT_TYPES, airc
 from sim.integrators import step_rk4
 from sim.dynamics import specific_force
 from sim.actuators import actuator_init, actuator_step
-from sim.ground import contacts, near_ground
+from sim.ground import contacts, ground_clearance
 from sim.wind import make_wind_fn
 from sim.state import (air_data, earth_velocity, total_energy, full_controls, canonical_euler,
                        wind_body, U, V, W, THETA, X, H, PHI, PSI, Y, N_STATES, N_CONTROLS)
@@ -113,6 +113,7 @@ MANUAL_REF = ("маршрут: ручная уставка", "NAV: manual ref") 
 MAX_STEPS_PER_FRAME = 10        # при просадке кадров — замедление, а не «рывок»
 RT_TAU    = 1.0                 # с — постоянная сглаживания скорости модели (строка «sim ×…»)
 EST_TEL_DT = 0.1                # с — период отчёта оценивателя в окно станции (вкладка ESTIMATOR)
+NEAR_SKIP_MAX = 20              # шагов — вдали от земли near_ground проверяется не реже
 RT_WARMUP = 2.0                 # с — отставание не считается с запуска окна (загрузка)
 TRAIL_MAX = 3000                # точек следа (0.1 с) — последние 5 мин
 
@@ -147,7 +148,7 @@ class Game(Entity):
         # (без скачка скольжения в первую секунду при --wind-n / --wind-e)
         self.s0[[U, V, W]] += wind_body(self.s0, self.wind_call(cfg.h0, 0.0))
         self.ter = terrain
-        self.ground = lambda N, E: terrain.surface(E, N)    # NED → Ursina: X — восток, Z — север
+        self.ground, self._surf_cache = self._surface, {}
         self.view = View3D(aircraft.b, aircraft.c, terrain, self.HELP, cam=cam,
                            aircraft_name=aircraft.name)
 
@@ -183,10 +184,39 @@ class Game(Entity):
             return StateEstimator(self.sensor_params)
         return None
 
+    def _surface(self, N, E):
+        """
+        Твёрдая земля для физики (NED → Ursina: X — восток, Z — север). Одни и те же точки
+        запрашиваются до трёх раз (касание после шага, акселерометр, k1 следующего шага) —
+        последние результаты запоминаются по точкам запроса (точное совпадение).
+        """
+        key = np.asarray(N).tobytes() + np.asarray(E).tobytes()
+        h = self._surf_cache.get(key)
+        if h is None:
+            h = self._surf_cache[key] = self.ter.surface(E, N)
+            if len(self._surf_cache) > 4:
+                del self._surf_cache[next(iter(self._surf_cache))]
+        return h
+
+    def _near_ground(self, s):
+        """
+        Земля — в шаг физики? (sim/ground.py near_ground). Вдали от земли проверка — не каждый
+        шаг: за шаг зазор сокращается не более чем на 2·|V|·dt (снижение + подъём рельефа при
+        уклоне ≤ 45°); следующая проверка — через половину этого числа шагов, не больше
+        NEAR_SKIP_MAX (запас на разгон ЛА за время пропуска).
+        """
+        if self._near_skip > 0:
+            self._near_skip -= 1
+            return False
+        c = ground_clearance(s, self.ac, self.ground)
+        step = 2 * np.linalg.norm(s[[U, V, W]]) * self.cfg.dt + 1e-9
+        self._near_skip = min(NEAR_SKIP_MAX, int(0.5 * c / step)) if c > 0 else 0
+        return c < 0
+
     def _specific_force(self, t, s):
-        """Удельная сила для акселерометра: те же рули, ветер и земля, что у физики."""
-        gf = self.ground if near_ground(s, self.ac, self.ground) else None
-        return specific_force(s, self.controls, t, self.ac, self.wind_call, gf)
+        """Удельная сила для акселерометра: те же рули, ветер и земля, что у физики
+        (self._gf — земля этого шага, решение _near_ground в _step)."""
+        return specific_force(s, self.controls, t, self.ac, self.wind_call, self._gf)
 
     @property
     def nav_on(self):
@@ -203,6 +233,7 @@ class Game(Entity):
             self.save()
             self.rec, self.events = [], []
         self.state = self.s0.copy()
+        self._near_skip, self._gf = 0, None
         self.t, self.acc = 0.0, 0.0
         self.wind_call = make_wind_fn(self.wp)  # ряд порывов — заново с t = 0
         self.t_real, self.rt_ratio = 0.0, 1.0   # реальное время полёта (без пауз), с; скорость модели
@@ -540,6 +571,8 @@ class Game(Entity):
 
     def _step(self):
         s, dt = self.state, self.cfg.dt
+        # земля — в шаг только у поверхности (вызов поверхности дорогой); то же — акселерометру
+        gf = self._gf = self.ground if self._near_ground(s) else None
         w_vec = self.wind_call(s[H], self.t)
         Va, alpha, beta = air_data(s, w_vec)
         if not self.ap:                    # датчики и оценка состояния работают всегда
@@ -554,8 +587,6 @@ class Game(Entity):
         if round(self.t / dt) % 10 == 0:
             self.trail.append(ned_to_u(s[X], s[Y], -s[H]))
             del self.trail[:-TRAIL_MAX]
-        # земля — в шаг только у поверхности (вызов поверхности дорогой)
-        gf = self.ground if near_ground(s, self.ac, self.ground) else None
         # После петель/бочек углы Эйлера копятся — приводим к канонич. виду (та же ориентация)
         self.state = canonical_euler(step_rk4(s, self.controls, dt, self.t, self.ac,
                                               self.wind_call, gf))

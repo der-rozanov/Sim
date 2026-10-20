@@ -8,7 +8,9 @@ ground_fn(N, E) -> h_g — высота твёрдой поверхности (�
 contacts()       — положение, заглубление, скорости точек касания (чистая функция);
 ground_forces()  — силы и моменты земли в связанной СК, слагаемое в derivatives();
 near_ground()    — ЛА у земли? Вызов поверхности дорогой (~0.2 мс): прогон
-                   передаёт ground_fn в шаг, только когда near_ground() = True.
+                   передаёт ground_fn в шаг, только когда near_ground() = True;
+ground_clearance() — запас высоты до порога near_ground, м (3D-игра по нему решает,
+                   через сколько шагов проверять снова).
 
 Каждая точка — пружина + демпфер по нормали к земле, трение — сухое,
 регуляризованное (sat). Колёса катятся вдоль своей оси (носовое поворачивается
@@ -23,6 +25,14 @@ from .state import (U, V, W, P, Q, R, X, Y, H, PHI, THETA, PSI, DR, full_control
 GRAD_STEP = 0.25     # м, шаг разностной производной поверхности (нормаль)
 
 
+def _cross(a, b):
+    """a × b по последней оси (как np.cross, но без его накладных расходов ~20 мкс на вызов)."""
+    a, b = np.broadcast_arrays(a, b)
+    return np.stack([a[..., 1] * b[..., 2] - a[..., 2] * b[..., 1],
+                     a[..., 2] * b[..., 0] - a[..., 0] * b[..., 2],
+                     a[..., 0] * b[..., 1] - a[..., 1] * b[..., 0]], -1)
+
+
 def contact_points(params: AircraftParams):
     """Точки касания (K, 3) в связанной СК и маска колёс (K,)."""
     wh = np.asarray(params.gear_wheels, float).reshape(-1, 3)
@@ -30,11 +40,16 @@ def contact_points(params: AircraftParams):
     return np.vstack([wh, hd]), np.arange(len(wh) + len(hd)) < len(wh)
 
 
-def near_ground(state: np.ndarray, params: AircraftParams, ground_fn) -> bool:
-    """ЛА ближе к земле, чем 2·(размер ЛА) + 1 м (с запасом на уклоны до 45°)."""
+def ground_clearance(state: np.ndarray, params: AircraftParams, ground_fn) -> float:
+    """Высота над землёй минус порог 2·(размер ЛА) + 1 м (запас на уклоны до 45°), м."""
     reach = np.linalg.norm(contact_points(params)[0], axis=1).max()
     h_g = float(np.ravel(ground_fn(np.array([state[X]]), np.array([state[Y]])))[0])
-    return state[H] - h_g < 2 * reach + 1
+    return state[H] - h_g - (2 * reach + 1)
+
+
+def near_ground(state: np.ndarray, params: AircraftParams, ground_fn) -> bool:
+    """ЛА ближе к земле, чем 2·(размер ЛА) + 1 м (с запасом на уклоны до 45°)."""
+    return ground_clearance(state, params, ground_fn) < 0
 
 
 def contacts(state: np.ndarray, params: AircraftParams, ground_fn):
@@ -52,7 +67,7 @@ def contacts(state: np.ndarray, params: AircraftParams, ground_fn):
     Rm = rotation_body_to_earth(state[PHI], state[THETA], state[PSI])
     pos = np.array([state[X], state[Y], -state[H]]) + r @ Rm.T
     omega = state[[P, Q, R]]
-    vel = (state[[U, V, W]] + np.cross(omega, r)) @ Rm.T
+    vel = (state[[U, V, W]] + _cross(omega, r)) @ Rm.T
 
     # высота земли и её уклоны в точках — одним вызовом (центр, ±N, ±E)
     N, E, d = pos[:, 0], pos[:, 1], GRAD_STEP
@@ -90,7 +105,7 @@ def ground_forces(state: np.ndarray, controls, params: AircraftParams, ground_fn
     e = np.stack([np.cos(steer), np.sin(steer), np.zeros_like(steer)], 1) @ Rm.T
     e -= np.einsum("ij,ij->i", e, n)[:, None] * n                        # в плоскость земли
     e /= np.linalg.norm(e, axis=1, keepdims=True) + 1e-12
-    s = np.cross(n, e)
+    s = _cross(n, e)
     v_roll = np.clip(np.einsum("ij,ij->i", vt, e) / pr.gear_v_eps_roll, -1.0, 1.0)
     F_wheel = -(pr.gear_mu_roll * v_roll[:, None] * e
                 + pr.gear_mu_side * sat(np.einsum("ij,ij->i", vt, s))[:, None] * s)
@@ -100,4 +115,4 @@ def ground_forces(state: np.ndarray, controls, params: AircraftParams, ground_fn
     Ft = np.where(wheel[:, None], F_wheel, F_slide)
 
     F = (Nf[:, None] * (n + Ft)) @ Rm                                    # NED → связанная
-    return F.sum(0), np.cross(r, F).sum(0)
+    return F.sum(0), _cross(r, F).sum(0)

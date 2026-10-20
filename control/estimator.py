@@ -39,6 +39,7 @@ R_ист = Exp(δθ)·R. Линеаризация:
 состояния по буферу IMU от задержанного времени до текущего.
 """
 
+import math
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -91,6 +92,35 @@ def quat_to_R(q):
     return np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
                      [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
                      [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)]])
+
+
+def propagate(q, v, p, om, f, dt, bg, ba):
+    """
+    Номинальное состояние на шаг Δt по отсчёту IMU (аргументы и результат — кортежи float):
+        a = R(q)·(f − b_a) + g,  p ← p + v·Δt + a·Δt²/2,  v ← v + a·Δt,
+        q ← q ⊗ exp((ω − b_g)·Δt), нормированный.
+    Те же формулы, что quat_to_R, quat_mult, quat_exp, но на скалярах: на векторах из 3–4
+    элементов накладные расходы numpy в разы больше счёта, а повторный прогноз по буферу
+    IMU — delay / Δt ≈ 25 вызовов на шаг.
+    """
+    w, x, y, z = q
+    fx, fy, fz = f[0] - ba[0], f[1] - ba[1], f[2] - ba[2]
+    ax = (1 - 2 * (y * y + z * z)) * fx + 2 * (x * y - w * z) * fy + 2 * (x * z + w * y) * fz
+    ay = 2 * (x * y + w * z) * fx + (1 - 2 * (x * x + z * z)) * fy + 2 * (y * z - w * x) * fz
+    az = 2 * (x * z - w * y) * fx + 2 * (y * z + w * x) * fy + (1 - 2 * (x * x + y * y)) * fz + G
+    h = 0.5 * dt * dt
+    p = (p[0] + v[0] * dt + ax * h, p[1] + v[1] * dt + ay * h, p[2] + v[2] * dt + az * h)
+    v = (v[0] + ax * dt, v[1] + ay * dt, v[2] + az * dt)
+    rx, ry, rz = (om[0] - bg[0]) * dt, (om[1] - bg[1]) * dt, (om[2] - bg[2]) * dt
+    a = math.sqrt(rx * rx + ry * ry + rz * rz)
+    c, s = (1.0, 0.5) if a < 1e-12 else (math.cos(0.5 * a), math.sin(0.5 * a) / a)
+    ex, ey, ez = s * rx, s * ry, s * rz
+    qw = w * c - x * ex - y * ey - z * ez
+    qx = w * ex + x * c + y * ez - z * ey
+    qy = w * ey - x * ez + y * c + z * ex
+    qz = w * ez + x * ey - y * ex + z * c
+    n = math.sqrt(qw * qw + qx * qx + qy * qy + qz * qz)
+    return (qw / n, qx / n, qy / n, qz / n), v, p
 
 
 def euler_to_quat(phi, theta, psi):
@@ -282,8 +312,8 @@ class StateEstimator:
         if not self.ready or m["t"] < self.t_last:          # первый шаг или сброс полёта
             self._init(m)
         self.t_last = m["t"]
-        self.imu.append((m["t"], np.array([m["p"], m["q"], m["r"]]),
-                         np.array([m["ax"], m["ay"], m["az"]]), dt))
+        self.imu.append((m["t"], (float(m["p"]), float(m["q"]), float(m["r"])),
+                         (float(m["ax"]), float(m["ay"]), float(m["az"])), dt))
         self._queue(m)
 
         # задержанный горизонт: прогноз по отсчётам IMU старше t − delay, затем измерения
@@ -295,20 +325,17 @@ class StateEstimator:
                 self._fuse(*self.obs.pop(0))
 
         # текущая оценка: повторный прогноз по буферу (до текущего отсчёта)
-        q, v, p = self.q, self.v, self.p
+        q, v, p = self.q.tolist(), self.v.tolist(), self.p.tolist()
+        bg, ba = self.bg.tolist(), self.ba.tolist()
         for _, om, f, dti in self.imu[:-1]:
-            q, v, p = self._propagate(q, v, p, om, f, dti)
-        return self._output(m, q, v, p)
+            q, v, p = propagate(q, v, p, om, f, dti, bg, ba)
+        return self._output(m, np.array(q), np.array(v), np.array(p))
 
     # --- прогноз ---------------------------------------------------------------
     def _propagate(self, q, v, p, om, f, dt):
-        """Номинальное состояние на шаг Δt по отсчёту IMU."""
-        R = quat_to_R(q)
-        a = R @ (f - self.ba) + np.array([0.0, 0.0, G])
-        p = p + v * dt + 0.5 * a * dt * dt
-        v = v + a * dt
-        q = quat_mult(q, quat_exp((om - self.bg) * dt))
-        return q / np.linalg.norm(q), v, p
+        """Номинальное состояние на шаг Δt по отсчёту IMU (массивы; счёт — propagate)."""
+        return tuple(np.array(a) for a in propagate(q, v, p, om, f, dt,
+                                                     self.bg.tolist(), self.ba.tolist()))
 
     def error_dynamics(self, f):
         """Матрица A уравнения ошибок δx' = A·δx (f — показание акселерометра)."""
@@ -322,6 +349,7 @@ class StateEstimator:
 
     def _predict(self, om, f, dt):
         sp, pr = self.sp, self.pr
+        f = np.asarray(f)
         F = np.eye(N_ERR) + self.error_dynamics(f) * dt
         Q = np.zeros(N_ERR)
         Q[TH] = (sp.gyro_noise * dt)**2
