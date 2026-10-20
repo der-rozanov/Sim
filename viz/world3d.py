@@ -91,11 +91,15 @@ def river_x(Z):
 LAKE_X = float(river_x(LAKE_Z))
 
 
-def _seg_dist(X, Z, pts):
-    """Расстояние от точек (X, Z) до ломаной pts."""
+def _seg_dist(X, Z, pts, near=None):
+    """Расстояние от точек (X, Z) до ломаной pts. near — нужно только сравнение d ≤ near:
+    отрезки, в габарит которых (± near) не попала ни одна точка, пропускаются (там d — inf)."""
     X, Z = np.asarray(X, float), np.asarray(Z, float)
     d = np.full(np.broadcast(X, Z).shape, np.inf)
     for (x0, z0), (x1, z1) in zip(pts[:-1], pts[1:]):
+        if near is not None and (X.max() < min(x0, x1) - near or X.min() > max(x0, x1) + near
+                                 or Z.max() < min(z0, z1) - near or Z.min() > max(z0, z1) + near):
+            continue
         vx, vz = x1 - x0, z1 - z0
         t = np.clip(((X - x0) * vx + (Z - z0) * vz) / (vx * vx + vz * vz), 0, 1)
         d = np.minimum(d, np.hypot(X - x0 - t * vx, Z - z0 - t * vz))
@@ -167,6 +171,8 @@ class World:
         P, cp = self.plain_p, Xp[1, 0]
         on_map = (X >= x0) & (X <= x1) & (Z >= z0) & (Z <= z1)
         hm = _tri_interp(Ym, (X - x0) / self.CELL, (Z - z0) / self.CELL)
+        if on_map.all():                                   # все точки на карте — равнина не нужна
+            return hm
         hp = _tri_interp(Yp, ((X - x0) % P) / cp, ((Z - z0) % P) / cp)
         return np.where(on_map, hm, hp)
 
@@ -313,12 +319,15 @@ class DefaultMap(World):
         L, W = RUNWAY["len"], RUNWAY["w"]
         h = np.where((np.abs(X) <= W / 2) & (np.abs(Z) <= L / 2), np.maximum(h, 0.3), h)
         h = np.where((np.abs(X - 90) <= 60) & (np.abs(Z + 250) <= 60), np.maximum(h, 0.25), h)
-        road = _seg_dist(X, Z, ROAD) <= 4
+        road = _seg_dist(X, Z, ROAD, near=4) <= 4
         bridge = np.abs(X - river_x(Z)) < 75
         return np.where(road, np.maximum(h, np.where(bridge, 1.5, h + 0.4)), h)
 
     def is_water(self, X, Z):
         X, Z = np.broadcast_arrays(np.asarray(X, float), np.asarray(Z, float))
+        band = self._wet(X, Z, np.full(X.shape, -np.inf))     # лента реки / круг озера
+        if not band.any():                                     # вдали от воды — без рельефа
+            return band
         return self._wet(X, Z, self._mesh_height(X, Z)) & (self.surface(X, Z) <= WATER_Y)
 
     # --- карта ------------------------------------------------------------
