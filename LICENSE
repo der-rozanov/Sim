@@ -19,13 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
--------------------------------------------------------------------------------
-Third-party data
-
-Map images docs/img/*_osm.jpg and the realmap_osm / realmap_large_osm maps are
-built from OpenStreetMap data: © OpenStreetMap contributors, available under
-the Open Database License (ODbL), https://www.openstreetmap.org/copyright.
-
-Satellite imagery (Esri World Imagery) and terrain tiles are downloaded at run
-time into viz/map_cache/ and are NOT part of this repository or this license.

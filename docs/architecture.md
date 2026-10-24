@@ -28,7 +28,7 @@ flight_logger.py← runner, sim/: FlightLogger.save() → .flightlog, load_log()
 viz/            отображение (не импортирует control/)
   viewer.py       ← flight_logger: 2D-графики и анимация .flightlog
   viewer3d.py     ← flight_logger, world3d, aircraft3d, ursina: 3D
-  world3d.py, mapdata.py, osmdata.py, landcover.py — миры и карты
+  world3d.py — мир и карта
   bench_panel.py, station.py, block_editor.py — окна tkinter (процессы-спутники)
       │
 scenarios/      прогоны и интерактивные программы (← всё выше)

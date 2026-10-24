@@ -33,7 +33,7 @@ control/controllers.py, собранные из блоков (совпадени
 
 Запуск:
     python scenarios/BlockLab3D.py
-    python scenarios/BlockLab3D.py --wind-e 5 --map realmap
+    python scenarios/BlockLab3D.py --wind-e 5
     python scenarios/BlockLab3D.py --scheme results/my_pitch.json   # своя схема при старте
     python scenarios/BlockLab3D.py --template "Штатная САУ: все каналы"
 """

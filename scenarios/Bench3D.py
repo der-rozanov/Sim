@@ -34,7 +34,7 @@ Bench3D — испытательный стенд САУ для студенто
 
 Запуск:
     python scenarios/Bench3D.py
-    python scenarios/Bench3D.py --wind-e 5 --map realmap
+    python scenarios/Bench3D.py --wind-e 5
     python scenarios/Bench3D.py --no-map            # без окна карты
 """
 

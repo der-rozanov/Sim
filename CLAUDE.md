@@ -91,24 +91,17 @@ viz/                  — отображение (принимает Log, не �
     viewer.py         — ЕДИНСТВЕННЫЙ 2D-показ: show_flightlog(path, ...) / FlightLogViewer;
                         панели по логу (продольные; + вид сверху, χ, φ, β, δa, δr при манёвре
                         по курсу); CLI: python viz/viewer.py [файл.flightlog] [--static] [--save]
-    world3d.py        — мир 3D: карты default (10×10 км: ВПП, река, озеро, деревня, холм,
-                        леса), realmap (спутниковый снимок 4×4 км на рельефе SRTM) и
-                        realmap_osm (те же 4×4 км в стиле default по контурам OSM),
-                        realmap_large / realmap_large_osm — то же на 10×10 км (мультяшная
-                        раскраска — по снимку через landcover.py + OSM)
-                        + бесконечная равнина вокруг; make_world(имя), World.height(X, Z);
+    world3d.py        — мир 3D: карта default (10×10 км: ВПП, река, озеро, деревня, холм,
+                        леса) + бесконечная равнина вокруг; make_world(имя), World.height(X, Z);
                         World.surface(X, Z) — твёрдая земля физики = нарисованная сетка
                         (World.grid()) + ВПП/перрон/дорога; World.is_water()
-    mapdata.py        — загрузка снимка Esri и рельефа SRTM в viz/map_cache/ (не в git)
-    osmdata.py        — загрузка/разбор OpenStreetMap (Overpass) для карты realmap_osm
-    landcover.py      — классы поверхности по снимку (лес/пашня/луг/вода) для realmap_large_osm
     hud3d.py          — HUD 3D-окна (Ursina): режимы, курсовая лента, ось ЛА и маркер вектора
                         скорости (проекция через объектив), линии тангажа, лента h, круг ветра,
                         рамка УА; HudData — что показать; F1 — уровень; подписи по-английски
     perf.py           — профилировщик кадра 3D-окна: FPS, время по участкам (физика, HUD, след…)
                         и остаток «engine» (Panda3D); F2 — таблица, итог — в консоль при выходе
     viewer3d.py       — 3D-тренажёр (Ursina): мир, модель ЛА с рулями, 4 камеры;
-                        CLI: python viz/viewer3d.py [файл.flightlog] [--map realmap]
+                        CLI: python viz/viewer3d.py [файл.flightlog] [--map default]
     bench_panel.py    — окно стенда САУ (tkinter): блок-схема, ползунки, осциллограф;
                         процесс-спутник scenarios/Bench3D.py, связь через очереди
     station.py        — окно наземной станции (tkinter, замена окна карты): PFD (FMA, авиагоризонт,
@@ -230,10 +223,10 @@ from viz.viewer   import show_flightlog
 - Интегратор пишется вручную (RK4 основной, Эйлер опционально).
 - scipy допустим только при явной необходимости и с согласования автора.
 - Исключение (РЕШ-16): `ursina` (Panda3D, тянет pillow) — только в `viz/viewer3d.py`, `viz/hud3d.py`, `viz/aircraft3d.py`,
-  `viz/world3d.py`, `viz/perf.py`, `viz/mapdata.py`, `viz/osmdata.py`, `viz/landcover.py`, `scenarios/GameScenario3D.py`
+  `viz/world3d.py`, `viz/perf.py`, `scenarios/GameScenario3D.py`
   и `scenarios/Bench3D.py`.
-  В `sim/`, `control/`, `runner.py` не импортировать. Спутниковые тайлы Esri — только
-  локальный кэш `viz/map_cache/` (в .gitignore), в репозиторий не класть.
+  В `sim/`, `control/`, `runner.py` не импортировать. Реальную местность (снимки, карты
+  конкретных мест) в проект не добавлять — решение автора 2026-10-24 (безопасность).
 
 ## Архитектурные правила (не нарушать)
 
@@ -349,7 +342,7 @@ docs/decisions.md (РЕШ-01…33).
   координация разворота (РЕШ-23), защита по α, навигация по точкам, LQR; все
   коэффициенты — расчёт `tuning.py` (РЕШ-21); `SAU` одним классом (РЕШ-26); схемы из
   блоков (`blocks.py`). Обзор — docs/control.md.
-- Интерактив: 3D-тренажёр, стенд САУ, конструктор САУ, окно карты, 5 карт.
+- Интерактив: 3D-тренажёр, стенд САУ, конструктор САУ, окно карты, учебная карта default.
 - Логи и графики: `.flightlog` (`flight_logger.py`), 2D — `viz/viewer.py`, 3D — `viz/viewer3d.py`.
 - Сценарии s1–s10 (README.md, «Сценарии»); зонд — `archive/probe/` (П7–П10, отчёт
   `archive/probe/REPORT.md`).

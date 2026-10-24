@@ -28,12 +28,7 @@ from viz.station import BG, BAR, CARD, EDGE, DIM, TXT, GREEN, AMBER, RED, CYAN  
 # совпадение проверяет --selftest).
 MAPS = {
     "default":          "10×10 км: ВПП, река, озеро, деревня, холм, леса",
-    "realmap":           "[место] 4×4 км: спутниковый снимок на рельефе SRTM",
-    "realmap_osm":       "[место] 4×4 км: контуры OpenStreetMap в стиле default",
-    "realmap_large":     "[место] 10×10 км: спутниковый снимок",
-    "realmap_large_osm": "[место] 10×10 км: раскраска по снимку + OSM",
 }
-MAP_NOTE = "Карты [место] при первом запуске скачивают снимок и рельеф в viz/map_cache/."
 
 # Параметры: имя → (подпись, вид, варианты или умолчание, ключ командной строки).
 # Вид: combo — список, num — число, check — флаг, file — путь к файлу.
@@ -295,8 +290,7 @@ class Launcher:
         est.configure(state="readonly" if self.vars["sensors"].get() == "real" else "disabled")
 
         mp = self.vars["map"].get()
-        self.rows["map"][2].configure(text=MAPS[mp] + (". " + MAP_NOTE if mp.startswith("realmap") else ""),
-                                      fg=CYAN)
+        self.rows["map"][2].configure(text=MAPS[mp], fg=CYAN)
         self.about.configure(text=m["help"])
         try:
             cmd = build_cmd(self.mode.get(), self.values())
@@ -403,12 +397,12 @@ def selftest():
     assert list(MAPS) == list(WORLD_MAPS), "список карт разошёлся с viz/world3d.MAPS"
     sc = scenario_list()
     assert [f[:3] for f, _ in sc][:2] == ["s1_", "s2_"] and sc[-1][0].startswith("s10"), sc
-    v = {"aircraft": "fpv", "map": "realmap", "h0": "150", "cam": "2", "wind_n": "0",
+    v = {"aircraft": "fpv", "map": "default", "h0": "150", "cam": "2", "wind_n": "0",
          "wind_e": "5", "turb": "off", "turb_alt": "low", "sensors": "real", "est": "ekf",
          "ap": True, "no_map": False, "log": "", "speed": "1", "scenario": sc[0][0] + " — x"}
     cmd = build_cmd("Полёт 3D", v)[1:]
     assert cmd[0] == "scenarios/GameScenario3D.py" and "--ap" in cmd and "--no-map" not in cmd
-    assert cmd[cmd.index("--map") + 1] == "realmap" and cmd[cmd.index("--h0") + 1] == "150"
+    assert cmd[cmd.index("--map") + 1] == "default" and cmd[cmd.index("--h0") + 1] == "150"
     assert build_cmd("Сценарий s1–s10", v)[1:] == ["scenarios/" + sc[0][0]]
     assert build_cmd("3D-повтор полёта", dict(v, log="a.flightlog"))[1:3] == \
         ["viz/viewer3d.py", "a.flightlog"]

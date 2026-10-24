@@ -18,12 +18,10 @@
 python viz/viewer3d.py <лог s8> --at 22 --cam 1 --shot docs/img/v3d_turn_cam1.png
 python viz/viewer3d.py <лог s8> --at 22 --cam 2 --shot docs/img/v3d_turn_cockpit.png
 python viz/viewer3d.py <лог s10, ветер> --at 150 --cam 4 --shot docs/img/v3d_route_top.png
-python scenarios/GameScenario3D.py --map realmap_osm --h0 120 --shot docs/img/map3d_realmap_osm.png
 ```
 
 Виды карт сверху (`maptop_*`) — копии `viz/map_cache/top_<карта>.png`, уменьшенные до
-600 × 600. Спутниковые карты (`realmap`, `realmap_large`) в документацию не включаются:
-условия Esri не разрешают распространять снимки. Скриншоты 3D хранятся в JPG.
+600 × 600. Скриншоты 3D хранятся в JPG.
 
 Пример сценария `grab_screen.py` (стенд, ступенька курса +30°):
 
