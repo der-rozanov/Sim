@@ -3,6 +3,7 @@
 Мир 3D-тренажёра: карта + бесконечная равнина вокруг. Карты — make_world(имя):
 
   default — придуманная карта 10 × 10 км с ориентирами (DefaultMap);
+  valley, alps, marsh — процедурные карты 10 × 10 км (viz/maps3d.py);
 
 Координаты Ursina (см. viewer3d.py): X — восток, Y — вверх, Z — север, м.
 Старт всех сценариев — (0, h0, 0), над ВПП карты; курс старта игры — start_psi.
@@ -13,6 +14,9 @@
     деревня с церковью на западном берегу, дорога от аэродрома с мостом;
     холм 150 м на северо-востоке (скальная вершина), леса на склонах,
     вдоль реки, на северо-западе, роща у деревни; остальное — поля.
+    Хутора (дом, сарай, навес, сад, стога) и деревушка на востоке, полевые дороги,
+    ветряная мельница у деревни; леса смешанные, рощи и лесополосы среди полей,
+    по берегу реки — ивы, в полях — одиночные деревья.
     Линия E = 0 к северу свободна от высоких препятствий — по ней летят s1–s9, p7–p10.
 
 Вокруг любой карты — равнина: квадрат plain_p × plain_p (поля, редкие деревья,
@@ -26,7 +30,7 @@
 
 Твёрдая земля для физики (шасси, удар) — surface(X, Z): ровно то, что нарисовано —
 узлы сетки карты grid() и квадратов равнины, та же разбивка клеток на треугольники,
-+ покрытия поверх рельефа (_cover: ВПП, перрон, дорога, мост, вода). Так у каждой
++ покрытия поверх рельефа (_cover: ВПП, перрон, дороги, мост, вода). Так у каждой
 карты земля своя и совпадает с картинкой (РЕШ-25). is_water(X, Z) — касание воды.
 
 Вид сверху top_image() / save_top_image() — фон карты окна станции (viz/station.py):
@@ -58,6 +62,48 @@ ROAD = [(30, -420), (-300, -300), (-800, 150), (-1200, 800), (-1900, 1500),
         (-2500, 2150), (-3000, 2600)]
 FORESTS = [(2300, 4300, 900, 1300), (-3500, 6000, 900, 900),     # (X, Z, rX, rZ)
            (-3600, 2000, 260, 260), (1200, 6600, 500, 350)]
+FARMS = [(1800.0, 1200.0, 0.3), (2600.0, -1500.0, 1.1),            # хутора: (X, Z, поворот, рад)
+         (3600.0, 2600.0, -0.4), (-800.0, 4600.0, 0.7),
+         (900.0, -1900.0, 0.0), (4200.0, -1200.0, 0.5),
+         (-700.0, 6500.0, 1.4), (2600.0, 6900.0, -0.2)]
+HAMLET = (3300.0, 700.0)                                            # хутор-деревушка
+TRACKS = [[(160, -250), (1500, -250), (1500, 1200), (1800, 1200)],  # полевые дороги (грунт)
+          [(1500, -250), (1500, -1500), (2600, -1500), (4200, -1200)],
+          [(1500, -1500), (1500, -1900), (900, -1900)],
+          [(1500, 1200), (1500, 2600), (3600, 2600)],
+          [(1800, 1200), (3300, 700)],
+          [(-800, 150), (-750, 1500), (-950, 3000), (-800, 4600), (-700, 6500)],
+          [(3600, 2600), (3300, 4000), (2600, 6900)]]
+MILL = (-2550.0, 3150.0)                                            # ветряная мельница
+
+
+def _groves():
+    """Рощи (колки) среди полей: (X, Z, радиус); не над линией E = 0 к северу,
+    не на воде, не на аэродроме и деревне. Детерминированно (seed)."""
+    rng = np.random.default_rng(5)
+    out = []
+    while len(out) < 32:
+        x, z, r = rng.uniform(-4500, 4500), rng.uniform(-2000, 7000), rng.uniform(50, 140)
+        if (abs(x) < 350 and z > -600) or abs(x - river_x(z)) < 450 or np.hypot(x - LAKE_X, z - LAKE_Z) < 800 \
+                or np.hypot(x - VILLAGE[0], z - VILLAGE[1]) < 500 or np.hypot(x - HAMLET[0], z - HAMLET[1]) < 300 \
+                or min(np.hypot(x - fx, z - fz) for fx, fz, _ in FARMS) < 200:
+            continue
+        out.append((x, z, r))
+    return out
+
+
+def _belts():
+    """Лесополосы по границам полей: отрезки вдоль X = const (шаг полей 200 м)."""
+    rng = np.random.default_rng(6)
+    out = []
+    for x in np.arange(-4400, 4401, 400.0):
+        if abs(x) < 400:
+            continue
+        z0 = rng.uniform(-2000, 5000)
+        out.append([(x, z0), (x, z0 + rng.uniform(600, 1800))])
+    return out
+
+
 
 PALETTE = dict(
     crops=np.array([[0.46, 0.64, 0.29], [0.55, 0.69, 0.31], [0.72, 0.69, 0.40],
@@ -80,6 +126,13 @@ def river_x(Z):
 
 
 LAKE_X = float(river_x(LAKE_Z))
+GROVES = _groves()                   # после river_x и LAKE_X — они нужны для проверок
+BELTS = _belts()
+
+
+def noise_mix(X, Z):
+    """Гладкое поле ≈ [−1, 1] с пятнами ~400 м — где лес лиственный."""
+    return 0.6 * np.sin(X / 260.0 + 1.3) * np.cos(Z / 310.0) + 0.4 * np.sin((X + Z) / 170.0)
 
 
 def _seg_dist(X, Z, pts, near=None):
@@ -281,6 +334,8 @@ class DefaultMap(World):
             f |= ((X - x0) / rx) ** 2 + ((Z - z0) / rz) ** 2 < 1.0 + n
         dr = self.river_dist(X, Z)
         f |= (dr > 90) & (dr < 260 + 80 * n) & (Z > 3000)
+        for x0, z0, r in GROVES:
+            f |= np.hypot(X - x0, Z - z0) < r * (1 + n)
         return f & (self.inside(X, Z) > 0.5)
 
     def height(self, X, Z):
@@ -310,6 +365,8 @@ class DefaultMap(World):
         L, W = RUNWAY["len"], RUNWAY["w"]
         h = np.where((np.abs(X) <= W / 2) & (np.abs(Z) <= L / 2), np.maximum(h, 0.3), h)
         h = np.where((np.abs(X - 90) <= 60) & (np.abs(Z + 250) <= 60), np.maximum(h, 0.25), h)
+        for t in TRACKS:                                       # полевые дороги — +0.15 м
+            h = np.where(_seg_dist(X, Z, t, near=4) <= 4, h + 0.15, h)
         road = _seg_dist(X, Z, ROAD, near=4) <= 4
         bridge = np.abs(X - river_x(Z)) < 75
         return np.where(road, np.maximum(h, np.where(bridge, 1.5, h + 0.4)), h)
@@ -350,6 +407,7 @@ class DefaultMap(World):
         self._build_road().parent = root
         self._build_airfield().parent = root
         self._build_village().parent = root
+        self._build_farms().parent = root
         self._build_trees().parent = root
         return root
 
@@ -366,6 +424,10 @@ class DefaultMap(World):
         draw.polygon(to_px([(30, -310), (150, -310), (150, -190), (30, -190)]), fill=(107, 107, 112))
         cx, cz = VILLAGE
         draw.ellipse(to_px([(cx - 230, cz + 230), (cx + 230, cz - 230)]), outline=(150, 120, 100))
+        for t in TRACKS:
+            draw.line(to_px(t), fill=(150, 128, 92), width=max(1, round(5 * scale)))
+        for fx, fz, _ in FARMS + [HAMLET + (0,)]:
+            draw.rectangle(to_px([(fx - 25, fz + 25), (fx + 25, fz - 25)]), fill=(150, 72, 52))
 
     def _build_water(self):
         Zs = np.arange(LAKE_Z, MAP_Z[1], 20.0)
@@ -399,6 +461,70 @@ class DefaultMap(World):
         c = np.where(np.repeat(bridge, 2)[:, None], [0.42, 0.30, 0.20], [0.36, 0.34, 0.31])
         return _mesh(v, t, c)
 
+    def _track_mesh(self, pts):
+        pts = np.array(pts, float)
+        seg = [np.linspace(p0, p1, max(2, int(np.hypot(*(p1 - p0)) / 10)), endpoint=False)
+               for p0, p1 in zip(pts[:-1], pts[1:])]
+        P = np.vstack(seg + [pts[-1:]])
+        d = np.gradient(P, axis=0)
+        n = np.stack([-d[:, 1], d[:, 0]], -1)
+        n /= np.linalg.norm(n, axis=1, keepdims=True)
+        y = self._mesh_height(P[:, 0], P[:, 1]) + 0.2
+        L = np.stack([P[:, 0] - 4 * n[:, 0], y, P[:, 1] - 4 * n[:, 1]], -1)
+        R = np.stack([P[:, 0] + 4 * n[:, 0], y, P[:, 1] + 4 * n[:, 1]], -1)
+        v, t = _ribbon(L, R)
+        return v, t, np.tile([0.48, 0.40, 0.29], (len(v), 1))
+
+    def _build_farms(self):
+        """Хутора, мельница, стога на лугах у реки, полевые дороги."""
+        rng = np.random.default_rng(23)
+        parts = [self._track_mesh(t) for t in TRACKS]
+        wall, roof = (0.93, 0.90, 0.82), (0.62, 0.22, 0.15)
+        barn_w, barn_r = (0.55, 0.40, 0.28), (0.40, 0.36, 0.32)
+        for fx, fz, a in FARMS:
+            y = lambda x, z: float(self.height(x, z)) - 0.4
+            def at(px, pz):                                  # точка в осях хутора
+                return fx + px * np.cos(a) + pz * np.sin(a), fz - px * np.sin(a) + pz * np.cos(a)
+            parts.append(_house(fx, fz, 9, 12, 4.5, 3.5, a, wall, roof, y(fx, fz)))
+            bx, bz = at(28, 6)
+            parts.append(_house(bx, bz, 12, 22, 5, 4, a, barn_w, barn_r, y(bx, bz)))
+            sx, sz = at(6, 30)
+            parts.append(_house(sx, sz, 8, 14, 3, 1.5, a + np.pi / 2, barn_w, barn_r, y(sx, sz)))
+            for k in range(5):                               # стога
+                hx, hz = at(rng.uniform(40, 120), rng.uniform(-60, 60))
+                parts.append(_spire(hx, hz, 2.6, 4.5, (0.72, 0.62, 0.34), y(hx, hz) + 0.3))
+        X = rng.uniform(-3000, 0, 3000)                      # стога на лугах вдоль реки
+        Z = rng.uniform(LAKE_Z + 600, MAP_Z[1] - 800, 3000)
+        d = self.river_dist(X, Z)
+        ok = (d > 260) & (d < 380) & (np.hypot(X - VILLAGE[0], Z - VILLAGE[1]) > 400)
+        for x, z in list(zip(X[ok], Z[ok]))[:60]:
+            parts.append(_spire(x, z, 2.6, 4.5, (0.72, 0.62, 0.34), float(self.height(x, z)) - 0.1))
+        parts += self._mill(*MILL)
+        cx, cz = HAMLET                                      # деревушка: ~20 домов вокруг пруда-луга
+        for k in range(22):
+            a, r = rng.uniform(0, 2 * np.pi), rng.uniform(40, 170)
+            x, z = cx + r * np.cos(a), cz + r * np.sin(a)
+            if any(_seg_dist(np.array([x]), np.array([z]), t)[0] < 12 for t in TRACKS):
+                continue
+            parts.append(_house(x, z, rng.uniform(7, 10), rng.uniform(8, 12), rng.uniform(4, 5.5),
+                                rng.uniform(2.5, 4), a + np.pi / 2, wall, roof, float(self.height(x, z)) - 0.5))
+        return _merge(parts)
+
+    def _mill(self, cx, cz):
+        """Ветряная мельница: башня-шатёр, крыша, четыре крыла (плоские лопасти на юг)."""
+        y0 = float(self.height(cx, cz)) - 0.5
+        wood, dark = (0.62, 0.50, 0.36), (0.30, 0.26, 0.24)
+        parts = [_box(cx, cz, 8, 8, 12, 0.0, wood, y0), _spire(cx, cz, 6.5, 5, dark, y0 + 12)]
+        hub = np.array([cx, y0 + 13, cz - 5.0])
+        for k in range(4):
+            a = np.pi / 4 + k * np.pi / 2
+            u = np.array([np.cos(a), np.sin(a), 0.0])        # вдоль крыла
+            w = np.array([-np.sin(a), np.cos(a), 0.0])       # поперёк
+            p0, p1 = hub + 1.5 * u, hub + 11 * u
+            quad = [p0 - 0.2 * w, p1 - 0.2 * w, p1 + 1.6 * w, p0 + 1.6 * w]
+            parts.append(_faces([quad], (0.88, 0.85, 0.78), (cx, y0 + 13, cz)))
+        return parts
+
     def _build_airfield(self):
         L, W = RUNWAY["len"], RUNWAY["w"]
         parts = [_quad((0, 0.3, 0), W, L, (0.32, 0.32, 0.34)),
@@ -410,6 +536,11 @@ class DefaultMap(World):
         parts.append(_house(110, -260, 40, 30, 10, 6, 0, (0.70, 0.74, 0.80), (0.45, 0.50, 0.58), 0))
         parts.append(_box(95, -150, 6, 6, 18, 0, (0.85, 0.85, 0.82), 0))     # вышка
         parts.append(_box(95, -150, 8, 8, 3, 0, (0.30, 0.40, 0.50), 18))
+        parts.append(_house(110, -330, 30, 24, 8, 5, 0, (0.66, 0.70, 0.74), (0.40, 0.46, 0.54), 0))  # ангар 2
+        for z in (-200.0, -188.0):                                          # топливные баки
+            parts.append(_box(150, z, 5, 9, 4, np.pi / 2, (0.90, 0.90, 0.88), 0))
+        parts.append(_box(40, 330, 0.3, 0.3, 7, 0, (0.85, 0.85, 0.85), 0))   # ветроуказатель
+        parts.append(_box(40, 332.5, 0.9, 5, 0.9, 0, (0.95, 0.45, 0.15), 6.2))
         return _merge(parts)
 
     def _build_village(self):
@@ -437,16 +568,39 @@ class DefaultMap(World):
         return _merge(parts)
 
     def _build_trees(self):
+        from viz.maps3d import _crowns                           # лиственные — кроны-октаэдры
         rng = self.rng
-        X = rng.uniform(*MAP_X, 120000)
-        Z = rng.uniform(*MAP_Z, 120000)
+        X = rng.uniform(*MAP_X, 220000)
+        Z = rng.uniform(*MAP_Z, 220000)
         Y = self.height(X, Z)
         ok = ((Y > -0.5) & (self.runway_mask(X, Z) > 0.6) & (_seg_dist(X, Z, ROAD) > 10)
               & (np.hypot(X - VILLAGE[0], Z - VILLAGE[1]) > 330))
+        for t in TRACKS:
+            ok &= _seg_dist(X, Z, t, near=8) > 7
+        for fx, fz, _ in FARMS:
+            ok &= np.hypot(X - fx, Z - fz) > 45
+        ok &= np.hypot(X - MILL[0], Z - MILL[1]) > 25
+        ok &= np.hypot(X - HAMLET[0], Z - HAMLET[1]) > 190
         f = ok & self.forest(X, Z)
+        mixed = noise_mix(X, Z) > 0.15                           # пятна лиственного леса
+        con = f & ~mixed
+        brd = f & mixed & (rng.random(X.size) < 0.8)
+        dr = self.river_dist(X, Z)
+        brd |= ok & (dr > 80) & (dr < 130) & (np.sin(Z / 140.0) + np.sin(Z / 53.0) > -0.6)  # ивы
+        for fx, fz, a in FARMS:                                  # сады за домом
+            gx, gz = fx - 40 * np.cos(a) + 20 * np.sin(a), fz + 40 * np.sin(a) + 20 * np.cos(a)
+            brd |= ok & (np.hypot(X - gx, Z - gz) < 40) & (rng.random(X.size) < 0.6)
+        for b in BELTS:                                          # лесополосы
+            brd |= ok & (_seg_dist(X, Z, b, near=8) < 7) & (rng.random(X.size) < 0.9)
         lone = ok & ~f & (rng.random(X.size) < 0.012)            # одиночные деревья в полях
-        sel = np.flatnonzero(f)[:10000].tolist() + np.flatnonzero(lone).tolist()
-        return _trees(X[sel], Y[sel], Z[sel], rng)
+        brd |= lone & (rng.random(X.size) < 0.7)
+        con |= lone & ~brd
+        ic = np.flatnonzero(con)[:12000]
+        ib = np.flatnonzero(brd & ~con)[:12000]
+        root = Entity()
+        _trees(X[ic], Y[ic], Z[ic], rng).parent = root
+        _crowns(X[ib], Y[ib], Z[ib], rng).parent = root
+        return root
 
 
 MAPS = {"default": DefaultMap}
@@ -643,3 +797,8 @@ def _merge_arrays(parts):
 
 def _merge(parts):
     return _mesh(*_merge_arrays(parts))
+
+
+# Процедурные карты 10 × 10 км (viz/maps3d.py): модуль сам добавляет их в MAPS.
+# Импорт в конце файла — модулю карт нужны World и функции геометрии выше.
+import viz.maps3d                   # noqa: E402,F401

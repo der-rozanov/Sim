@@ -20,8 +20,9 @@ python viz/viewer3d.py <лог s8> --at 22 --cam 2 --shot docs/img/v3d_turn_cock
 python viz/viewer3d.py <лог s10, ветер> --at 150 --cam 4 --shot docs/img/v3d_route_top.png
 ```
 
-Виды карт сверху (`maptop_*`) — копии `viz/map_cache/top_<карта>.png`, уменьшенные до
-600 × 600. Скриншоты 3D хранятся в JPG.
+Виды карт сверху (`maptop_*`, 600 × 600) и 3D-кадры карт (`map3d_*`) — скрипт
+`map_shots.py` (`python docs/figures/map_shots.py [карта…]`, точки обзора — `VIEWS`).
+Скриншоты 3D хранятся в JPG.
 
 Пример сценария `grab_screen.py` (стенд, ступенька курса +30°):
 
