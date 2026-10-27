@@ -29,7 +29,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
-from sim.state import PHI, PSI, H, X, Y, DA, DR
+from sim.state import H, X, Y, DA, DR, euler
 from sim.wind import wind
 from runner import run, compute_trim, trim_state, print_summary
 from control.controllers import LateralControlParams
@@ -86,7 +86,7 @@ for tt in [0, 5, 10, 20, 21, 22, 23, 25, 27, 30, 35, 45, 46, 48, 50, 53, 57, 65,
     i = min(int(np.searchsorted(t, tt - 1e-9)), len(t) - 1)
     s = log_a.state[i]
     print(f"{t[i]:5.1f} {deg(sau_a.chi_ref_buf[i]):6.0f} {deg(chi_a[i]):7.1f} "
-          f"{deg(s[PSI]):7.1f} {deg(sau_a.phi_ref_buf[i]):6.1f} {deg(s[PHI]):6.1f} "
+          f"{deg(euler(s)[2]):7.1f} {deg(sau_a.phi_ref_buf[i]):6.1f} {deg(euler(s)[0]):6.1f} "
           f"{deg(log_a.beta[i]):6.2f} {deg(log_a.controls[i, DA]):6.2f} "
           f"{deg(log_a.controls[i, DR]):6.2f} {s[H]:6.1f} {log_a.Va[i]:5.1f} "
           f"{s[X]:6.0f} {s[Y]:6.0f}")
@@ -108,7 +108,7 @@ def metrics(log, chi, sau):
         "over1": over1,
         "over2": over2,
         "beta":  deg(np.max(np.abs(log.beta[t >= T_TURN1]))),
-        "phi":   deg(np.max(np.abs(log.state[:, PHI]))),
+        "phi":   deg(np.max(np.abs(log.phi))),
         "dh":    np.max(np.abs(log.state[t >= T_TURN1, H] - cfg.h0)),
         "dVa":   np.max(np.abs(log.Va - cfg.Va0)),
         "da":    deg(np.max(np.abs(log.controls[:, DA]))),
@@ -139,10 +139,10 @@ i_ss = int(np.searchsorted(t, T_TURN1 + 3.0))
 s = log_a.state[i_ss]
 # ψ̇ — по окну ±0.5 с (руль направления с шумом зонда даёт мелкую дрожь r)
 k = int(round(0.5 / cfg.dt))
-psi_dot = (log_a.state[i_ss + k, PSI] - log_a.state[i_ss - k, PSI]) / (2 * k * cfg.dt)
-print(f"\nРазворот при t={t[i_ss]:.1f} с: φ = {deg(s[PHI]):.1f}°, "
-      f"ψ̇ = {deg(psi_dot):.2f} °/с, g·tgφ/Va = {deg(aircraft.g*np.tan(s[PHI])/log_a.Va[i_ss]):.2f} °/с")
-R_turn = log_a.Va[i_ss]**2 / (aircraft.g * np.tan(abs(s[PHI])))
+psi_dot = (log_a.psi[i_ss + k] - log_a.psi[i_ss - k]) / (2 * k * cfg.dt)
+print(f"\nРазворот при t={t[i_ss]:.1f} с: φ = {deg(euler(s)[0]):.1f}°, "
+      f"ψ̇ = {deg(psi_dot):.2f} °/с, g·tgφ/Va = {deg(aircraft.g*np.tan(euler(s)[0])/log_a.Va[i_ss]):.2f} °/с")
+R_turn = log_a.Va[i_ss]**2 / (aircraft.g * np.tan(abs(euler(s)[0])))
 print(f"Радиус разворота R = Va²/(g·tgφ) = {R_turn:.0f} м")
 
 print()

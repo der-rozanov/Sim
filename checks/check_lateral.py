@@ -21,7 +21,8 @@ if hasattr(sys.stdout, "reconfigure"):
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from sim.config import AircraftParams, WindParams, SimConfig
-from sim.state import V, P, R, PHI, PSI, Y, H, X, Q, THETA, U, W
+from sim.state import V, P, R, Y, H, X, Q, U, W, euler, euler_rates
+from sim.linearize import jacobian
 from sim.dynamics import derivatives
 from runner import run, compute_trim, trim_state
 
@@ -40,8 +41,8 @@ def table(log, times, title):
     for tt in times:
         i = min(int(np.searchsorted(log.t, tt - 1e-9)), len(log.t) - 1)
         s = log.state[i]
-        print(f"{log.t[i]:6.1f} {deg(s[PHI]):7.2f} {deg(s[P]):8.2f} {deg(s[R]):8.2f} "
-              f"{deg(log.beta[i]):7.2f} {deg(s[PSI]):8.2f} {s[H]:7.1f} {log.Va[i]:8.2f} "
+        print(f"{log.t[i]:6.1f} {deg(euler(s)[0]):7.2f} {deg(s[P]):8.2f} {deg(s[R]):8.2f} "
+              f"{deg(log.beta[i]):7.2f} {deg(euler(s)[2]):8.2f} {s[H]:7.1f} {log.Va[i]:8.2f} "
               f"{s[X]:7.0f} {s[Y]:7.1f}")
 
 
@@ -58,12 +59,7 @@ B = np.column_stack([(derivatives(s0, c0 + e, 0.0, ap, calm)[[P, R]] - d0) / 1e-
                      for e in (np.array([0, 0, 1e-6, 0]), np.array([0, 0, 0, 1e-6]))])
 da_tr, dr_tr = np.linalg.solve(B, -d0)
 c_tr = np.array([de_tr, thr_tr, da_tr, dr_tr])
-idx = [V, P, R, PHI]
-f0 = derivatives(s0, c_tr, 0.0, ap, calm)
-A = np.zeros((4, 4))
-for j, k in enumerate(idx):
-    sp = s0.copy(); sp[k] += 1e-6
-    A[:, j] = (derivatives(sp, c_tr, 0.0, ap, calm)[idx] - f0[idx]) / 1e-6
+A, _ = jacobian(s0, c_tr, ("v", "p", "r", "phi"), ap, calm)
 eig = np.linalg.eigvals(A)
 dr = eig[eig.imag > 1e-6][0]
 real = np.sort(eig[np.abs(eig.imag) <= 1e-6].real)
@@ -130,9 +126,9 @@ print(f"{'t, с':>6} {'φ, °':>7} {'β, °':>7} {'ψ̇ модели, °/с':>15
 for tt in [5, 10, 20, 30]:
     i = min(int(round(tt / cfg.dt)), len(log1.t) - 1)
     s = log1.state[i]
-    psi_dot = derivatives(s, log1.controls[i], log1.t[i], ap, calm)[PSI]
-    print(f"{log1.t[i]:6.1f} {deg(s[PHI]):7.2f} {deg(log1.beta[i]):7.2f} "
-          f"{deg(psi_dot):15.2f} {deg(ap.g*np.tan(s[PHI])/log1.Va[i]):15.2f}")
+    psi_dot = euler_rates(s)[2]
+    print(f"{log1.t[i]:6.1f} {deg(euler(s)[0]):7.2f} {deg(log1.beta[i]):7.2f} "
+          f"{deg(psi_dot):15.2f} {deg(ap.g*np.tan(euler(s)[0])/log1.Va[i]):15.2f}")
 print("  Ожидание: значения близки (разворот почти координированный, β мало).")
 
 # ------------------------------------------------------------------

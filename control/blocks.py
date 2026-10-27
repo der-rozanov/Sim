@@ -79,7 +79,7 @@ def sau_signals(sau, state, alpha, beta):
     штатная САУ подаёт в свои контуры (θ_ref — после TECS, φ_ref — после контура курса).
     alpha, beta — истинные (как у TruthSensors).
     """
-    from sim.state import PSI, R
+    from sim.state import R, euler
     from .controllers import wrap_angle
     from .sau import Mode
     e, deg = sau.est, math.degrees
@@ -90,7 +90,7 @@ def sau_signals(sau, state, alpha, beta):
         "Va_ref": sau.refs.Va, "Va": e["Va"],
         "alpha": deg(alpha), "beta": deg(beta),
         "phi_ref": deg(sau.lat.phi_ref), "phi": deg(wrap_angle(e["phi"])), "p": deg(e["p"]),
-        "r": deg(state[R]), "psi": deg(state[PSI]) % 360.0,
+        "r": deg(state[R]), "psi": deg(euler(state)[2]) % 360.0,
         "chi_ref": deg(sau.refs.chi), "chi": deg(e["chi"]),
         "Vg": e["Vg"], "chidot_ff": deg(e["Vg"] * sau.refs.kappa),
         "alpha_trim": deg(sau.alpha_trim),

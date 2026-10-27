@@ -6,8 +6,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from sim.config import AircraftParams, WindParams, SimConfig
-from sim.state import (initial_state, air_data, total_energy, full_controls,
-                       U, W, Q, THETA, H, N_STATES, N_CONTROLS)
+from sim.state import (initial_state, air_data, total_energy, full_controls, euler,
+                       quat_from_euler, U, W, Q, H, QUAT, N_STATES, N_CONTROLS)
 from sim.wind import make_wind_fn
 from sim.integrators import step_rk4
 from sim.actuators import actuator_init, actuator_step
@@ -18,7 +18,7 @@ from sim.dynamics import thrust
 class Log:
     """Результат одного прогона симулятора."""
     t:        np.ndarray   # (N,)      время, с
-    state:    np.ndarray   # (N, 12)   вектор состояния (индексы — sim.state)
+    state:    np.ndarray   # (N, 13)   вектор состояния (индексы — sim.state)
     controls: np.ndarray   # (N, 4)    положения рулей [delta_e рад, throttle 0-1, delta_a рад, delta_r рад]
     Va:       np.ndarray   # (N,)      воздушная скорость, м/с
     alpha:    np.ndarray   # (N,)      УА, рад
@@ -28,6 +28,19 @@ class Log:
     wind_vec: np.ndarray   # (N, 3)    [Vwx, Vwh, Vwy] м/с
     beta:     np.ndarray = None  # (N,) УС, рад
     controls_cmd: np.ndarray = None  # (N, 4) команды САУ до приводов рулей (sim/actuators.py)
+
+    # Углы Эйлера (N,), рад — по кватерниону вектора состояния (sim.state.euler)
+    @property
+    def phi(self) -> np.ndarray:
+        return euler(self.state)[0]
+
+    @property
+    def theta(self) -> np.ndarray:
+        return euler(self.state)[1]
+
+    @property
+    def psi(self) -> np.ndarray:
+        return euler(self.state)[2]
 
 
 def run(controls_fn,
@@ -149,14 +162,14 @@ def trim_state(aircraft: AircraftParams, cfg) -> np.ndarray:
     s = np.zeros(N_STATES)
     s[U]     = cfg.Va0 * np.cos(alpha_tr)
     s[W]     = cfg.Va0 * np.sin(alpha_tr)
-    s[THETA] = alpha_tr
+    s[QUAT]  = quat_from_euler(0.0, alpha_tr, 0.0)
     s[H]     = cfg.h0
     return s
 
 
 def print_summary(log: Log, params: AircraftParams, label: str = ""):
     """Распечатать числовые итоги прогона."""
-    from sim.state import THETA, H as H_idx
+    from sim.state import H as H_idx
     t, Va, alpha, h = log.t, log.Va, log.alpha, log.state[:, H_idx]
 
     alpha_warn = params.alpha_warning

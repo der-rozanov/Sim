@@ -52,7 +52,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from sim.turbulence import TURB_LEVELS
 from sim.config import WindParams, SimConfig, AIRCRAFT_TYPES, aircraft_by_name
-from sim.state import H, P, Q, PHI, THETA, X, Y, air_data, earth_velocity
+from sim.state import H, P, Q, X, Y, air_data, earth_velocity, euler
 from sim.aero import aero_forces_moments
 from control.controllers import LateralControlParams, PitchControlParams, wrap_angle
 from control.tecs import TECSParams
@@ -328,7 +328,7 @@ class Bench(Game):
         self.chi_unwrap += wrap_angle(chi - self.chi_unwrap)
         sau = self.sau
         e_chi = wrap_angle(sau.refs.chi - chi)
-        phi = np.radians(_wrap180(deg(s[PHI])))
+        phi = np.radians(_wrap180(deg(euler(s)[0])))
         pit, lon, lat = sau.pitch, sau.lon, sau.lat
         h_ref = sau.refs.h if self.h_hold else s[H]
         Vs = max(Va, 1.0)                    # производные энергии на стенде — ×Va, в м/с набора
@@ -352,8 +352,8 @@ class Bench(Game):
             "thr_ff": lon.thr_ff, "thr_fb": lon.thr_fb, "thr": c[1],
             "theta_ff": deg(lon.theta_ff), "theta_fb": deg(lon.theta_fb), "us": lon.underspeed,
             # тангаж
-            "theta_ref": deg(pit.theta_ref), "theta": deg(s[THETA]),
-            "e_theta": deg(pit.theta_ref - s[THETA]),
+            "theta_ref": deg(pit.theta_ref), "theta": deg(euler(s)[1]),
+            "e_theta": deg(pit.theta_ref - euler(s)[1]),
             "q_ref": deg(pit.q_ref), "q": deg(s[Q]), "e_q": deg(pit.q_ref - s[Q]),
             "gs": gs, "de": deg(c[0]), "de_cmd": deg(self.cmd[0]),
             # рыскание

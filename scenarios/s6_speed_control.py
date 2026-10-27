@@ -33,7 +33,7 @@ from runner import run, compute_trim, trim_state, print_summary
 from control.controllers import with_roll_hold   # САУ по крену (РЕШ-19)
 from control.controllers import PitchController, PitchControlParams, SpeedController, SpeedControlParams
 from control.sensors import measure_gyro, measure_altitude, measure_airspeed
-from sim.state import THETA, Q, H
+from sim.state import Q, H, euler
 from flight_logger import FlightLogger
 from viz.viewer import show_flightlog
 
@@ -88,7 +88,7 @@ ctrl_params = PitchControlParams(Va_ref=cfg.Va0)
 controller  = PitchController(aircraft, ctrl_params)
 controller.set_trim_throttle(thr_trim)
 controller.set_trim_elevator(de_trim)   # упреждающий балансировочный δe
-controller.reset({'theta': s0[THETA], 'q': 0.0, 'h': H_TRIM})
+controller.reset({'theta': euler(s0)[1], 'q': 0.0, 'h': H_TRIM})
 
 # ПИД скорости (throttle)
 spd_params  = SpeedControlParams()
@@ -117,7 +117,7 @@ def controls_fn(t, state, Va, alpha):
     # Измерения
     h_meas    = measure_altitude(state[H], sp.baro_bias, sp.baro_noise, rng)
     q_meas    = measure_gyro(state[Q], sp.gyro_bias, sp.gyro_noise, rng)
-    theta_meas = state[THETA] + rng.normal(0.0, sp.gyro_noise)
+    theta_meas = euler(state)[1] + rng.normal(0.0, sp.gyro_noise)
     Va_meas   = measure_airspeed(Va, sp.airspeed_bias, sp.airspeed_noise, rng)
 
     # Внешний контур высоты: P по высоте → theta_ref

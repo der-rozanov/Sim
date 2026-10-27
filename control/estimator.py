@@ -46,7 +46,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from sim.state import X, Y, H, PHI, THETA, PSI, rotation_body_to_earth, earth_velocity, air_data
+from sim.state import X, Y, H, euler, rotation, earth_velocity, air_data
 
 G = 9.81
 I3 = np.eye(3)
@@ -235,6 +235,9 @@ class StateEstimator:
         self.mag_ned = sp.mag_field * np.array([np.cos(I) * np.cos(D), np.cos(I) * np.sin(D), np.sin(I)])
         self.q_bg = 2.0 * sp.gyro_drift_sigma**2 / sp.gyro_drift_tau     # (рад/с)²/с
         self.ready = False
+        # синтетическое β = 0: допущение полёта без скольжения; в пилотаже (β до 20° на «ноже»)
+        # нарушено и портит оценку ветра (до 7.6 м/с) — SAU выключает его в режиме AEROBATIC
+        self.fuse_beta = True
         self.stats = {}            # по группам: [использовано, отбраковано]
         self.test_ratio = {}       # последнее отношение невязки к порогу
         self.innov = {}            # по группам: последние невязка e и √S_ii (диагностика)
@@ -379,8 +382,9 @@ class StateEstimator:
             h, H = meas_airspeed(self.q, self.v, self.w)
             self._correct("tas", np.array([m["Va"]]), h, H,
                           np.array([sp.airspeed_noise**2]), pr.gate_tas)
-            h, H = meas_sideslip(self.q, self.v, self.w)       # вместе с ПВД (EKF2_FUSE_BETA)
-            self._correct("beta", np.zeros(1), h, H, np.array([pr.beta_sigma**2]), pr.gate_beta)
+            if self.fuse_beta:                                 # вместе с ПВД (EKF2_FUSE_BETA)
+                h, H = meas_sideslip(self.q, self.v, self.w)
+                self._correct("beta", np.zeros(1), h, H, np.array([pr.beta_sigma**2]), pr.gate_beta)
 
     def _gps(self, m):
         sp, pr = self.sp, self.pr
@@ -520,9 +524,9 @@ def euler_sigma(q, P_th):
 def _truth(s, w):
     """Истина в обозначениях фильтра: R, v и p в NED, ветер (N, E), Va, (φ, θ, ψ)."""
     Vx, Vy, Vh = earth_velocity(s)
-    return {"R": rotation_body_to_earth(s[PHI], s[THETA], s[PSI]), "v": np.array([Vx, Vy, -Vh]),
+    return {"R": rotation(s), "v": np.array([Vx, Vy, -Vh]),
             "p": np.array([s[X], s[Y], -s[H]]), "w": np.array([w[0], w[2]]),
-            "Va": air_data(s, w)[0], "eul": np.array([s[PHI], s[THETA], s[PSI]])}
+            "Va": air_data(s, w)[0], "eul": np.array(euler(s))}
 
 
 class EstimatorMonitor:

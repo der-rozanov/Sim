@@ -33,8 +33,12 @@
 sim/                  — ядро физики (изолировано, без управления)
     config.py         — параметры ЛА, ветра, датчиков, прогона (AircraftParams и др.);
                         реестр типов ЛА AIRCRAFT_TYPES, aircraft_by_name() (РЕШ-24)
-    state.py          — вектор состояния 6DOF (12 компонент), индексы U..Y, DE..DR,
-                        air_data() -> (Va, alpha, beta), air_velocity(), earth_velocity()
+    state.py          — вектор состояния 6DOF (13 компонент, ориентация — кватернион E0..E3,
+                        РЕШ-35), индексы U..Y, QUAT, DE..DR; euler(state) -> (φ, θ, ψ),
+                        with_euler(), rotation(state); air_data() -> (Va, alpha, beta),
+                        air_velocity(), earth_velocity()
+    linearize.py      — jacobian(state, controls, names, ...) — линейная модель в переменных
+                        механики полёта (u, w, q, theta, v, p, r, phi…): LQR, проверки мод
     dynamics.py       — derivatives() [полная 6DOF, чистая функция], thrust()
     aero.py           — aero_forces_moments() (продольный), aero_lateral() (боковой)
     dynamics.py: propeller() — мотор + винт (B&M 2-е изд.), реактивный момент по крену
@@ -66,7 +70,8 @@ control/              — управление (импортирует толь�
                         SAUSpecs) → параметры всех регуляторов; для другого ЛА — тот же вызов
     sau.py            — SAU: вся САУ одним классом (РЕШ-26): sensors → estimator → nav →
                         lon (h, Va → θ, δt) → [защита по α] → pitch; lat (χ → φ → δa, β → δr);
-                        режимы Mode PITCH/ALTITUDE/ROUTE; звенья заменяемые (TECS, EKF, INDI…)
+                        режимы Mode PITCH/ALTITUDE/ROUTE/AEROBATIC (пилотаж — fly_aerobatics);
+                        звенья заменяемые (TECS, EKF, INDI…)
                         датчики: TruthSensors | NoisySensors (s8–s10) | RealisticSensors (РЕШ-31,
                         3D по умолчанию: частоты, запаздывание GPS, дрейф, акселерометр, магнитометр)
     estimator.py      — StateEstimator (РЕШ-32): инерциальный EKF по схеме PX4 EKF2 — вектор ошибок 17
@@ -78,6 +83,9 @@ control/              — управление (импортирует толь�
                         Va, V̇ — свой фильтр ПВД + акселерометр, как в PX4 (РЕШ-33)
     navigation.py     — WaypointNavigator, NavParams: полёт по точкам (B&M 10–11): прямая/
                         окружность векторным полем, углы — дугой R_fillet, кружение у последней
+    aerobatics.py     — пилотаж по траектории фигуры (побочная разработка): Figure из line()/arc(),
+                        AerobaticController — наведение (ПД + кривизна) → α_c, β_c → ориентация
+                        (кватернионная ошибка) → p, q, r → рули; docs/control.md, раздел 13
     blocks.py         — структурные схемы САУ из блоков (BlockLab3D): библиотека звеньев
                         (названия — термины ТАУ), Diagram, sau_signals(); шаблоны всех каналов
                         (заготовки + штатные ≡ регуляторам controllers.py), templates()
@@ -116,7 +124,7 @@ viz/                  — отображение (принимает Log, не �
                         с автотрассировкой, масштаб (Ctrl+колесо, «Вписать»), осциллограф;
                         процесс-спутник scenarios/BlockLab3D.py
 
-scenarios/            — прогоны s1–s10; каждый: конфиг → run() → viz или logger.save()
+scenarios/            — прогоны s1–s11; каждый: конфиг → run() → viz или logger.save()
     s1_steady_flight.py    — балансировка, тримовый горизонтальный полёт
     s2_pitch_up.py         — кабрирование (уставка theta_ref > 0)
     s3_pitch_down.py       — пикирование (уставка theta_ref < 0)
@@ -129,6 +137,8 @@ scenarios/            — прогоны s1–s10; каждый: конфиг �
     s9_crosswind.py       — ступенька бокового ветра: удержание путевого угла,
                              сверка с треугольником скоростей
     s10_waypoints.py       — полёт по точкам (WaypointNavigator): штиль и боковой ветер
+    s11_aerobatics.py      — пилотажный комплекс C-11 (фигуры 1–8, без штопора) по траектории
+                             (control/aerobatics.py): штиль и ветер 4 м/с; побочная разработка
     lateral_common.py      — FullSAU: обёртка control.sau.SAU с псевдодатчиками для run()
     GameScenario3D.py      — пилотирование в 3D в реальном времени (Ursina): ручной режим
                              6DOF + САУ (θ/h, Va, курс, маршрут — окно карты, N);
@@ -171,6 +181,8 @@ checks/               — проверки здравого смысла
     check_motor.py        — характеристики силовой установки
     check_optimal_speed.py — Va_md (макс. дальность), Va_mp (макс. продолжительность),
                              what-if анализ: какой параметр сдвигает Va_md к заданной цели
+    check_aerobatics.py   — пилотаж: петля, бочка, квадратная петля на полной модели
+                            (checks/aerobatics.png)
     check_blocks.py       — схемы из блоков: шаблоны ≡ регуляторы, звенья, ошибки схемы,
                             полёт «все каналы» из блоков против SAU(lon="split")
 
@@ -186,7 +198,7 @@ docs/                 — техническая документация (ка�
     SENSORS.md        — псевдодатчики: модель, параметры, кто что измеряет, влияние шума
     viewer3d.md       — 3D-тренажёр: запуск, клавиши, СК и ориентация, проверки
     architecture.md   — зависимости, Log, controls_fn, новый сценарий, viewer, интерфейсы
-    decisions.md      — журнал решений РЕШ-01…33 (почему сделано так)
+    decisions.md      — журнал решений РЕШ-01…35 (почему сделано так)
     scenarios_report.md — результаты сценариев С1–С10 (числа на прежнем ЛА)
 results/              — .flightlog файлы (генерируемые, в .gitignore)
 ```
@@ -333,11 +345,11 @@ from viz.viewer   import show_flightlog
 ## Текущий статус реализации
 
 Полный перечень сделанного и дальнейших шагов — docs/DEV_PLAN.md; почему сделано так —
-docs/decisions.md (РЕШ-01…33).
+docs/decisions.md (РЕШ-01…35).
 
 ### Реализовано (кратко)
-- Физика `sim/`: 6DOF, состояние `[u, w, q, θ, x, h, v, p, r, φ, ψ, y]` (индексы 0..5 —
-  продольные), управление `[δe, δt, δa, δr]` (2 элемента → δa = δr = 0), ветер
+- Физика `sim/`: 6DOF, состояние `[u, w, q, x, h, v, p, r, y, e0, e1, e2, e3]` (ориентация —
+  кватернион, РЕШ-35; углы — `euler(state)`, `log.phi|theta|psi`), управление `[δe, δt, δa, δr]` (2 элемента → δa = δr = 0), ветер
   `(Vwx, Vwh, Vwy)`; аэродинамика с sigmoid-срывом, боковые `CY_*`, `Croll_*` (момент
   крена — НЕ Cl!), `Cn_*`; ВМГ `propeller()`; приводы рулей (РЕШ-28); земля и шасси
   (РЕШ-25); RK4 + Эйлер. Уравнения — docs/physics.md.
@@ -485,7 +497,7 @@ git checkout -- checks/*.png      # check_*.py перегенерируют PNG 
 - `compute_trim` — линейный по CL/Cm (без sigmoid), только горизонтальный полёт без
   крена; боковой трим (δa против момента винта) не считает.
 - Срыв в Cm и боковые производные после срыва не моделируются (нет данных).
-- Якобиан считается в трёх местах (control/lqr.py, checks/check.py, checks/check_lateral.py).
+- Якобиан — общий модуль `sim/linearize.py` (РЕШ-35); модального анализа отдельным модулем нет.
 - `Log.E_kin` считается по скорости без ветра (`total_energy(state, aircraft)` в runner)
   — при ветре это кинетическая энергия по земной, а не воздушной скорости.
 - `control/lqr.py` использует scipy (DARE) — исключение из правила «только numpy».

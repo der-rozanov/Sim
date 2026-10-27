@@ -50,7 +50,7 @@ import numpy as np
 
 from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
 from runner import Log
-from sim.state import THETA, Q, H, X, U, W, V, P, R, PHI, PSI, Y, DE, DT, DA, DR, earth_velocity
+from sim.state import Q, H, X, U, W, V, P, R, Y, DE, DT, DA, DR, earth_velocity
 from sim.dynamics import thrust
 
 # Папка для логов по умолчанию — results/ рядом с flight_logger.py
@@ -192,7 +192,7 @@ class FlightLogger:
 
         # ---- Производные каналы ----------------------------------------
         alpha_true = log.alpha                         # рад
-        gamma      = log.state[:, THETA] - alpha_true  # угол траектории по воздуху
+        gamma      = log.theta - alpha_true  # угол траектории по воздуху
 
         # путевой угол χ = atan2(V_восток, V_север) по земной скорости
         V_earth = np.array([earth_velocity(s) for s in log.state])
@@ -334,7 +334,7 @@ class FlightLogger:
             x           = log.state[:, X],
             u           = log.state[:, U],
             w           = log.state[:, W],
-            theta       = log.state[:, THETA],
+            theta       = log.theta,
             q           = log.state[:, Q],
             Va          = log.Va,
             alpha_true  = alpha_true,
@@ -342,8 +342,8 @@ class FlightLogger:
             v           = log.state[:, V],
             p           = log.state[:, P],
             r           = log.state[:, R],
-            phi         = log.state[:, PHI],
-            psi         = log.state[:, PSI],
+            phi         = log.phi,
+            psi         = log.psi,
             beta_true   = log.beta,
             wind_y      = log.wind_vec[:, 2],
             delta_a     = log.controls[:, DA],

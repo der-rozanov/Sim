@@ -29,7 +29,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
-from sim.state import PHI, PSI, H, X, Y, DA, DR, earth_velocity
+from sim.state import H, X, Y, DA, DR, earth_velocity, euler
 from sim.wind import wind
 from runner import run, compute_trim, trim_state, print_summary
 from control.controllers import LateralControlParams
@@ -86,7 +86,7 @@ for tt in [0, 19, 20, 20.2, 20.5, 21, 22, 25, 30, 40, 50, 52, 55, 60, 70, 79.99]
     i = min(int(np.searchsorted(t, tt - 1e-9)), len(t) - 1)
     s = log_a.state[i]
     print(f"{t[i]:5.1f} {deg(sau_a.chi_ref_buf[i]):6.0f} {deg(chi_a[i]):7.2f} "
-          f"{deg(s[PSI]):7.2f} {deg(s[PSI] - chi_a[i]):6.2f} {deg(s[PHI]):6.2f} "
+          f"{deg(euler(s)[2]):7.2f} {deg(euler(s)[2] - chi_a[i]):6.2f} {deg(euler(s)[0]):6.2f} "
           f"{deg(log_a.beta[i]):6.2f} {deg(log_a.controls[i, DA]):6.2f} "
           f"{deg(log_a.controls[i, DR]):6.2f} {Vg_a[i]:5.1f} {s[H]:6.1f} "
           f"{s[X]:6.0f} {s[Y]:6.1f}")
@@ -99,11 +99,11 @@ m_east = t > cfg.t_end - 10                     # установившийся �
 Va_m   = np.mean(log_a.Va[m_hold])
 print()
 print("Установившийся режим                  моделирование    треугольник скоростей")
-print(f"  χ=0°:  ψ (угол упреждения), °     {deg(np.mean(log_a.state[m_hold, PSI])):12.2f}"
+print(f"  χ=0°:  ψ (угол упреждения), °     {deg(np.mean(log_a.psi[m_hold])):12.2f}"
       f"     {deg(-np.arcsin(VW / Va_m)):12.2f}")
 print(f"  χ=0°:  Vg, м/с                    {np.mean(Vg_a[m_hold]):12.2f}"
       f"     {np.sqrt(Va_m**2 - VW**2):12.2f}")
-print(f"  χ=90°: ψ − χ, °                   {deg(np.mean(log_a.state[m_east, PSI] - chi_a[m_east])):12.2f}"
+print(f"  χ=90°: ψ − χ, °                   {deg(np.mean(log_a.psi[m_east] - chi_a[m_east])):12.2f}"
       f"     {0.0:12.2f}")
 print(f"  χ=90°: Vg, м/с                    {np.mean(Vg_a[m_east]):12.2f}"
       f"     {np.mean(log_a.Va[m_east]) + VW:12.2f}")
@@ -120,7 +120,7 @@ def metrics(log, chi):
         "beta": deg(np.max(np.abs(log.beta[m]))),
         "beta_ss": deg(np.mean(log.beta[(t > T_WIND + 10) & (t < T_TURN)])),
         "y":    np.max(np.abs(y_track)),
-        "phi":  deg(np.max(np.abs(log.state[m, PHI]))),
+        "phi":  deg(np.max(np.abs(log.phi[m]))),
         "dr":   deg(np.max(np.abs(log.controls[m, DR]))),
         "dh":   np.max(np.abs(log.state[m, H] - cfg.h0)),
     }

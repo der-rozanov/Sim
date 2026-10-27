@@ -25,7 +25,7 @@ if hasattr(sys.stdout, "reconfigure"):
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from sim.config import AircraftParams, WindParams, SensorParams, SimConfig
-from sim.state import Q, THETA, H
+from sim.state import Q, H, euler
 from sim.wind import wind as _wind_base
 from control.lqr import LQRController, LQRParams
 from control.sensors import measure_gyro, measure_altitude, measure_airspeed
@@ -114,7 +114,7 @@ def controls_fn(t, state, Va, alpha):  # noqa: ARG001 — alpha required by runn
     q_meas     = measure_gyro(state[Q],     sp.gyro_bias,     sp.gyro_noise,     rng)
     h_meas     = measure_altitude(state[H], sp.baro_bias,     sp.baro_noise,     rng)
     Va_meas    = measure_airspeed(Va,       sp.airspeed_bias, sp.airspeed_noise, rng)
-    theta_meas = state[THETA]
+    theta_meas = euler(state)[1]
 
     # Фильтрация высоты перед подачей во внешний P-контур
     h_filt[0] = H_FILT_ALPHA * h_filt[0] + (1.0 - H_FILT_ALPHA) * h_meas

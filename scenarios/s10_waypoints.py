@@ -25,7 +25,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
-from sim.state import H, X, Y, PHI
+from sim.state import H, X, Y, euler
 from sim.wind import wind
 from runner import run, trim_state
 from control.navigation import WaypointNavigator, NavParams
@@ -107,7 +107,7 @@ def report(label, log, sau, epy, mode, idx):
     m = mode == "fillet"
     if m.any():
         print(f"  дуги скругления R = {sau.nav.params.R_fillet:.0f} м: |d − R| max = "
-              f"{np.max(np.abs(epy[m])):.1f} м;  φ max = {deg(np.max(np.abs(st[m, PHI]))):.1f}°")
+              f"{np.max(np.abs(epy[m])):.1f} м;  φ max = {deg(np.max(np.abs(euler(st[m])[0]))):.1f}°")
     m = mode == "orbit"
     if m.any():
         mm = m & (t > t[m][0] + 40)

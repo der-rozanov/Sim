@@ -93,7 +93,7 @@ def derivatives(state, controls, t, params, wind_fn) -> dstate:
 @dataclass
 class Log:
     t:        ndarray (N,)      # время
-    state:    ndarray (N, 12)   # [u, w, q, θ, x, h, v, p, r, φ, ψ, y] на каждом шаге
+    state:    ndarray (N, 13)   # [u, w, q, x, h, v, p, r, y, e0, e1, e2, e3] на каждом шаге
     controls: ndarray (N, 4)    # [δe, throttle, δa, δr] — положения рулей после приводов
     Va:       ndarray (N,)      # воздушная скорость
     alpha:    ndarray (N,)      # УА в радианах
@@ -105,15 +105,15 @@ class Log:
     controls_cmd: ndarray (N, 4) # команды САУ до приводов рулей (положения — в controls)
 ```
 
-Столбцы 0..5 `state`, 0..1 `controls`, 0..1 `wind_vec` имеют тот же смысл,
-что и в продольной версии — старый код с `log.state[:, H]`,
-`log.controls[:, 0]`, `log.wind_vec[:, 1]` работает без изменений.
+Ориентация в `state` — кватернион (РЕШ-35); углы Эйлера — свойства лога
+`log.phi`, `log.theta`, `log.psi` (вычисляются `sim.state.euler`).
 
 Обращение к компонентам состояния из лога:
 ```python
-from state import THETA, H, U
-theta = log.state[:, THETA]   # весь ряд углов тангажа
+from sim.state import H, U, euler
+theta = log.theta             # весь ряд углов тангажа
 h_final = log.state[-1, H]    # финальная высота
+phi, theta, psi = euler(log.state[-1])   # углы в последней точке
 ```
 
 ---
@@ -214,7 +214,8 @@ wind_call = lambda h, t: (5.0 * np.sin(t), 0.0)
 
 Сделано расширением, не переписыванием:
 
-1. `state.py` — индексы `V, P, R, PHI, PSI, Y` (6..11) дописаны после продольных;
+1. `state.py` — индексы `V, P, R, PHI, PSI, Y` (6..11) дописаны после продольных
+   (с 2026-10-27 ориентация — кватернион, состав вектора — docs/physics.md, раздел 2);
    индексы управления `DE, DT, DA, DR`; `full_controls()`; матрица поворота
    `rotation_body_to_earth()`; `earth_velocity()`; `air_data()` → (Va, α, β).
    `air_velocity()` сохранён и возвращает (Va, α), как раньше.

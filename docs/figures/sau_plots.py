@@ -23,7 +23,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
-from sim.state import THETA, Q, H, P, R, PHI, X, Y, air_data, earth_velocity
+from sim.state import Q, H, P, R, V, X, Y, air_data, earth_velocity, euler, with_euler
 from sim.wind import wind as wind_at
 from runner import run, compute_trim, trim_state
 from control.controllers import (PitchController, PitchControlParams, SpeedController,
@@ -109,15 +109,15 @@ def closed_loop(theta_ref=None, h_ref=None, Va_ref=VA, chi_ref=None, state0=None
     def fn(t, s, Va, al):
         speed.set_Va_ref(f(Va_ref, t))
         pitch.theta_ref = alt.step(f(h_ref, t), s[H], DT) if h_ref is not None else theta_ref
-        de = pitch.step(t, {"theta": s[THETA], "q": s[Q], "h": s[H], "Va": Va}, DT)[0]
+        de = pitch.step(t, {"theta": euler(s)[1], "q": s[Q], "h": s[H], "Va": Va}, DT)[0]
         dt_ = speed.step(Va, DT)
         if chi_ref is None:
-            da, dr = hold.step(s[PHI], s[P], Va, DT), 0.0
+            da, dr = hold.step(euler(s)[0], s[P], Va, DT), 0.0
         else:
             Vx, Vy, _ = earth_velocity(s)
             lat.set_course(f(chi_ref, t))
-            da, dr = lat.step({"chi": np.arctan2(Vy, Vx), "Vg": np.hypot(Vx, Vy), "phi": s[PHI],
-                               "p": s[P], "Va": Va, "beta": np.arcsin(np.clip(s[6] / Va, -1, 1))}, DT)
+            da, dr = lat.step({"chi": np.arctan2(Vy, Vx), "Vg": np.hypot(Vx, Vy), "phi": euler(s)[0],
+                               "p": s[P], "Va": Va, "beta": np.arcsin(np.clip(s[V] / Va, -1, 1))}, DT)
         return np.array([de, dt_, da, dr])
 
     return run(fn, ac, WindParams(), cfg(t_end), state0=S0.copy() if state0 is None else state0)
@@ -183,13 +183,13 @@ def fig_steps():
     den_phi = [1, a1 + a2 * GN["kp_p"], a2 * (GN["ki_p"] + FFk / tau), a2 * GN["ki_p"] / tau]
 
     L1 = closed_loop(theta_ref=ALPHA_T + rad(3.0), t_end=2.0)
-    th = deg(L1.state[:, THETA] - ALPHA_T)
+    th = deg(L1.theta - ALPHA_T)
     lin_th = tf_step([GN["kp_theta"] * K["a_theta3"]],
                      [1, K["a_theta1"] + GN["kd_theta"] * K["a_theta3"],
                       K["a_theta2"] + GN["kp_theta"] * K["a_theta3"]], L1.t, 3.0) / GN["K_theta_DC"]
-    s_r = S0.copy(); s_r[PHI] = rad(20.0)
+    s_r = with_euler(S0, rad(20.0), euler(S0)[1], 0.0)
     L2 = closed_loop(theta_ref=ALPHA_T, h_ref=H0, state0=s_r, t_end=2.0)
-    phi = deg(L2.state[:, PHI])
+    phi = deg(L2.phi)
     lin_phi = 20.0 - tf_step(num_phi, den_phi, L2.t, 20.0)
     L3 = closed_loop(h_ref=H0, chi_ref=rad(20.0), t_end=8.0)
     chi = deg(course(L3))
@@ -203,7 +203,7 @@ def fig_steps():
         print(f"  {nm:<12} {om:5.1f} / {ol:5.1f}   {tm:5.2f} / {tl:5.2f}")
     print(f"  макс. δe {deg(np.abs(L1.controls[:, 0] - DE_T)).max():.1f}°, δa (крен) "
           f"{deg(np.abs(L2.controls[:, 2])).max():.1f}°, δa (курс) {deg(np.abs(L3.controls[:, 2])).max():.1f}°, "
-          f"φ (курс) {deg(np.abs(L3.state[:, PHI])).max():.1f}°")
+          f"φ (курс) {deg(np.abs(L3.phi)).max():.1f}°")
 
     fig, axs = plt.subplots(2, 3, figsize=(14, 6.4), sharex="col",
                             gridspec_kw=dict(height_ratios=[1.6, 1]))
@@ -217,7 +217,7 @@ def fig_steps():
         ax.plot(t, ln, color=ORANGE, lw=2, ls="--", label="линейная теория (tuning.py)")
         ax.set(title=ttl, ylabel=yl)
     axs[0, 1].plot(L2.t, deg(L2.state[:, P]) / 10, color=GREEN, lw=1.4, label="p / 10, °/с")
-    axs[0, 2].plot(L3.t, deg(L3.state[:, PHI]), color=GREEN, lw=1.4, label="крен φ, °")
+    axs[0, 2].plot(L3.t, deg(L3.phi), color=GREEN, lw=1.4, label="крен φ, °")
     axs[0, 1].text(1.0, 0.03, "зелёная — p/10, °/с", transform=axs[0, 1].transAxes, ha="right",
                    color=GREEN, fontsize=9)
     axs[0, 2].text(1.0, 0.03, "зелёная — крен φ, °", transform=axs[0, 2].transAxes, ha="right",
@@ -350,14 +350,14 @@ def fig_course():
     for a, (L, _) in zip(steps, runs):
         chi = deg(course(L))
         om, tm = metrics(L.t, chi, 0, a)
-        print(f"  {a:4.0f}°: {om:4.1f} %  {tm:4.2f} с  φ {deg(np.abs(L.state[:, PHI])).max():4.1f}°  "
+        print(f"  {a:4.0f}°: {om:4.1f} %  {tm:4.2f} с  φ {deg(np.abs(L.phi)).max():4.1f}°  "
               f"δa {deg(np.abs(L.controls[:, 2])).max():4.1f}°  p {deg(np.abs(L.state[:, P])).max():5.1f} °/с  "
               f"r min {deg(L.state[:, R].min()):5.1f} °/с  β {deg(np.abs(L.beta)).max():3.1f}°  "
               f"|Δh| {np.abs(L.state[:, H] - H0).max():.2f} м")
     fig, axs = plt.subplots(2, 2, figsize=(12.5, 6.6), sharex=True)
     for a, c, (L, rec) in zip(steps, cols, runs):
         axs[0, 0].plot(L.t, deg(course(L)) / a * 100, color=c, lw=2, label=f"ступенька {a:.0f}°")
-        axs[0, 1].plot(L.t, deg(L.state[:, PHI]), color=c, lw=2)
+        axs[0, 1].plot(L.t, deg(L.phi), color=c, lw=2)
         axs[0, 1].plot(L.t, deg(rec["phi_ref"]), color=c, lw=1, ls="--")
         axs[1, 0].plot(L.t, deg(L.state[:, P]), color=c, lw=2)
         axs[1, 1].plot(L.t, deg(L.controls[:, 2]), color=c, lw=2)
@@ -478,7 +478,7 @@ def fig_aoa():
     axs[1].set(ylabel="Va, м/с")
     axs[2].plot(L.t, deg(rec["theta_cmd"]), color=ORANGE, lw=1.4, ls="--", label="θ_cmd (до защиты)")
     axs[2].plot(L.t, deg(rec["theta_ref"]), color=PURPLE, lw=1.6, label="θ_ref (после защиты)")
-    axs[2].plot(L.t, deg(L.state[:, THETA]), color=BLUE, lw=2, label="θ")
+    axs[2].plot(L.t, deg(L.theta), color=BLUE, lw=2, label="θ")
     axs[2].set(ylabel="θ, °")
     axs[2].legend(loc="upper right", ncol=3, fontsize=9)
     axs[3].plot(L.t, L.state[:, H] - H0, color=BLUE, lw=2)
@@ -670,7 +670,7 @@ def fig_sensors():
     panels = (("h, м — барометр (σ 0.5 м)", L.state[:, H], g("h"), 1),
               ("Va, м/с — ПВД (σ 0.2 м/с)", L.Va, g("Va"), 1),
               ("$\\dot{h}$, м/с — GPS (σ 0.1 м/с)", Vh, g("hdot"), 1),
-              ("θ, ° — ИНС (σ 0.11°)", deg(L.state[:, THETA]), deg(g("theta")), 1),
+              ("θ, ° — ИНС (σ 0.11°)", deg(L.theta), deg(g("theta")), 1),
               ("α, ° — зонд (σ 0.57°)", deg(L.alpha), deg(g("alpha")), 1),
               ("β, ° — зонд (σ 0.57°)", deg(L.beta), deg(g("beta")), 1),
               ("χ, ° — GPS по скорости (σ_V 0.1 м/с)", deg(np.arctan2(Vy, Vx)), deg(g("chi")), 1),

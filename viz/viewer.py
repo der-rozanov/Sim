@@ -15,7 +15,8 @@
 Набор панелей выбирается по логу:
   продольный полёт — вид сбоку (x–h) и h, Va, θ, α, δe, δt, P;
   манёвр по курсу (или в логе есть уставка курса / маршрут) — вид сверху (E–N)
-  и, кроме продольных, χ, φ, β, δa, δr.
+  и, кроме продольных, χ, φ, β, δa, δr; если размах по высоте больше бокового
+  (пилотаж, s11) — вид сбоку; при |θ| > 60° — в равном масштабе осей.
 Уставки (*_ref) — чёрный пунктир, команды до приводов (*_cmd) — тонкая линия
 цвета канала, события — вертикальные линии; на α — зоны предупреждения и
 критического УА, рамка справки окрашивается по индикатору УА.
@@ -79,6 +80,7 @@ class FlightLogViewer:
         self.t = data["t"]
         self.alert = data["alert"].astype(int)
         self.lateral = self._is_lateral()
+        self.side_view = self._is_side_view()
         self.fig = None
         self._anim = None
         self._paused = False
@@ -91,6 +93,13 @@ class FlightLogViewer:
         psi = np.degrees(np.unwrap(d["psi"])) if "psi" in d else np.zeros(1)
         y = d["y"] if "y" in d else np.zeros(1)
         return np.ptp(psi) > 5.0 or np.ptp(y) > 20.0
+
+    def _is_side_view(self):
+        """Вид сбоку, если полёт продольный или размах по высоте больше бокового (пилотаж)."""
+        d = self.d
+        if not self.lateral:
+            return True
+        return np.ptp(d["h"]) > np.ptp(d["y"]) and not self.meta.get("waypoints")
 
     def _lon_panels(self):
         d, m = self.d, self.meta
@@ -171,7 +180,7 @@ class FlightLogViewer:
 
     def _draw_track(self, ax, animated):
         d = self.d
-        if self.lateral:   # вид сверху: восток → вправо, север → вверх
+        if not self.side_view:   # вид сверху: восток → вправо, север → вверх
             X, Y = d["y"], d["x"]
             ax.set_xlabel("E (восток), м", fontsize=9)
             ax.set_ylabel("N (север), м", fontsize=9)
@@ -187,7 +196,12 @@ class FlightLogViewer:
             X, Y = d["x"], d["h"]
             ax.set_xlabel("x (север), м", fontsize=9)
             ax.set_ylabel("h, м", fontsize=9)
-            ax.set_title("Траектория, вид сбоку (масштабы осей разные)", fontsize=9)
+            # фигуры пилотажа (|θ| > 60° — только в пилотаже) — в равном масштабе осей
+            if np.abs(np.degrees(d["theta"])).max() > 60.0:
+                ax.set_aspect("equal", adjustable="datalim")
+                ax.set_title("Траектория, вид сбоку", fontsize=9)
+            else:
+                ax.set_title("Траектория, вид сбоку (масштабы осей разные)", fontsize=9)
             self._heading = 90.0 - np.degrees(d["theta"])   # нос по +x при θ = 0
         ax.grid(True, ls="--", alpha=0.5)
         ax.plot(X, Y, color="royalblue", lw=2.0 if not animated else 1.2,

@@ -25,8 +25,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import numpy as np
 from sim.config import AircraftParams
-from sim.state import (U, W, Q, THETA, X, H, V, P, R, PHI, PSI, Y, N_STATES,
-                       air_data, earth_velocity)
+from sim.state import (U, W, Q, X, H, V, P, R, Y, N_STATES,
+                       air_data, earth_velocity, euler, with_euler)
 from sim.integrators import step_rk4
 from sim.ground import contacts
 from runner import compute_trim
@@ -45,7 +45,7 @@ def check(name, ok, info=""):
 
 
 def on_ground_state(h_g=0.0):
-    s = np.zeros(N_STATES)
+    s = with_euler(np.zeros(N_STATES), 0.0, 0.0, 0.0)
     s[H] = h_g + 0.268                         # колёса касаются земли
     return s
 
@@ -74,7 +74,7 @@ F_main = (mg - F_nose) / 2
 d_th = np.array([F_nose, F_main, F_main]) / ac.gear_k
 d = c["depth"][:3]
 print(f"   осадка, мм: модель {np.round(d * 1e3, 2)}  статика {np.round(d_th * 1e3, 2)}")
-print(f"   θ = {np.degrees(st[-1, THETA]):.3f}°,  |V| = {np.linalg.norm(st[-1, [U, V, W]]):.1e} м/с")
+print(f"   θ = {np.degrees(euler(st[-1])[1]):.3f}°,  |V| = {np.linalg.norm(st[-1, [U, V, W]]):.1e} м/с")
 check("осадка = статике (±5 %: θ ≠ 0 — стойки разной длины)", np.allclose(d, d_th, rtol=0.05))
 check("ЛА неподвижен", np.linalg.norm(st[-1, [U, V, W, P, Q, R]]) < 1e-3)
 check("касание только колёсами", not hard)
@@ -84,7 +84,7 @@ print("2. Разбег и взлёт (газ 100 %, с 10 м/с — тангаж
 def takeoff(t, s):
     Va = air_data(s, (0, 0, 0))[0]
     theta_ref = np.radians(8.0) if Va > 10.0 else 0.0
-    de = -1.0 * (theta_ref - s[THETA]) + 0.08 * s[Q]     # δe < 0 — нос вверх
+    de = -1.0 * (theta_ref - euler(s)[1]) + 0.08 * s[Q]     # δe < 0 — нос вверх
     return np.array([np.clip(de, -0.43, 0.43), 1.0, 0.0, 0.0])
 st, hard = run(on_ground_state(), takeoff, 8.0)
 air = st[:, H] > 0.268 + 0.05
@@ -99,24 +99,24 @@ check("без касания конструкцией (хвост)", not hard)
 # --- 3. посадка -----------------------------------------------------------------
 print("3. Посадка: снижение на малом газе с 15 м, выравнивание с 3 м")
 a_tr, de_tr, thr_tr = compute_trim(ac, 12.0)
-s = np.zeros(N_STATES)
-s[U], s[W], s[THETA], s[H] = 12 * np.cos(a_tr), 12 * np.sin(a_tr), a_tr, 15.0
+s = with_euler(np.zeros(N_STATES), 0.0, a_tr, 0.0)
+s[U], s[W], s[H] = 12 * np.cos(a_tr), 12 * np.sin(a_tr), 15.0
 def landing(t, s):
     vz = earth_velocity(s)[2]
     h = s[H] - 0.268
     # тангаж по скорости снижения: −1.5 м/с до 3 м, затем −0.3 м/с (выравнивание)
     vz_ref = -1.5 if h > 3.0 else -0.3
     theta_ref = a_tr + 0.08 * (vz_ref - vz)
-    de = de_tr - 1.0 * (theta_ref - s[THETA]) + 0.08 * s[Q]
+    de = de_tr - 1.0 * (theta_ref - euler(s)[1]) + 0.08 * s[Q]
     return np.array([np.clip(de, -0.43, 0.43), 0.15 if h > 3 else 0.0, 0.0, 0.0])
 st, hard = run(s, landing, 40.0)
 touch = int(np.argmax(st[:, H] < 0.268 + 1e-3))
 vz_touch = earth_velocity(st[touch - 1])[2]
 stop = touch + int(np.argmax(np.hypot(st[touch:, U], st[touch:, W]) < 0.3))
 print(f"   касание: t = {touch * DT:.2f} с, Vy = {vz_touch:.2f} м/с, "
-      f"Va = {np.hypot(st[touch, U], st[touch, W]):.1f} м/с, θ = {np.degrees(st[touch, THETA]):.1f}°")
+      f"Va = {np.hypot(st[touch, U], st[touch, W]):.1f} м/с, θ = {np.degrees(euler(st[touch])[1]):.1f}°")
 print(f"   пробег до остановки: {st[stop, X] - st[touch, X]:.0f} м за {(stop - touch) * DT:.1f} с; "
-      f"max |φ| = {np.degrees(np.abs(st[touch:, PHI]).max()):.2f}°")
+      f"max |φ| = {np.degrees(np.abs(euler(st[touch:])[0]).max()):.2f}°")
 check("скорость касания < gear_v_crash", -vz_touch < ac.gear_v_crash)
 check("без касания конструкцией", not hard)
 check("остался на земле", st[-1, H] < 0.3)
@@ -124,7 +124,7 @@ check("остался на земле", st[-1, H] < 0.3)
 # --- 4. разворот на земле --------------------------------------------------------
 print("4. Руление: газ 20 %, δr = −10° (нос вправо)")
 st, hard = run(on_ground_state(), lambda t, s: np.array([0, 0.2, 0, np.radians(-10)]), 15.0)
-dpsi = np.degrees(np.unwrap(st[:, PSI]))[-1]
+dpsi = np.degrees(np.unwrap(euler(st)[2]))[-1]
 Vg = np.hypot(*earth_velocity(st[-1])[:2])
 print(f"   за 15 с: Δψ = {dpsi:.0f}°, Vg = {Vg:.1f} м/с, h = {st[-1, H]:.3f} м")
 check("поворачивает вправо", dpsi > 90)

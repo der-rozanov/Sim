@@ -49,10 +49,10 @@ section("2. sim/state.py")
 # ------------------------------------------------------------------
 try:
     from sim.state import (initial_state, air_velocity, kinematic_gamma,
-                           total_energy, U, W, Q, THETA, X, H, N_STATES)
+                           total_energy, U, W, Q, X, H, N_STATES, euler)
     s = initial_state(cfg)
-    all_ok &= check("N_STATES = 12", N_STATES == 12)
-    all_ok &= check("shape (12,)",   s.shape == (12,),   f"shape={s.shape}")
+    all_ok &= check("N_STATES = 13", N_STATES == 13)
+    all_ok &= check("shape (13,)",   s.shape == (13,),   f"shape={s.shape}")
     all_ok &= check("Va0 в u",       s[U] == cfg.Va0,   f"u={s[U]}")
     all_ok &= check("h0 в H",        s[H] == cfg.h0,    f"h={s[H]}")
 
@@ -177,7 +177,7 @@ try:
 
     # derivatives возвращает вектор нужной длины
     ds = derivatives(s0, np.array([0.0, 0.0]), 0.0, ap, wind_call)
-    all_ok &= check("derivatives: shape (12,)", ds.shape == (12,), f"shape={ds.shape}")
+    all_ok &= check("derivatives: shape (13,)", ds.shape == (13,), f"shape={ds.shape}")
 
     # Тяга: нулевой газ -> тяга может быть < 0 (торможение),
     #       газ=1 -> тяга > 0
@@ -233,13 +233,14 @@ section("7. Модель 6DOF: боковой канал")
 # ------------------------------------------------------------------
 try:
     from dataclasses import replace
-    from sim.state import (V, P, R, PHI, PSI, Y, air_data, rotation_body_to_earth)
+    from sim.state import (V, P, R, Y, E1, E3, QUAT, N_STATES, air_data, rotation_body_to_earth,
+                           rotation, euler, with_euler, euler_rates)
+    from sim.linearize import jacobian
     from sim.dynamics import derivatives, thrust, propeller, _gammas
     from sim.aero import aero_forces_moments
     from sim.integrators import step_rk4
     from runner import compute_trim, trim_state
 
-    LAT = [V, P, R, PHI, PSI]
     calm = lambda h, t: (0.0, 0.0, 0.0)
     a_tr, de_tr, thr_tr = compute_trim(ap, cfg.Va0)
     s_tr = trim_state(ap, cfg)
@@ -250,16 +251,67 @@ try:
     all_ok &= check("R·R^T = I, det R = 1",
                     np.allclose(Rm @ Rm.T, np.eye(3)) and abs(np.linalg.det(Rm) - 1) < 1e-12)
 
+    # 7.1а Кватернион ↔ углы Эйлера ↔ матрица поворота (случайные ориентации)
+    rng = np.random.default_rng(0)
+    err_R = err_e = 0.0
+    for _ in range(50):
+        ang = rng.uniform(-3.0, 3.0, 3); ang[1] = rng.uniform(-1.5, 1.5)
+        s_q = with_euler(np.zeros(N_STATES), *ang)
+        err_R = max(err_R, np.abs(rotation(s_q) - rotation_body_to_earth(*ang)).max())
+        err_e = max(err_e, np.abs(np.array(euler(s_q)) - ang).max())
+    all_ok &= check("R(кватернион) = R(φ, θ, ψ); euler(with_euler(φ, θ, ψ)) = (φ, θ, ψ)",
+                    err_R < 1e-12 and err_e < 1e-12, f"max|ΔR|={err_R:.1e}  max|Δугол|={err_e:.1e}")
+
+    # 7.1б Кинематика кватерниона ≡ кинематика углов Эйлера (B&M ур. 3.3) вне θ = ±90°
+    s_k = with_euler(s_tr, 0.4, 0.3, -1.0); s_k[P], s_k[Q], s_k[R] = 0.3, -0.5, 0.7
+    h_k = 1e-7
+    s_k2 = s_k.copy(); s_k2[QUAT] += h_k * derivatives(s_k, c_tr, 0.0, ap, calm)[QUAT]
+    rates_num = (np.array(euler(s_k2)) - np.array(euler(s_k))) / h_k
+    err_k = np.abs(rates_num - euler_rates(s_k)).max()
+    all_ok &= check("d/dt euler(e) = (φ̇, θ̇, ψ̇) по формулам углов Эйлера", err_k < 1e-5,
+                    f"max|err|={err_k:.1e} рад/с")
+
+    # 7.1в Полубочка на вертикали (фигура пилотажа): q — нос на вертикаль, p — полубочка
+    #     точно при θ = 90°, q — дальше. Точное решение — произведение поворотов
+    #     R = Π exp([ω_i]×·t_i) (формула Родрига). У углов Эйлера здесь φ̇, ψ̇ → ∞.
+    from sim.dynamics import quat_dot
+
+    def rodrigues(w_, t_):
+        a_ = np.linalg.norm(w_) * t_
+        k_ = np.array([[0, -w_[2], w_[1]], [w_[2], 0, -w_[0]], [-w_[1], w_[0], 0]]) / np.linalg.norm(w_)
+        return np.eye(3) + np.sin(a_) * k_ + (1 - np.cos(a_)) * k_ @ k_
+
+    legs = [(np.array([0.0, np.pi / 2, 0.0]), 1.0),     # 90° по тангажу — вертикаль
+            (np.array([np.pi, 0.0, 0.0]), 1.0),         # 180° по крену на вертикали
+            (np.array([0.0, np.pi / 2, 0.0]), 1.0)]     # ещё 90° по тангажу
+    dt_k = 0.01
+    e = with_euler(np.zeros(N_STATES), 0.0, 0.0, 0.0)[QUAT]
+    R_exact, th_max = np.eye(3), 0.0
+    for om, T_k in legs:
+        f_k = lambda e_: quat_dot(e_, *om)
+        for _ in range(int(round(T_k / dt_k))):
+            k1 = f_k(e); k2 = f_k(e + 0.5 * dt_k * k1); k3 = f_k(e + 0.5 * dt_k * k2); k4 = f_k(e + dt_k * k3)
+            e = e + dt_k / 6.0 * (k1 + 2 * k2 + 2 * k3 + k4)
+            s_k = np.zeros(N_STATES); s_k[QUAT] = e
+            th_max = max(th_max, abs(euler(s_k)[1]))
+        R_exact = R_exact @ rodrigues(om, T_k)
+    err_rot = np.abs(rotation(s_k) - R_exact).max()
+    all_ok &= check("полубочка на вертикали: RK4 = точное решение, |e| = 1",
+                    err_rot < 1e-8 and abs(np.linalg.norm(e) - 1) < 1e-6,
+                    f"max θ = {np.degrees(th_max):.2f}°  max|ΔR| = {err_rot:.1e}  "
+                    f"|e|−1 = {np.linalg.norm(e) - 1:.1e}")
+
     # 7.2 Симметричный полёт (в т.ч. с продольным и вертикальным ветром):
     #     боковой канал возбуждает только реактивный момент винта −Q:
     #     p_dot = −Г3·Q, r_dot = −Г4·Q, остальные производные строго нулевые
     wind_long = lambda h, t: (-4.0, 1.5, 0.0)
-    s_test = s_tr.copy(); s_test[Q] = 0.1; s_test[THETA] += 0.1
+    s_test = with_euler(s_tr, 0.0, euler(s_tr)[1] + 0.1, 0.0); s_test[Q] = 0.1
     ds = derivatives(s_test, c_tr, 0.0, ap, wind_long)
     Q_pr = propeller(thr_tr, air_data(s_test, wind_long(0.0, 0.0))[0], ap)[1]
     G = _gammas(ap)
-    all_ok &= check("симметричный полёт: d(v,phi,psi)/dt = 0",
-                    np.all(ds[[V, PHI, PSI]] == 0.0))
+    # φ̇ = ψ̇ = 0 ⇔ ė1 = ė3 = 0 (кватернион остаётся в плоскости симметрии: e1 = e3 = 0)
+    all_ok &= check("симметричный полёт: d(v, e1, e3)/dt = 0 (φ̇ = ψ̇ = 0)",
+                    np.all(ds[[V, E1, E3]] == 0.0))
     all_ok &= check("симметричный полёт: p_dot, r_dot — только от момента винта",
                     np.isclose(ds[P], -G[2] * Q_pr) and np.isclose(ds[R], -G[3] * Q_pr),
                     f"Q={Q_pr:.3f} Н·м  p_dot={ds[P]:.3f}  r_dot={ds[R]:.4f}")
@@ -267,7 +319,7 @@ try:
     # 7.3 Вырождение в продольные уравнения (docs/physics.md, раздел 3.5)
     Va_t, al_t, _ = air_data(s_test, wind_long(0.0, 0.0))
     fx_a, fz_a, M_a = aero_forces_moments(Va_t, al_t, s_test[Q], de_tr, ap)
-    th, u_, w_, q_ = s_test[THETA], s_test[U], s_test[W], s_test[Q]
+    th, u_, w_, q_ = euler(s_test)[1], s_test[U], s_test[W], s_test[Q]
     mg = ap.mass * ap.g
     ref = np.array([
         (fx_a + thrust(thr_tr, Va_t, ap) - mg * np.sin(th)) / ap.mass - q_ * w_,
@@ -277,16 +329,17 @@ try:
         u_ * np.cos(th) + w_ * np.sin(th),
         u_ * np.sin(th) - w_ * np.cos(th),
     ])
-    err = np.max(np.abs(ds[[U, W, Q, THETA, X, H]] - ref))
+    lon = lambda s_, d_: np.array([d_[U], d_[W], d_[Q], euler_rates(s_)[1], d_[X], d_[H]])
+    err = np.max(np.abs(lon(s_test, ds) - ref))
     all_ok &= check("6DOF -> продольные уравнения при v=p=r=phi=psi=0", err < 1e-9,
                     f"max|err|={err:.1e}")
 
     # 7.4 Инвариантность к курсу: полёт на восток (psi=90°) — та же продольная динамика
-    s_e = s_tr.copy(); s_e[PSI] = np.pi / 2
+    s_e = with_euler(s_tr, 0.0, euler(s_tr)[1], np.pi / 2)
     d_n = derivatives(s_tr, c_tr, 0.0, ap, calm)
     d_e = derivatives(s_e,  c_tr, 0.0, ap, calm)
     all_ok &= check("psi=90°: производные u,w,q,theta,h не меняются",
-                    np.allclose(d_n[[U, W, Q, THETA, H]], d_e[[U, W, Q, THETA, H]], atol=1e-12))
+                    np.allclose(lon(s_tr, d_n)[[0, 1, 2, 3, 5]], lon(s_e, d_e)[[0, 1, 2, 3, 5]], atol=1e-12))
     all_ok &= check("psi=90°: dy/dt = Va, dx/dt = 0",
                     abs(d_e[Y] - cfg.Va0) < 1e-9 and abs(d_e[X]) < 1e-9,
                     f"dx={d_e[X]:.1e}  dy={d_e[Y]:.3f}")
@@ -320,18 +373,12 @@ try:
     from runner import run
     log_rh = run(with_roll_hold(lambda t_, s_, V_, a_: c_tr[:2], ap, SensorParams(), cfg.dt),
                  ap, WindParams(), replace(cfg, t_end=20.0), state0=s_tr)
-    phi_max = np.degrees(np.max(np.abs(log_rh.state[:, PHI])))
+    phi_max = np.degrees(np.max(np.abs(log_rh.phi)))
     all_ok &= check("20 с трима с САУ по крену: |phi| < 1°", phi_max < 1.0,
                     f"max|phi|={phi_max:.2f}°  δa={np.degrees(log_rh.controls[-1, 2]):.2f}°")
 
     # 7.9 Собственные движения бокового канала (линеаризация в триме)
-    eps = 1e-6
-    idx = [V, P, R, PHI]
-    f0 = derivatives(s_tr, c_tr, 0.0, ap, calm)
-    A = np.zeros((4, 4))
-    for j, k in enumerate(idx):
-        s_p = s_tr.copy(); s_p[k] += eps
-        A[:, j] = (derivatives(s_p, c_tr, 0.0, ap, calm)[idx] - f0[idx]) / eps
+    A, _ = jacobian(s_tr, c_tr, ("v", "p", "r", "phi"), ap, calm)
     eig = np.linalg.eigvals(A)
     cplx = eig[np.abs(eig.imag) > 1e-6]
     real = np.sort(eig[np.abs(eig.imag) <= 1e-6].real)
@@ -413,7 +460,7 @@ section("9. Приводы рулей (sim/actuators.py)")
 try:
     import dataclasses
     from sim.config import AircraftParams
-    from sim.state import DE, DT, DA, DR
+    from sim.state import DE, DT, DA, DR, euler
     from sim.actuators import actuator_init, actuator_step
 
     ap = AircraftParams()

@@ -19,7 +19,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from sim.config import AircraftParams, SimConfig
-from sim.state import U, W, Q, THETA, V, P, R, PHI, DT
+from sim.state import P, R, DT
+from sim.linearize import jacobian
 from sim.aero import coef_CL, coef_CD, coef_Cm, _sigmoid
 from sim.dynamics import derivatives, propeller
 from sim.actuators import actuator_init, actuator_step
@@ -88,13 +89,8 @@ def linearize(Va):
                          for e in (np.array([0, 0, 1e-6, 0]), np.array([0, 0, 0, 1e-6]))])
     c0[2:] = np.linalg.solve(B, -d0)
     out = {}
-    for name, idx in (("lon", [U, W, Q, THETA]), ("lat", [V, P, R, PHI])):
-        f0 = derivatives(s0, c0, 0.0, ac, CALM)[idx]
-        A = np.zeros((4, 4))
-        for j, k in enumerate(idx):
-            sp = s0.copy()
-            sp[k] += 1e-6
-            A[:, j] = (derivatives(sp, c0, 0.0, ac, CALM)[idx] - f0) / 1e-6
+    for name, names in (("lon", ("u", "w", "q", "theta")), ("lat", ("v", "p", "r", "phi"))):
+        A, _ = jacobian(s0, c0, names, ac, CALM)
         out[name] = np.linalg.eigvals(A)
     return out
 

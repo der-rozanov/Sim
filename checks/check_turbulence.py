@@ -30,7 +30,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 
 from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
-from sim.state import H, PHI, earth_velocity
+from sim.state import H, earth_velocity
 from sim.turbulence import DrydenTurbulence, DRYDEN_TABLE, dryden_params
 from sim.wind import wind, make_wind_fn
 from runner import run, trim_state
@@ -166,8 +166,8 @@ for level in ("off", "light", "moderate"):
     full = log.t[-1] > cfg.t_end - 0.05
     print(f"   {level:>14} {dh.std():6.2f} {np.abs(dh).max():8.2f} {log.Va[m].std():5.2f} "
           f"{log.Va[m].min():5.1f}…{log.Va[m].max():4.1f} {np.degrees(log.alpha[m].max()):8.1f} "
-          f"{np.degrees(log.state[m, PHI].std()):6.2f} "
-          f"{np.degrees(np.abs(log.state[m, PHI]).max()):7.1f} {np.degrees(np.abs(chi).max()):9.1f}")
+          f"{np.degrees(log.phi[m].std()):6.2f} "
+          f"{np.degrees(np.abs(log.phi[m]).max()):7.1f} {np.degrees(np.abs(chi).max()):9.1f}")
     check(f"{level}: полёт 120 с не прерван", full)
 print(f"   (α_warning = {np.degrees(ac.alpha_warning):.1f}°, "
       f"α_crit = {np.degrees(ac.alpha_crit):.1f}°)")

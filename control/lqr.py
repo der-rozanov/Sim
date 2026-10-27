@@ -21,11 +21,11 @@ from dataclasses import dataclass, field
 from typing import List
 
 from sim.config import AircraftParams
-from sim.state import U, W, Q, THETA
-from sim.dynamics import derivatives as _derivatives
+from sim.state import U, W, Q, euler
+from sim.linearize import jacobian
 
 
-_IDX4 = [U, W, Q, THETA]   # индексы 4 состояний в 6-мерном векторе состояния
+_VARS4 = ("u", "w", "q", "theta")   # переменные линеаризации (sim/linearize.py)
 _N = 4                      # размерность состояния LQR
 _M = 2                      # размерность вектора управления
 
@@ -76,7 +76,7 @@ class LQRController:
         """
         Args:
             aircraft:      параметры ЛА
-            state_trim:    6-мерный вектор состояния в точке трима
+            state_trim:    вектор состояния в точке трима (sim.state)
             controls_trim: [delta_e_trim, throttle_trim]
             wind_fn:       wind(h, t) → (Vwx, Vwh, Vwy)
             dt:            шаг интегрирования, с
@@ -86,7 +86,8 @@ class LQRController:
         self.params   = params
 
         # Точка линеаризации
-        self.x_trim = state_trim[_IDX4].copy()   # 4-вектор
+        self.x_trim = np.array([state_trim[U], state_trim[W], state_trim[Q],
+                                euler(state_trim)[1]])   # [u, w, q, θ]
         self.u_trim = controls_trim.copy()        # [de_trim, thr_trim]
 
         # Линеаризация
@@ -210,30 +211,10 @@ def _linearize(state_trim: np.ndarray,
                aircraft: AircraftParams,
                wind_fn) -> tuple:
     """
-    Якобианы A_c = ∂f/∂x и B_c = ∂f/∂u в точке трима (конечные разности).
+    Якобианы A_c = ∂f/∂x и B_c = ∂f/∂u в точке трима (конечные разности,
+    sim/linearize.py, шаг 1e-5; ветер — в момент t = 0).
 
     Возвращает A_c (4×4) и B_c (4×2) — только для 4 состояний [u, w, q, θ].
     """
-    eps_s = 1e-5   # приращение по состоянию
-    eps_c = 1e-5   # приращение по управлению
-    t0    = 0.0    # момент линеаризации (ветер при t=0)
-
-    def f4(s, c):
-        d = _derivatives(s, c, t0, aircraft, wind_fn)
-        return d[_IDX4]
-
-    f0 = f4(state_trim, controls_trim)
-
-    A = np.zeros((_N, _N))
-    for j, state_idx in enumerate(_IDX4):
-        sp = state_trim.copy()
-        sp[state_idx] += eps_s
-        A[:, j] = (f4(sp, controls_trim) - f0) / eps_s
-
-    B = np.zeros((_N, _M))
-    for j in range(_M):
-        cp = controls_trim.copy()
-        cp[j] += eps_c
-        B[:, j] = (f4(state_trim, cp) - f0) / eps_c
-
-    return A, B
+    A, B = jacobian(state_trim, controls_trim, _VARS4, aircraft, wind_fn, t=0.0, eps=1e-5)
+    return A, B[:, :_M]

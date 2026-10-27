@@ -53,7 +53,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from sim.turbulence import TURB_LEVELS
 from sim.config import WindParams, SimConfig, AIRCRAFT_TYPES, aircraft_by_name
-from sim.state import H, PHI, THETA, air_data, earth_velocity
+from sim.state import H, air_data, earth_velocity, euler
 from control.controllers import wrap_angle
 from control.sau import Mode
 from control.blocks import Diagram, SchemeError, catalog, sau_signals, templates
@@ -193,9 +193,9 @@ class Lab(Game):
             "mode": ("тангаж" if sau.mode is Mode.PITCH else
                      "маршрут" if sau.mode is Mode.ROUTE else "высота") if self.ap else "ручной",
             "theta_ref": deg(sau.theta_ref), "h_ref": sau.refs.h, "Va_ref": sau.refs.Va,
-            "h": s[H], "Va": Va, "theta": deg(s[THETA]), "alpha": deg(alpha),
+            "h": s[H], "Va": Va, "theta": deg(euler(s)[1]), "alpha": deg(alpha),
             "chi_ref": deg(sau.refs.chi) % 360.0, "chi": deg(math.atan2(Vy, Vx)) % 360.0,
-            "phi_ref": deg(sau.lat.phi_ref), "phi": deg(wrap_angle(s[PHI])), "beta": deg(beta),
+            "phi_ref": deg(sau.lat.phi_ref), "phi": deg(wrap_angle(euler(s)[0])), "beta": deg(beta),
             "values": dict(self.dia.values) if self.dia is not None else {},
             "scopes": dict(self.dia.scopes) if self.dia is not None else {},
         }

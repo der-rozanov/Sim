@@ -19,8 +19,7 @@ ground_clearance() — запас высоты до порога near_ground, м
 
 import numpy as np
 from .config import AircraftParams
-from .state import (U, V, W, P, Q, R, X, Y, H, PHI, THETA, PSI, DR, full_controls,
-                    rotation_body_to_earth)
+from .state import U, V, W, P, Q, R, X, Y, H, DR, full_controls, rotation
 
 GRAD_STEP = 0.25     # м, шаг разностной производной поверхности (нормаль)
 
@@ -64,7 +63,7 @@ def contacts(state: np.ndarray, params: AircraftParams, ground_fn):
       vn    (K,)   — скорость по нормали, м/с (< 0 — к земле)
     """
     r, wheel = contact_points(params)
-    Rm = rotation_body_to_earth(state[PHI], state[THETA], state[PSI])
+    Rm = rotation(state)
     pos = np.array([state[X], state[Y], -state[H]]) + r @ Rm.T
     omega = state[[P, Q, R]]
     vel = (state[[U, V, W]] + _cross(omega, r)) @ Rm.T
@@ -98,7 +97,7 @@ def ground_forces(state: np.ndarray, controls, params: AircraftParams, ground_fn
     vt = vel - vn[:, None] * n                                           # касательная скорость
 
     # колёса: направление качения e — ось x_b, повёрнутая на угол колеса (носовое — от δr)
-    Rm = rotation_body_to_earth(state[PHI], state[THETA], state[PSI])
+    Rm = rotation(state)
     steer = np.zeros(len(c["wheel"]))
     steer[0] = -pr.gear_steer * full_controls(controls)[DR]              # δr > 0 — нос влево
     steer = steer[on]

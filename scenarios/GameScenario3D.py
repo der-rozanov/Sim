@@ -23,6 +23,10 @@ GameScenario3D — пилотирование ЛА в реальном врем�
   N      — навигация по маршруту вкл/выкл (маршрут — в окне станции; уставки χ_ref
            и h_ref даёт WaypointNavigator, control/navigation.py). Ручные уставки
            W/S/A/D навигацию выключают.
+  K      — пилотажный комплекс C-11 (фигуры 1–8, control/aerobatics.py) вкл/прервать:
+           САУ включается, разгон до 25 м/с, при запасе высоты над рельефом вдоль всей
+           траектории < 30 м — набор; затем комплекс от текущей точки по текущему путевому
+           углу; по окончании — удержание высоты. W/S/A/D, H, P комплекс прерывают.
 САУ — control/sau.py (тот же класс, что в s8–s10): χ → φ_ref → δa, β → δr,
 h → θ_ref → δe, Va → δt.
 
@@ -46,6 +50,7 @@ F2 — профилировщик кадра (viz/perf.py; итог печата
     python scenarios/GameScenario3D.py --ap --cam 3              # старт с включённой САУ
     python scenarios/GameScenario3D.py --no-map                  # без окна станции
     python scenarios/GameScenario3D.py --ap --bench 60           # замер FPS: 60 с с САУ и выход
+    python scenarios/GameScenario3D.py --aero --h0 150           # сразу пилотажный комплекс C-11
 """
 
 import sys
@@ -68,8 +73,8 @@ from sim.dynamics import specific_force
 from sim.actuators import actuator_init, actuator_step
 from sim.ground import contacts, ground_clearance
 from sim.wind import make_wind_fn
-from sim.state import (air_data, earth_velocity, total_energy, full_controls, canonical_euler,
-                       wind_body, U, V, W, THETA, X, H, PHI, PSI, Y, N_STATES, N_CONTROLS)
+from sim.state import (air_data, earth_velocity, total_energy, full_controls, euler, with_euler,
+                       wind_body, U, V, W, X, H, Y, N_STATES, N_CONTROLS)
 from runner import Log, compute_trim, trim_state
 from flight_logger import FlightLogger
 from control.controllers import PitchControlParams, wrap_angle
@@ -109,6 +114,8 @@ VA_STEP, VA_MIN, VA_MAX = 1.0, 10.0, 30.0   # FPV: сваливание 7.5, м�
 H_STEP, H_MIN, H_MAX = 10.0, 20.0, 1000.0
 KH        = PitchControlParams().KH   # рад/м, расчёт control/tuning.py
 
+AERO_VA = 25.0                  # м/с — скорость входа в пилотажный комплекс (AeroParams.Va_ref)
+AERO_CLEARANCE = 30.0           # м — минимальный запас траектории комплекса над рельефом
 MANUAL_REF = ("маршрут: ручная уставка", "NAV: manual ref")   # событие: ручная уставка выключила маршрут
 MAX_STEPS_PER_FRAME = 10        # при просадке кадров — замедление, а не «рывок»
 RT_TAU    = 1.0                 # с — постоянная сглаживания скорости модели (строка «sim ×…»)
@@ -125,7 +132,7 @@ def _wrap180(a):
 
 class Game(Entity):
 
-    HELP = ("W/S δe  A/D δa  Q/E δr  ↑/↓ trim  X/Z thr  P AP  H alt  N nav  "
+    HELP = ("W/S δe  A/D δa  Q/E δr  ↑/↓ trim  X/Z thr  P AP  H alt  N nav  K aerobatics  "
             "T turb  Space pause  R reset  1-4 cam  Esc quit")
 
     def __init__(self, aircraft, wind_params, cfg, terrain, cam=1, ap=False, shot=None,
@@ -143,7 +150,8 @@ class Game(Entity):
         self.wind_call = make_wind_fn(wind_params)
         self.alpha_trim, self.de_trim, self.thr_trim = compute_trim(aircraft, cfg.Va0)
         self.s0 = trim_state(aircraft, cfg)
-        self.s0[PSI] = terrain.start_psi          # старт вдоль ВПП карты
+        _, th0, _ = euler(self.s0)
+        self.s0 = with_euler(self.s0, 0.0, th0, terrain.start_psi)   # старт вдоль ВПП карты
         # старт в балансировке относительно воздуха: земная скорость = воздушная + ветер
         # (без скачка скольжения в первую секунду при --wind-n / --wind-e)
         self.s0[[U, V, W]] += wind_body(self.s0, self.wind_call(cfg.h0, 0.0))
@@ -225,7 +233,11 @@ class Game(Entity):
     @property
     def h_hold(self):
         """Высоту держит САУ: режим ALTITUDE или ROUTE."""
-        return self.ap and self.sau.mode is not Mode.PITCH
+        return self.ap and self.sau.mode in (Mode.ALTITUDE, Mode.ROUTE)
+
+    @property
+    def aero_on(self):
+        return self.ap and self.sau.mode is Mode.AEROBATIC
 
     # --- состояние игры ---------------------------------------------------
     def reset(self):
@@ -240,6 +252,8 @@ class Game(Entity):
         self.paused, self.crashed = False, False
         self.on_ground, self.crash_msg, self.crash_en = False, "", ""
         self.ap = False
+        self.aero_pending = False                             # K: разгон / набор перед комплексом
+        self._aero_was, self._aero_fig = False, ""
         self.de_trim_man = self.de_trim
         self.thr = self.thr_trim
         self.surf = np.array([self.de_trim, 0.0, 0.0])        # δe, δa, δr (ручной)
@@ -267,6 +281,7 @@ class Game(Entity):
     def _toggle_ap(self):
         if self.ap:
             self._nav_off()
+            self.aero_pending = False
             self.ap = False
             self.de_trim_man = self.controls[0]          # без рывка при выключении
             self.surf = np.array([self.controls[0], 0.0, 0.0])
@@ -278,7 +293,7 @@ class Game(Entity):
         Va, _, _ = air_data(s, self.wind_call(s[H], self.t))
         Vx, Vy, _ = earth_velocity(s)
         self.sau.set_mode(Mode.PITCH)
-        self.sau.engage(theta=float(np.clip(s[THETA], -THETA_LIM, THETA_LIM)), h=float(s[H]),
+        self.sau.engage(theta=float(np.clip(euler(s)[1], -THETA_LIM, THETA_LIM)), h=float(s[H]),
                         Va=float(np.clip(Va, VA_MIN, VA_MAX)), chi=float(np.arctan2(Vy, Vx)))
         self._event("САУ вкл", "dodgerblue", "AP ON")
 
@@ -294,8 +309,11 @@ class Game(Entity):
         self._event("маршрут: старт", "dodgerblue", "NAV: start")
 
     def _nav_off(self, why="маршрут: стоп", why_en="NAV: stop"):
-        """Навигация выкл: САУ держит текущие путевой угол и высоту."""
-        if not self.nav_on:
+        """Навигация или пилотаж выкл: САУ держит текущие путевой угол и высоту."""
+        if self.aero_pending or self.aero_on:
+            why, why_en = "пилотаж: прерван", "AEROBATICS: aborted"
+            self.aero_pending = False
+        elif not self.nav_on:
             return
         Vx, Vy, _ = earth_velocity(self.state)
         self.sau.refs.chi = float(np.arctan2(Vy, Vx))
@@ -304,8 +322,58 @@ class Game(Entity):
         self._event(why, "gray", why_en)
 
     def _flight_mode(self):
-        """Режим полёта для окна станции: MAN / PITCH / ALT / NAV."""
-        return "NAV" if self.nav_on else "ALT" if self.h_hold else "PITCH" if self.ap else "MAN"
+        """Режим полёта для окна станции: MAN / PITCH / ALT / NAV / AERO."""
+        return ("AERO" if self.aero_on else "NAV" if self.nav_on else "ALT" if self.h_hold
+                else "PITCH" if self.ap else "MAN")
+
+    # --- пилотажный комплекс ----------------------------------------------------
+    def _aero_toggle(self):
+        """K: комплекс C-11 — подготовка (разгон, набор) или прервать."""
+        if self.aero_pending or self.aero_on:
+            self._nav_off()
+            return
+        if self.crashed or self.on_ground:
+            return
+        if not self.ap:
+            self._toggle_ap()
+        self._nav_off()
+        s = self.state
+        Vx, Vy, _ = earth_velocity(s)
+        self.sau.refs.chi = float(np.arctan2(Vy, Vx))
+        self.sau.refs.h = float(np.clip(s[H], H_MIN, H_MAX))
+        self.sau.refs.Va = AERO_VA
+        self.sau.set_mode(Mode.ALTITUDE)
+        self.aero_pending = True
+        self._event("пилотаж: разгон", "dodgerblue", "AEROBATICS: arming")
+
+    def _aero_clearance(self, s):
+        """Запас высоты траектории комплекса над рельефом, м (траектория — от текущей точки)."""
+        from control.aerobatics import Figure, programme, C11
+        Vx, Vy, Vh = earth_velocity(s)
+        pts = Figure.from_entry("", programme(C11), [s[X], s[Y], -s[H]], [Vx, Vy, -Vh]).points(10.0)
+        return float(np.min(-pts[:, 2] - self._surface(pts[:, 0], pts[:, 1])))
+
+    def _aero_poll(self, s, Va, alpha, beta):
+        """Подготовка: скорость набрана и высоты хватает → комплекс; конец комплекса → событие."""
+        if self.aero_pending and abs(Va - AERO_VA) < 1.0 and abs(s[H] - self.sau.refs.h) < 3.0:
+            clr = self._aero_clearance(s)
+            if clr < AERO_CLEARANCE:
+                self.sau.refs.h = float(min(s[H] + AERO_CLEARANCE - clr + 10.0, H_MAX))
+                self._event(f"пилотаж: набор (запас {clr:.0f} м)", "orange",
+                            f"AEROBATICS: climb (clearance {clr:.0f} m)")
+            else:
+                self.aero_pending = False
+                self.sau.fly_aerobatics(s, Va, alpha, beta)
+                self._aero_fig = ""
+                self._event("пилотаж: старт", "dodgerblue", "AEROBATICS: start")
+        if self.aero_on:
+            name = self.sau.aero.figure_name
+            if name and name != self._aero_fig:
+                self._event(name, "dodgerblue", "FIG " + name.split(".")[0])
+            self._aero_fig = name
+        elif self._aero_was and self.ap and self.sau.mode is Mode.ALTITUDE:
+            self._event("пилотаж: конец", "dodgerblue", "AEROBATICS: complete")
+        self._aero_was = self.aero_on
 
     def _set_vert(self, to_alt):
         """Вертикальный канал САУ: удержание текущей высоты или тангажа; маршрут — стоп."""
@@ -360,6 +428,11 @@ class Game(Entity):
                     ("MAN", f"TRIM {deg(self.de_trim_man):+.1f}°", "w", "d"),
                     ("MAN", self._route_tag(), "w", "d"),
                     self._fma_prot(), ("MAN", "", "w", "d")]
+        if self.aero_on:
+            name = sau.aero.figure_name or "—"
+            return [("AERO THR", f"SPD {sau.aero.pr.Va_ref:.0f}", "g", "c"),
+                    ("AERO", name.split(".")[0], "g", "c"), ("AERO", "C-11", "g", "c"),
+                    self._fma_prot(), ("AP", "", "w", "d")]
         thr = ("TECS" if sau.params.lon == "tecs" else "SPEED", f"SPD {refs.Va:.1f}", "g", "c")
         ver = (("ALT", f"{refs.h:.0f} m", "g", "c") if self.h_hold
                else ("PITCH", f"{deg(refs.theta):+.1f}°", "g", "c"))
@@ -399,8 +472,8 @@ class Game(Entity):
         fm = self._flight_mode()
         mode = "AUTO · " + fm if self.ap else "MANUAL"
         msg = {"fm": fm,"t": self.t, "n": s[X], "e": s[Y], "h": s[H], "Vh": Vh, "Va": Va, "Vg": float(np.hypot(Vx, Vy)),
-               "psi": deg(s[PSI]) % 360, "chi": deg(np.arctan2(Vy, Vx)) % 360,
-               "phi": _wrap180(deg(s[PHI])), "theta": deg(s[THETA]), "alpha": deg(alpha), "beta": deg(beta),
+               "psi": deg(euler(s)[2]) % 360, "chi": deg(np.arctan2(Vy, Vx)) % 360,
+               "phi": _wrap180(deg(euler(s)[0])), "theta": deg(euler(s)[1]), "alpha": deg(alpha), "beta": deg(beta),
                "de": deg(c[0]), "da": deg(c[2]), "dr": deg(c[3]), "thr": c[1],
                "de_cmd": deg(cmd[0]), "da_cmd": deg(cmd[2]), "dr_cmd": deg(cmd[3]), "thr_cmd": cmd[1],
                "wind_n": w[0], "wind_e": w[2], "alert": self._alert(),
@@ -462,6 +535,8 @@ class Game(Entity):
             self._toggle_ap()
         elif key == "t":
             self._cycle_turb()
+        elif key == "k":
+            self._aero_toggle()
         elif key == "n":
             if self.nav_on:
                 self._nav_off()
@@ -551,7 +626,7 @@ class Game(Entity):
 
         s = self.state
         pos = ned_to_u(s[X], s[Y], -s[H])
-        x_b, z_b = body_axes(s[PHI], s[THETA], s[PSI])
+        x_b, z_b = body_axes(*euler(s))
         nose, up = ned_to_u(*x_b), ned_to_u(*(-z_b))
         c = self.controls
         self.view.render(pos, nose, up, c[0], c[2], c[3], c[1],
@@ -577,6 +652,8 @@ class Game(Entity):
         Va, alpha, beta = air_data(s, w_vec)
         if not self.ap:                    # датчики и оценка состояния работают всегда
             self.sau.observe(self.t, s, Va, alpha, beta, dt)
+        if self.ap:
+            self._aero_poll(s, Va, alpha, beta)
         self.cmd = full_controls(self._sau(s, Va, alpha, beta, dt) if self.ap
                                  else self._manual(dt))
         self.controls = actuator_step(self.controls, self.cmd, dt, self.ac)  # рули — с приводом
@@ -587,9 +664,7 @@ class Game(Entity):
         if round(self.t / dt) % 10 == 0:
             self.trail.append(ned_to_u(s[X], s[Y], -s[H]))
             del self.trail[:-TRAIL_MAX]
-        # После петель/бочек углы Эйлера копятся — приводим к канонич. виду (та же ориентация)
-        self.state = canonical_euler(step_rk4(s, self.controls, dt, self.t, self.ac,
-                                              self.wind_call, gf))
+        self.state = step_rk4(s, self.controls, dt, self.t, self.ac, self.wind_call, gf)
         self.t += dt
         if gf is not None:
             self._ground_contact()
@@ -625,6 +700,11 @@ class Game(Entity):
         deg, refs = np.degrees, self.sau.refs
         if not self.ap:
             return f"MAN   TRIM δe {deg(self.de_trim_man):+.1f}°"
+        if self.aero_on:
+            return "AP   AEROBATICS C-11   " + (self.sau.aero.figure_name.split(" ", 1)[-1]
+                                                if self.sau.aero.figure_name else "—")
+        if self.aero_pending:
+            return f"AP   AEROBATICS ARMING   SPD {refs.Va:.0f}   ALT {refs.h:.0f}"
         m = ["AP", "TECS" if self.sau.params.lon == "tecs" else "SPD/ALT"]
         m.append(f"ALT {refs.h:.0f}" if self.h_hold else f"PITCH {deg(refs.theta):+.1f}°")
         m.append(f"SPD {refs.Va:.1f}")
@@ -642,11 +722,11 @@ class Game(Entity):
         Vx, Vy, Vh = earth_velocity(s)
         deg, refs = np.degrees, self.sau.refs
         al = [self.ac.alpha_warning, self.ac.alpha_crit, self.ac.alpha_stall]
-        v = air_velocity_axis(s[PHI], s[THETA], s[PSI], alpha, beta)
-        x_b, z_b = body_axes(s[PHI], s[THETA], s[PSI])
+        v = air_velocity_axis(*euler(s), alpha, beta)
+        x_b, z_b = body_axes(*euler(s))
         return HudData(
             t=self.t, Va=Va, h=s[H], Vh=Vh, alpha=deg(alpha), beta=deg(beta),
-            phi=_wrap180(deg(s[PHI])), psi=deg(s[PSI]) % 360, chi=deg(np.arctan2(Vy, Vx)) % 360,
+            phi=_wrap180(deg(euler(s)[0])), psi=deg(euler(s)[2]) % 360, chi=deg(np.arctan2(Vy, Vx)) % 360,
             thr=c[1], wind_n=w_vec[0], wind_e=w_vec[2],
             alert=int(sum(alpha >= x for x in al)), modes=self._modes(),
             status="PAUSED" if self.paused else ("ON GROUND" if self.on_ground else ""),
@@ -711,6 +791,7 @@ def main():
     ap.add_argument("--h0", type=float, default=100.0, help="начальная высота, м")
     ap.add_argument("--cam", type=int, default=1, choices=[1, 2, 3, 4])
     ap.add_argument("--ap", action="store_true", help="старт с включённой САУ")
+    ap.add_argument("--aero", action="store_true", help="старт с пилотажным комплексом (как K)")
     ap.add_argument("--shot", default=None, help="скриншот через ~300 кадров и выход")
     ap.add_argument("--map", default="default", choices=list(MAPS), help="карта мира")
     ap.add_argument("--no-map", action="store_true", help="без окна станции (PFD + карта)")
@@ -727,6 +808,8 @@ def main():
     q_station = None if (a.no_map or a.shot) else start_station(terrain, aircraft, a.h0, "-0+0")
     game = Game(aircraft, wind_params, cfg, terrain, cam=a.cam, ap=a.ap, shot=a.shot,
                 q_station=q_station, bench=a.bench, sensors=a.sensors, est=a.est)
+    if a.aero:
+        game._aero_toggle()
     try:
         app.run()
     finally:

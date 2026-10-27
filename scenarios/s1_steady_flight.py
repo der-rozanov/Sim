@@ -30,7 +30,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
 from runner import run, compute_trim, trim_state, print_summary
 from control.controllers import with_roll_hold   # САУ по крену (РЕШ-19)
-from sim.state import THETA, Q, H
+from sim.state import Q, H
 from flight_logger import FlightLogger
 from viz.viewer import show_flightlog
 
@@ -83,7 +83,7 @@ path = logger.save(log)
 # ------------------------------------------------------------------
 Va_arr    = log.Va
 alpha_arr = log.alpha
-theta_arr = log.state[:, THETA]
+theta_arr = log.theta
 q_arr     = log.state[:, Q]
 h_arr     = log.state[:, H]
 

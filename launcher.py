@@ -79,7 +79,7 @@ MODES = {
         help="3D + редактор структурных схем: схема ведёт любые из δe, δt, δa, δr, "
              "остальные — штатная САУ. Меню «Шаблоны» — все каналы. "
              "Схемы лабораторной 6 — labs/lab6/schemes/."),
-    "Сценарий s1–s10": dict(
+    "Сценарий s1–s11": dict(
         script=None, params=("scenario",),
         help="Расчётный прогон без реального времени: отчёт в консоли, "
              ".flightlog в results/, затем окно графиков."),
@@ -399,14 +399,14 @@ def selftest():
     from viz.world3d import MAPS as WORLD_MAPS
     assert list(MAPS) == list(WORLD_MAPS), "список карт разошёлся с viz/world3d.MAPS"
     sc = scenario_list()
-    assert [f[:3] for f, _ in sc][:2] == ["s1_", "s2_"] and sc[-1][0].startswith("s10"), sc
+    assert [f[:3] for f, _ in sc][:2] == ["s1_", "s2_"] and sc[-1][0].startswith("s11"), sc
     v = {"aircraft": "fpv", "map": "default", "h0": "150", "cam": "2", "wind_n": "0",
          "wind_e": "5", "turb": "off", "turb_alt": "low", "sensors": "real", "est": "ekf",
          "ap": True, "no_map": False, "log": "", "speed": "1", "scenario": sc[0][0] + " — x"}
     cmd = build_cmd("Полёт 3D", v)[1:]
     assert cmd[0] == "scenarios/GameScenario3D.py" and "--ap" in cmd and "--no-map" not in cmd
     assert cmd[cmd.index("--map") + 1] == "default" and cmd[cmd.index("--h0") + 1] == "150"
-    assert build_cmd("Сценарий s1–s10", v)[1:] == ["scenarios/" + sc[0][0]]
+    assert build_cmd("Сценарий s1–s11", v)[1:] == ["scenarios/" + sc[0][0]]
     assert build_cmd("3D-повтор полёта", dict(v, log="a.flightlog"))[1:3] == \
         ["viz/viewer3d.py", "a.flightlog"]
     try:

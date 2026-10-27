@@ -27,7 +27,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
-from sim.state import H, X, Y, PHI, air_data, earth_velocity
+from sim.state import H, X, Y, air_data, earth_velocity
 from sim.dynamics import specific_force
 from sim.wind import make_wind_fn
 from runner import run, compute_trim, trim_state
@@ -134,7 +134,7 @@ for k, (log, rec) in res.items():
     sda = deg(np.std(np.diff(log.controls[:, 2])))
     sde = deg(np.std(np.diff(log.controls[:, 0])))
     full = log.t[-1] > cfg.t_end - 0.05
-    print(f"   {k:>8} {e_chi:17.2f} {deg(np.abs(log.state[:, PHI]).max()):9.1f} {dh:16.2f} "
+    print(f"   {k:>8} {e_chi:17.2f} {deg(np.abs(log.phi).max()):9.1f} {dh:16.2f} "
           f"{sda:7.3f} {sde:7.3f} {'да' if full else 'НЕТ':>6}")
     check(f"{k}: полёт 180 с, |e_χ| < 3°, |Δh| < 3 м", full and e_chi < 3.0 and dh < 3.0)
 print("   σδa, σδe — СКО приращения руля за шаг 0.01 с: «дёрганье» рулей от шума")
@@ -184,7 +184,7 @@ axs[1, 0].set_xlabel("t, с"); axs[1, 0].set_ylabel("м"); axs[1, 0].legend(font
 for k, col in (("truth", C_TRUE), ("real", C_REAL)):
     lg = res[k][0]
     mm = (lg.t > 15) & (lg.t < 35)
-    axs[1, 1].plot(lg.t[mm], deg(lg.state[mm, PHI]), color=col, lw=1.3,
+    axs[1, 1].plot(lg.t[mm], deg(lg.phi[mm]), color=col, lw=1.3,
                    label={"truth": "САУ на истине", "real": "САУ на RealisticSensors"}[k])
 axs[1, 1].set_title("Крен в развороте: истина против реалистичных датчиков", fontsize=10)
 axs[1, 1].set_xlabel("t, с"); axs[1, 1].set_ylabel("φ, °"); axs[1, 1].legend(fontsize=8)

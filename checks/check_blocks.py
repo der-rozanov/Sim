@@ -27,7 +27,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from sim.config import AircraftParams, WindParams, SimConfig
-from sim.state import H, PHI, air_data, earth_velocity
+from sim.state import H, air_data, earth_velocity
 from control.controllers import (PitchController, PitchControlParams, PID, PIDParams,
                                  SpeedController, SpeedControlParams, AltitudeHold,
                                  AltitudeHoldParams, RollController, RollControlParams,
@@ -274,7 +274,7 @@ chi = lambda L: np.degrees(np.unwrap(np.arctan2(*np.array([earth_velocity(s)[:2]
 dh = np.max(np.abs(ref.state[:, H] - blk.state[:, H]))
 dV = np.max(np.abs(ref.Va - blk.Va))
 dchi = np.max(np.abs(chi(ref) - chi(blk)))
-dphi = np.degrees(np.max(np.abs(ref.state[:, PHI] - blk.state[:, PHI])))
+dphi = np.degrees(np.max(np.abs(ref.phi - blk.phi)))
 i_end = len(ref.t) - 1
 print(f"     в конце (60 с): h = {ref.state[i_end, H]:.2f} м, Va = {ref.Va[i_end]:.2f} м/с, "
       f"χ = {chi(ref)[-1]:.1f}°")

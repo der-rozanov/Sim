@@ -22,7 +22,7 @@ import matplotlib.pyplot as plt
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
-from sim.state import THETA, Q, H, P, PHI, PSI, earth_velocity
+from sim.state import Q, H, P, V, earth_velocity, euler, with_euler
 from runner import run, compute_trim, trim_state
 from control.controllers import (PitchController, PitchControlParams, SpeedController,
                                  SpeedControlParams, LateralController,
@@ -90,16 +90,16 @@ def closed_loop(theta_ref=None, h_ref=None, Va_ref=VA, chi_ref=None, state0=None
         else:
             th_c = theta_ref
         pitch.theta_ref = th_c
-        de = pitch.step(t, {'theta': s[THETA], 'q': s[Q], 'h': s[H], 'Va': Va}, cfg.dt)[0]
+        de = pitch.step(t, {'theta': euler(s)[1], 'q': s[Q], 'h': s[H], 'Va': Va}, cfg.dt)[0]
         dt_ = speed.step(Va, cfg.dt)
         if chi_ref is None:
-            da, dr = hold.step(s[PHI], s[P], Va, cfg.dt), 0.0
+            da, dr = hold.step(euler(s)[0], s[P], Va, cfg.dt), 0.0
         else:
             Vx, Vy, _ = earth_velocity(s)
             lat.set_course(f(chi_ref, t))
             da, dr = lat.step({'chi': np.arctan2(Vy, Vx), 'Vg': np.hypot(Vx, Vy),
-                               'phi': s[PHI], 'p': s[P], 'Va': Va,
-                               'beta': np.arcsin(np.clip(s[6] / Va, -1, 1))}, cfg.dt)
+                               'phi': euler(s)[0], 'p': s[P], 'Va': Va,
+                               'beta': np.arcsin(np.clip(s[V] / Va, -1, 1))}, cfg.dt)
         return np.array([de, dt_, da, dr])
 
     c = SimConfig(Va0=VA, h0=cfg.h0, dt=cfg.dt, t_end=t_end)
@@ -111,7 +111,7 @@ results = []
 
 # 1. Тангаж
 log = closed_loop(theta_ref=alpha_t + np.radians(3.0), t_end=4.0)
-y = np.degrees(log.state[:, THETA] - alpha_t)
+y = np.degrees(log.theta - alpha_t)
 lin = tf_step([gn["kp_theta"] * k["a_theta3"]],
               [1, k["a_theta1"] + gn["kd_theta"] * k["a_theta3"], k["a_theta2"] + gn["kp_theta"] * k["a_theta3"]],
               log.t, 3.0)
@@ -131,9 +131,9 @@ lin = tf_step([gn["kp_V"] * k["a_V2"], gn["ki_V"] * k["a_V2"]],
 results.append(("Скорость ΔVa, м/с (16 → 18)", log.t, y, lin, 2.0, 0.0))
 
 # 4. Крен: из φ = 20° к 0 (RollHold) — та же ступенька −20°
-s_r = s0.copy(); s_r[PHI] = np.radians(20.0)
+s_r = with_euler(s0, np.radians(20.0), euler(s0)[1], 0.0)
 log = closed_loop(theta_ref=alpha_t, h_ref=cfg.h0, state0=s_r, t_end=2.0)
-y = np.degrees(log.state[:, PHI])
+y = np.degrees(log.phi)
 # φ/φc каскада угол → скорость крена (ṗ = −a_φ1·p + a_φ2·δa, без насыщений):
 #   num = a_φ2·((FF + kp)s + ki)/τ,  den = s³ + (a_φ1 + a_φ2·kp)s² + a_φ2(ki + (FF + kp)/τ)s + a_φ2·ki/τ
 a1, a2, tau = k["a_phi1"], k["a_phi2"], gn["tau_phi"]
@@ -163,7 +163,7 @@ def tecs_loop(h_ref, Va_ref, t_end):
     sau.refs.h, sau.refs.Va = h_ref, Va_ref
 
     def fn(t, s, Va, al):
-        return sau.step(t, s, Va, al, np.arcsin(np.clip(s[6] / Va, -1, 1)), cfg.dt)
+        return sau.step(t, s, Va, al, np.arcsin(np.clip(s[V] / Va, -1, 1)), cfg.dt)
     return run(fn, ac, WindParams(), SimConfig(Va0=VA, h0=cfg.h0, dt=cfg.dt, t_end=t_end),
                state0=s0.copy())
 
@@ -204,7 +204,7 @@ print("\nУмолчания регуляторов совпадают с рас�
 print(f"TECS, скорость 16 → 18 м/с: |Δh| ≤ {tecs_dh:.2f} м (связь высоты и скорости)")
 chi6 = np.degrees([np.arctan2(*earth_velocity(s)[1::-1]) for s in log6.state])
 print(f"\nМанёвр: курс +90°, высота +30 м за 25 с: χ = {chi6[-1]:.1f}°, Δh = {log6.state[-1, H] - cfg.h0:.1f} м, "
-      f"|φ|max = {np.degrees(np.abs(log6.state[:, PHI]).max()):.1f}°, Va ∈ [{log6.Va.min():.1f}, {log6.Va.max():.1f}] м/с, "
+      f"|φ|max = {np.degrees(np.abs(log6.phi).max()):.1f}°, Va ∈ [{log6.Va.min():.1f}, {log6.Va.max():.1f}] м/с, "
       f"α_max = {np.degrees(log6.alpha.max()):.1f}°")
 
 # 7. Как в 3D-тренажёре: Va = 26 м/с, высота +100 м, затем −150 м
@@ -217,7 +217,7 @@ print(f"\nВысота на Va = {VA_G:.0f} м/с: при 60 с h = {log7.state[
 # 8. Серия разворотов: +90°, −90° (180°), +45° — выход крена за ±30°
 chi_seq = lambda t: np.radians(90.0 if t < 15 else (-90.0 if t < 35 else -45.0))
 log8 = closed_loop(h_ref=cfg.h0, chi_ref=chi_seq, t_end=50.0)
-phi8 = np.degrees(log8.state[:, PHI])
+phi8 = np.degrees(log8.phi)
 chi8 = np.degrees([np.arctan2(*earth_velocity(s)[1::-1]) for s in log8.state])
 print(f"Развороты +90 → −90 → −45°: |φ|max = {np.abs(phi8).max():.1f}° (предел уставки 30°), "
       f"χ в конце = {chi8[-1]:.1f}°, |Δh|max = {np.abs(log8.state[:, H] - cfg.h0).max():.1f} м")
@@ -235,7 +235,7 @@ axes[0, 0].legend(fontsize=8, frameon=False)
 ax = axes[1, 2]
 ax.plot(log6.t, chi6, color=BLUE, lw=2, label="курс χ, °")
 ax.plot(log6.t, log6.state[:, H] - cfg.h0, color=ORANGE, lw=2, label="Δh, м")
-ax.plot(log6.t, np.degrees(log6.state[:, PHI]), color="#1baf7a", lw=2, label="крен φ, °")
+ax.plot(log6.t, np.degrees(log6.phi), color="#1baf7a", lw=2, label="крен φ, °")
 ax.set_title("Манёвр: χc +90° и hc +30 м", fontsize=10); ax.set_xlabel("t, с")
 ax.legend(fontsize=8, frameon=False); ax.grid(alpha=0.25)
 fig.suptitle(f"САУ FPV-самолёта, Va = {VA} м/с: расчёт control/tuning.py vs полная модель 6DOF")

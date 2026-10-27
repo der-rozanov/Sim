@@ -1,24 +1,35 @@
 """
 Вектор состояния ЛА (полная модель 6DOF).
 
-Состав (12 компонент):
-  [u, w, q, theta, x, h,  v, p, r, phi, psi, y]
-   └── продольный ─────┘  └──── боковой ──────┘
+Состав (13 компонент):
+  [u, w, q, x, h,  v, p, r, y,  e0, e1, e2, e3]
+   └ продольный ┘  └ боковой ┘  └ ориентация ┘
   u     — скорость вдоль оси x_body (вперёд), м/с
   w     — скорость вдоль оси z_body (вниз), м/с
   q     — угловая скорость тангажа, рад/с
-  theta — угол тангажа, рад
-  x     — координата на север (при psi=0 — вперёд по полёту), м
+  x     — координата на север, м
   h     — высота (вверх положительно), м
   v     — скорость вдоль оси y_body (вправо), м/с
   p     — угловая скорость крена, рад/с
   r     — угловая скорость рыскания, рад/с
-  phi   — угол крена (> 0 — правое крыло вниз), рад
-  psi   — угол рыскания (> 0 — нос вправо от севера), рад
   y     — координата на восток, м
+  e0..e3 — кватернион ориентации (поворот земной СК NED в связанную), |e| = 1;
+           e0 — скалярная часть (B&M, приложение B)
 
-Индексы 0..5 совпадают с прежним продольным вектором: боковой канал добавлен
-расширением, а не переписыванием.
+Ориентация хранится кватернионом, а не углами Эйлера (решение автора 2026-10-27):
+кинематика углов Эйлера вырождается при θ = ±90° (деление на cos θ в φ̇, ψ̇), а
+кватерниона — нет; вертикали, петли и бочки проходятся без особенностей.
+Углы Эйлера (φ, θ, ψ) — производные величины: euler(state). Диапазоны:
+φ, ψ ∈ (−π, π], θ ∈ [−π/2, π/2].
+  phi   — угол крена (> 0 — правое крыло вниз)
+  theta — угол тангажа (> 0 — нос вверх)
+  psi   — угол рыскания (> 0 — нос вправо от севера)
+
+Связь с углами Эйлера (последовательность ψ → θ → φ, B&M ур. B.1):
+  e0 = cψ/2·cθ/2·cφ/2 + sψ/2·sθ/2·sφ/2
+  e1 = cψ/2·cθ/2·sφ/2 − sψ/2·sθ/2·cφ/2
+  e2 = cψ/2·sθ/2·cφ/2 + sψ/2·cθ/2·sφ/2
+  e3 = sψ/2·cθ/2·cφ/2 − cψ/2·sθ/2·sφ/2
 
 Системы координат:
   Земная: x — север, y — восток, h — вверх (NED с h = −z)
@@ -35,21 +46,24 @@ from .config import AircraftParams, SimConfig
 
 # Именованные индексы — никаких «магических» чисел в остальном коде
 # Продольный канал
-U     = 0
-W     = 1
-Q     = 2
-THETA = 3
-X     = 4
-H     = 5
+U  = 0
+W  = 1
+Q  = 2
+X  = 3
+H  = 4
 # Боковой канал
-V     = 6
-P     = 7
-R     = 8
-PHI   = 9
-PSI   = 10
-Y     = 11
+V  = 5
+P  = 6
+R  = 7
+Y  = 8
+# Ориентация — кватернион
+E0 = 9
+E1 = 10
+E2 = 11
+E3 = 12
+QUAT = [E0, E1, E2, E3]
 
-N_STATES = 12
+N_STATES = 13
 
 # Индексы вектора управления
 DE = 0   # руль высоты, рад
@@ -70,15 +84,71 @@ def full_controls(controls) -> np.ndarray:
     return c
 
 
+# ---------------------------------------------------------------------------
+# Ориентация: кватернион ↔ углы Эйлера ↔ матрица поворота
+# ---------------------------------------------------------------------------
+
+def quat_from_euler(phi: float, theta: float, psi: float) -> np.ndarray:
+    """Кватернион [e0, e1, e2, e3] по углам Эйлера (B&M ур. B.1)."""
+    cf, sf = np.cos(phi / 2),   np.sin(phi / 2)
+    ct, st = np.cos(theta / 2), np.sin(theta / 2)
+    cp, sp = np.cos(psi / 2),   np.sin(psi / 2)
+    return np.array([cp * ct * cf + sp * st * sf,
+                     cp * ct * sf - sp * st * cf,
+                     cp * st * cf + sp * ct * sf,
+                     sp * ct * cf - cp * st * sf])
+
+
+def euler(state: np.ndarray) -> tuple:
+    """
+    Углы Эйлера (φ, θ, ψ) по кватерниону состояния (B&M ур. B.2), рад.
+
+    state — один вектор (13,) или массив векторов (N, 13): тогда φ, θ, ψ — (N,).
+    Кватернион нормируется (|e| после интегрирования может отличаться от 1 на ~1e-12).
+    У θ = ±90° углы φ и ψ по отдельности не определены (определена их сумма или
+    разность) — это свойство углов Эйлера, не модели.
+    """
+    e0, e1, e2, e3 = (state[..., k] for k in QUAT)
+    n2 = e0**2 + e1**2 + e2**2 + e3**2
+    phi   = np.arctan2(2.0 * (e0 * e1 + e2 * e3), e0**2 + e3**2 - e1**2 - e2**2)
+    theta = np.arcsin(np.clip(2.0 * (e0 * e2 - e1 * e3) / n2, -1.0, 1.0))
+    psi   = np.arctan2(2.0 * (e0 * e3 + e1 * e2), e0**2 + e1**2 - e2**2 - e3**2)
+    return phi, theta, psi
+
+
+def with_euler(state: np.ndarray, phi: float, theta: float, psi: float) -> np.ndarray:
+    """Копия вектора состояния с ориентацией, заданной углами Эйлера."""
+    s = np.array(state, dtype=float)
+    s[QUAT] = quat_from_euler(phi, theta, psi)
+    return s
+
+
+def euler_rates(state: np.ndarray) -> np.ndarray:
+    """
+    Производные углов Эйлера по угловым скоростям (B&M ур. 3.3), рад/с:
+      φ̇ = p + (q·sin φ + r·cos φ)·tan θ
+      θ̇ = q·cos φ − r·sin φ
+      ψ̇ = (q·sin φ + r·cos φ) / cos θ
+    В интегрировании не участвует — для линеаризации и проверок
+    (особенность при θ = ±90°).
+    """
+    phi, theta, _ = euler(state)
+    p, q, r = state[P], state[Q], state[R]
+    sf, cf = np.sin(phi), np.cos(phi)
+    return np.array([p + (q * sf + r * cf) * np.tan(theta),
+                     q * cf - r * sf,
+                     (q * sf + r * cf) / np.cos(theta)])
+
+
 def initial_state(cfg: SimConfig) -> np.ndarray:
     """
     Начальный вектор состояния: прямолинейный полёт на север, без крена.
     Вся начальная скорость — вдоль x_body (alpha = 0).
     """
     state = np.zeros(N_STATES)
-    state[U]     = cfg.Va0
-    state[H]     = cfg.h0
-    state[THETA] = cfg.theta0
+    state[U]    = cfg.Va0
+    state[H]    = cfg.h0
+    state[QUAT] = quat_from_euler(0.0, cfg.theta0, 0.0)
     return state
 
 
@@ -97,31 +167,22 @@ def rotation_body_to_earth(phi: float, theta: float, psi: float) -> np.ndarray:
     ])
 
 
-def _rotation(state: np.ndarray) -> np.ndarray:
-    return rotation_body_to_earth(state[PHI], state[THETA], state[PSI])
-
-
-def canonical_euler(state: np.ndarray) -> np.ndarray:
+def rotation_quat(e) -> np.ndarray:
     """
-    Та же ориентация ЛА, но углы в каноническом диапазоне:
-    φ, ψ ∈ [−π, π),  θ ∈ [−π/2, π/2].
-
-    Кинематика углов Эйлера диапазон не ограничивает: в петле θ проходит 90°
-    и копится, в бочке копится φ. Для САУ это ошибка в целые обороты
-    (θ = 3580° против θ_ref = 20° → «отматывание» петель). Используется
-    тождество поворота  (φ, θ, ψ) ≡ (φ + π, π − θ, ψ + π);  скорости u, v, w
-    и угловые скорости p, q, r заданы в связанной СК и не меняются.
+    Матрица перехода из связанной СК в земную NED по кватерниону (B&M ур. B.4,
+    транспонированная). Кватернион нормируется.
     """
-    s = state.copy()
-    th = (s[THETA] + np.pi) % (2.0 * np.pi) - np.pi          # [−π, π)
-    if abs(th) > np.pi / 2:
-        th = np.copysign(np.pi, th) - th                     # π − θ  или  −π − θ
-        s[PHI] += np.pi
-        s[PSI] += np.pi
-    s[THETA] = th
-    s[PHI] = (s[PHI] + np.pi) % (2.0 * np.pi) - np.pi
-    s[PSI] = (s[PSI] + np.pi) % (2.0 * np.pi) - np.pi
-    return s
+    e0, e1, e2, e3 = np.asarray(e, dtype=float) / np.linalg.norm(e)
+    return np.array([
+        [e0**2 + e1**2 - e2**2 - e3**2, 2 * (e1 * e2 - e0 * e3),       2 * (e1 * e3 + e0 * e2)],
+        [2 * (e1 * e2 + e0 * e3),       e0**2 - e1**2 + e2**2 - e3**2, 2 * (e2 * e3 - e0 * e1)],
+        [2 * (e1 * e3 - e0 * e2),       2 * (e2 * e3 + e0 * e1),       e0**2 - e1**2 - e2**2 + e3**2],
+    ])
+
+
+def rotation(state: np.ndarray) -> np.ndarray:
+    """Матрица перехода связанная → земная NED для вектора состояния."""
+    return rotation_quat(state[QUAT])
 
 
 def earth_velocity(state: np.ndarray) -> tuple:
@@ -130,7 +191,7 @@ def earth_velocity(state: np.ndarray) -> tuple:
 
     Возвращает: (Vx, Vy, Vh) — на север, на восток, вверх, м/с
     """
-    vn, ve, vd = _rotation(state) @ state[[U, V, W]]
+    vn, ve, vd = rotation(state) @ state[[U, V, W]]
     return vn, ve, -vd
 
 
@@ -142,7 +203,7 @@ def wind_body(state: np.ndarray, wind_earth) -> np.ndarray:
     """
     Vwx, Vwh = wind_earth[0], wind_earth[1]
     Vwy = wind_earth[2] if len(wind_earth) > 2 else 0.0
-    return _rotation(state).T @ np.array([Vwx, Vwy, -Vwh])
+    return rotation(state).T @ np.array([Vwx, Vwy, -Vwh])
 
 
 def air_data(state: np.ndarray, wind_earth) -> tuple:

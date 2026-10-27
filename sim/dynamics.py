@@ -19,17 +19,21 @@ derivatives(state, controls, t, params, wind_fn) -> dstate
     q_dot = Γ5·p·r − Γ6·(p² − r²) + M_pitch / Jy
     r_dot = Γ7·p·q − Γ1·q·r + Γ4·L_roll + Γ8·N_yaw
 
-  Кинематика углов Эйлера:
-    phi_dot   = p + (q·sin φ + r·cos φ)·tan θ
-    theta_dot = q·cos φ − r·sin φ
-    psi_dot   = (q·sin φ + r·cos φ) / cos θ
+  Кинематика кватерниона ориентации (B&M ур. B.3), e = [e0, e1, e2, e3]:
+    e0_dot = ½·(−p·e1 − q·e2 − r·e3)
+    e1_dot = ½·( p·e0 + r·e2 − q·e3)      + λ·(1 − |e|²)·e
+    e2_dot = ½·( q·e0 − r·e1 + p·e3)
+    e3_dot = ½·( r·e0 + q·e1 − p·e2)
+  Слагаемое λ·(1 − |e|²)·e возвращает |e| к 1 (уход нормы от ошибки интегратора);
+  при |e| = 1 оно равно нулю и на движение не влияет. Особенности при θ = ±90°,
+  как у кинематики углов Эйлера, здесь нет.
 
   Кинематика положения: (x_dot, y_dot, −h_dot) = R_b→e · (u, v, w)
 
-Силы тяжести в связанной СК:
-    fx_grav = −m·g·sin θ
-    fy_grav = +m·g·cos θ·sin φ
-    fz_grav = +m·g·cos θ·cos φ
+Силы тяжести в связанной СК: R_b→eᵀ · (0, 0, m·g), т.е. третья строка R_b→e:
+    fx_grav = −m·g·sin θ             = 2·m·g·(e1·e3 − e0·e2)
+    fy_grav = +m·g·cos θ·sin φ       = 2·m·g·(e2·e3 + e0·e1)
+    fz_grav = +m·g·cos θ·cos φ       = m·g·(e0² − e1² − e2² + e3²)
 
 Земля (необязательно, ground_fn): силы и моменты колёс шасси и точек
 конструкции — sim/ground.py, docs/physics.md 4.6. Без ground_fn земли нет.
@@ -37,14 +41,14 @@ derivatives(state, controls, t, params, wind_fn) -> dstate
 Тяга: только вдоль x_body (тянущий винт, вдоль оси фюзеляжа); реактивный
 момент винта −Q_prop добавляется к моменту крена.
 
-При v = p = r = phi = psi = 0 и delta_a = delta_r = 0 уравнения в точности
+При v = p = r = 0, φ = ψ = 0 и delta_a = delta_r = 0 уравнения в точности
 совпадают с прежней продольной моделью (docs/physics.md, раздел 3.5).
 """
 
 import numpy as np
 from .config import AircraftParams
-from .state import (U, W, Q, THETA, X, H, V, P, R, PHI, PSI, Y, N_STATES,
-                    DE, DT, DA, DR, full_controls, air_data, earth_velocity)
+from .state import (U, W, Q, X, H, V, P, R, Y, QUAT, N_STATES,
+                    DE, DT, DA, DR, full_controls, air_data, earth_velocity, rotation)
 from .aero import aero_forces_moments, aero_lateral
 from .ground import ground_forces
 
@@ -104,6 +108,26 @@ def thrust(throttle: float, Va: float, params: AircraftParams) -> float:
     return propeller(throttle, Va, params)[0]
 
 
+# Коэффициент λ возврата нормы кватерниона к 1, 1/с. Численный, не физический:
+# постоянная времени 1/(2λ) = 0.05 с; устойчивость RK4 требует 2λ·dt < 2.8.
+QUAT_NORM_GAIN = 10.0
+
+
+def quat_dot(e: np.ndarray, p: float, q: float, r: float) -> np.ndarray:
+    """Производная кватерниона ориентации по угловым скоростям (B&M ур. B.3)."""
+    e0, e1, e2, e3 = e
+    norm_corr = QUAT_NORM_GAIN * (1.0 - (e0**2 + e1**2 + e2**2 + e3**2))
+    return 0.5 * np.array([-p * e1 - q * e2 - r * e3,
+                            p * e0 + r * e2 - q * e3,
+                            q * e0 - r * e1 + p * e3,
+                            r * e0 + q * e1 - p * e2]) + norm_corr * np.asarray(e)
+
+
+def gravity_body(state: np.ndarray, g: float) -> np.ndarray:
+    """Ускорение силы тяжести в связанной СК: R_b→eᵀ·(0, 0, g), м/с²."""
+    return g * rotation(state)[2]
+
+
 def _gammas(params: AircraftParams) -> tuple:
     """Γ-коэффициенты уравнений вращения (B&M ур. 3.13)."""
     Jx, Jy, Jz, Jxz = params.Jx, params.Jy, params.Jz, params.Jxz
@@ -141,7 +165,6 @@ def derivatives(state: np.ndarray,
     """
     u, v, w = state[U], state[V], state[W]
     p, q, r = state[P], state[Q], state[R]
-    phi, theta = state[PHI], state[THETA]
     c = full_controls(controls)
 
     # Ветер и аэродинамические углы
@@ -158,12 +181,7 @@ def derivatives(state: np.ndarray,
     L_roll -= Q_prop
 
     # Сила тяжести в связанной СК
-    mg = params.mass * params.g
-    sf, cf = np.sin(phi), np.cos(phi)
-    st, ct = np.sin(theta), np.cos(theta)
-    fx_g = -mg * st
-    fy_g =  mg * ct * sf
-    fz_g =  mg * ct * cf
+    fx_g, fy_g, fz_g = params.mass * gravity_body(state, params.g)
 
     # Суммарные силы
     fx = fx_a + fx_t + fx_g
@@ -191,10 +209,8 @@ def derivatives(state: np.ndarray,
     dstate[Q] = G5 * p * r - G6 * (p**2 - r**2) + M_pitch / params.Jy
     dstate[R] = G7 * p * q - G1 * q * r + G4 * L_roll + G8 * N_yaw
 
-    # Кинематика углов Эйлера
-    dstate[PHI]   = p + (q * sf + r * cf) * np.tan(theta)
-    dstate[THETA] = q * cf - r * sf
-    dstate[PSI]   = (q * sf + r * cf) / ct
+    # Кинематика ориентации (кватернион)
+    dstate[QUAT] = quat_dot(state[QUAT], p, q, r)
 
     # Кинематика положения
     dstate[X], dstate[Y], dstate[H] = earth_velocity(state)
@@ -222,10 +238,7 @@ def specific_force(state: np.ndarray,
     d = derivatives(state, controls, t, params, wind_fn, ground_fn)
     u, v, w = state[U], state[V], state[W]
     p, q, r = state[P], state[Q], state[R]
-    phi, theta, g = state[PHI], state[THETA], params.g
-    g_b = g * np.array([-np.sin(theta),
-                        np.cos(theta) * np.sin(phi),
-                        np.cos(theta) * np.cos(phi)])
+    g_b = gravity_body(state, params.g)
     return np.array([d[U] - r * v + q * w,
                      d[V] - p * w + r * u,
                      d[W] - q * u + p * v]) - g_b

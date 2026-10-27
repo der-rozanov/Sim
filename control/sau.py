@@ -19,6 +19,9 @@
 
 Режимы (Mode): PITCH — уставка тангажа и курса; ALTITUDE — высоты и курса;
 ROUTE — курс и высота от навигатора. Скорость — во всех режимах (refs.Va).
+AEROBATIC — пилотаж по траектории фигур (control/aerobatics.py, побочная разработка):
+все четыре руля даёт AerobaticController по навигационной оценке (EKF, если есть, иначе
+истина); по окончании программы — ALTITUDE на текущих высоте, путевом угле и скорости.
 
 Куда встают доработки (docs/control.md, раздел 9):
     TECS (высота + скорость энергией)    → lon = TECS (control/tecs.py), по умолчанию
@@ -37,7 +40,7 @@ from enum import Enum
 
 import numpy as np
 
-from sim.state import THETA, Q, H, P, R, PHI, PSI, X, Y, earth_velocity, rotation_body_to_earth
+from sim.state import Q, H, P, R, X, Y, earth_velocity, euler, rotation
 from .controllers import (PitchController, PitchControlParams,
                           SpeedController, SpeedControlParams,
                           LateralController, LateralControlParams,
@@ -52,6 +55,7 @@ class Mode(Enum):
     PITCH = "тангаж + курс"
     ALTITUDE = "высота + курс"
     ROUTE = "маршрут"
+    AEROBATIC = "пилотаж"
 
 
 @dataclass
@@ -91,8 +95,9 @@ class TruthSensors:
 
     def measure(self, t, state, Va, alpha, beta):
         Vx, Vy, _ = earth_velocity(state)
+        phi, theta, _ = euler(state)
         return {"t": t, "h": state[H], "hdot": earth_velocity(state)[2], "Va": Va, "q": state[Q], "p": state[P],
-                "theta": state[THETA], "phi": state[PHI],
+                "theta": theta, "phi": phi,
                 "chi": np.arctan2(Vy, Vx), "Vg": np.hypot(Vx, Vy),
                 "beta": beta, "alpha": alpha, "pn": state[X], "pe": state[Y]}
 
@@ -114,13 +119,14 @@ class NoisySensors:
     def measure(self, t, state, Va, alpha, beta):
         sp, rng = self.sp, self.rng
         Vx, Vy, Vh = earth_velocity(state)
+        phi, theta, _ = euler(state)
         m = {"t": t,
              "h":     measure_altitude(state[H], sp.baro_bias, sp.baro_noise, rng),
              "Va":    measure_airspeed(Va, sp.airspeed_bias, sp.airspeed_noise, rng),
              "q":     measure_gyro(state[Q], sp.gyro_bias, sp.gyro_noise, rng),
              "p":     measure_gyro(state[P], sp.gyro_bias, sp.gyro_noise, rng),
-             "theta": measure_attitude(state[THETA], 0.0, sp.ins_angle_noise, rng),
-             "phi":   measure_attitude(state[PHI], 0.0, sp.ins_angle_noise, rng),
+             "theta": measure_attitude(theta, 0.0, sp.ins_angle_noise, rng),
+             "phi":   measure_attitude(phi, 0.0, sp.ins_angle_noise, rng),
              "chi":   measure_gps_course(Vx, Vy, sp.gps_vel_noise, rng),
              "Vg":    np.hypot(Vx, Vy),
              "beta":  measure_sideslip(beta, sp.probe_beta_bias, sp.probe_beta_noise, rng)}
@@ -188,12 +194,13 @@ class RealisticSensors:
         self.gps_drift.step(T)
 
         def imu():
+            phi, theta, _ = euler(state)
             bg = self.gyro_bias()
             m = {"p": state[P] + bg[0] + rng.normal(0.0, sp.gyro_noise),
                  "q": state[Q] + bg[1] + rng.normal(0.0, sp.gyro_noise),
                  "r": state[R] + bg[2] + rng.normal(0.0, sp.gyro_noise),
-                 "theta": measure_attitude(state[THETA], 0.0, sp.ins_angle_noise, rng),
-                 "phi": measure_attitude(state[PHI], 0.0, sp.ins_angle_noise, rng),
+                 "theta": measure_attitude(theta, 0.0, sp.ins_angle_noise, rng),
+                 "phi": measure_attitude(phi, 0.0, sp.ins_angle_noise, rng),
                  "alpha": measure_angle_of_attack(alpha, sp.probe_bias, sp.probe_noise, rng),
                  "beta": measure_sideslip(beta, sp.probe_beta_bias, sp.probe_beta_noise, rng)}
             if self.accel_fn is not None:
@@ -218,7 +225,7 @@ class RealisticSensors:
         m.update(self.ch_gps.update(t, gps))
 
         def mag():
-            Rbn = rotation_body_to_earth(state[PHI], state[THETA], state[PSI])
+            Rbn = rotation(state)
             b = Rbn.T @ self.mag_ned + rng.normal(0.0, sp.mag_noise, 3)
             return {"mx": b[0], "my": b[1], "mz": b[2], "t_mag": t}
         m.update(self.ch_mag.update(t, mag))       # последним: порядок шума прочих датчиков прежний
@@ -306,6 +313,8 @@ class SAU:
         self.theta_ref = self.alpha_trim   # θ_ref тангажа (после защиты)
         self.prot_out = None
         self.controls = np.array([self.de_trim, self.thr_trim, 0.0, 0.0])
+        self.aero = None                   # AerobaticController — при первом fly_aerobatics
+        self.wind_aero = None              # ветер (N, E, 0) на время пилотажа, м/с
 
     # --- включение и режимы -------------------------------------------------
     def engage(self, theta, h, Va, chi):
@@ -330,6 +339,7 @@ class SAU:
             self.refs.theta = self.theta_cmd
         if mode is Mode.ROUTE and self.nav is None:
             raise ValueError("режим ROUTE требует навигатор (nav)")
+        self._beta_fusion(mode is not Mode.AEROBATIC)
         self.lon.reset_alt()
         self.mode = mode
 
@@ -338,6 +348,46 @@ class SAU:
         self.nav.set_route(waypoints, start)
         self.set_mode(Mode.ROUTE)
         self.lon.reset_alt()
+
+    def fly_aerobatics(self, state, Va, alpha, beta, figures=None, Va_ref=None):
+        """
+        Пилотаж: программа фигур (по умолчанию комплекс C-11) с текущей точки по текущему
+        путевому углу, горизонтально. state, Va, alpha, beta — истина (нужны, если нет EKF).
+        """
+        from .aerobatics import AerobaticController, AeroParams, Figure, programme, C11
+        if self.aero is None or (Va_ref is not None and Va_ref != self.aero.pr.Va_ref):
+            pr = AeroParams() if Va_ref is None else AeroParams(Va_ref=Va_ref)
+            self.aero = AerobaticController(self.ac, pr)
+        # ветер — оценка EKF на входе, постоянная на всю программу: в фигурах оценка по одному
+        # ПВД (β = 0 выключено) не успевает за порывами (ошибка до 5 м/с в слабую турбулентность)
+        self.wind_aero = (np.array([self.est["wn"], self.est["we"], 0.0]) if "wn" in self.est
+                          else None)
+        nav = self._nav_estimate(state, Va, alpha, beta)
+        self.aero.set_figure(Figure.from_entry("программа", programme(figures or C11),
+                                               nav["pos"], nav["vel"]))
+        self.aero.reset()
+        self.set_mode(Mode.AEROBATIC)
+
+    def _nav_estimate(self, state, Va, alpha, beta):
+        """
+        Навигационная оценка для пилотажа: из EKF (кватернион, v, p, ветер, p/q/r без
+        смещений гироскопа), иначе — истина (воздушная скорость по Va, α, β и R).
+        """
+        est = self.est
+        if "quat" in est:
+            from .estimator import quat_to_R
+            vel = np.array([est["vn"], est["ve"], est["vd"]])
+            return dict(pos=np.array([est["pn"], est["pe"], -est["h"]]), vel=vel,
+                        v_air=vel - (self.wind_aero if self.wind_aero is not None
+                                     else np.array([est["wn"], est["we"], 0.0])),
+                        R=quat_to_R(est["quat"]), omega=np.array([est["p"], est["q"], est["r"]]),
+                        Va=est["Va"])
+        Rb = rotation(state)
+        Vx, Vy, Vh = earth_velocity(state)
+        ca, sa, cb, sb = np.cos(alpha), np.sin(alpha), np.cos(beta), np.sin(beta)
+        return dict(pos=np.array([state[X], state[Y], -state[H]]), vel=np.array([Vx, Vy, -Vh]),
+                    v_air=Rb @ (Va * np.array([ca * cb, sb, sa * cb])),
+                    R=Rb, omega=np.array([state[P], state[Q], state[R]]), Va=Va)
 
     # --- шаг ------------------------------------------------------------------
     def observe(self, t, state, Va, alpha, beta, dt):
@@ -352,9 +402,25 @@ class SAU:
     def step(self, t, state, Va, alpha, beta, dt):
         """Истинные состояние и воздушные углы → датчики → … → [δe, δt, δa, δr]."""
         est = self.observe(t, state, Va, alpha, beta, dt)
+        if self.mode is Mode.AEROBATIC:
+            self.controls = self.aero.step_nav(self._nav_estimate(state, Va, alpha, beta), dt)
+            if self.aero.done:
+                self._aerobatics_done(est)
+            return self.controls
         self._guidance(est)
         self.controls = self._control(est, dt)
         return self.controls
+
+    def _aerobatics_done(self, est):
+        """Программа пройдена: удержание текущих высоты, путевого угла и скорости."""
+        self.engage(theta=est["theta"], h=est["h"], Va=self.aero.pr.Va_ref, chi=est["chi"])
+        self.mode = Mode.ALTITUDE
+        self._beta_fusion(True)
+
+    def _beta_fusion(self, on):
+        """Синтетическое β = 0 в EKF: выключено в пилотаже (там β ≠ 0 намеренно)."""
+        if self.estimator is not None and hasattr(self.estimator, "fuse_beta"):
+            self.estimator.fuse_beta = on
 
     def _guidance(self, est):
         """

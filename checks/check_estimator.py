@@ -31,8 +31,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from sim.config import AircraftParams, WindParams, SimConfig, SensorParams
-from sim.state import (H, X, Y, V, Q, PHI, THETA, PSI, air_data, earth_velocity,
-                       rotation_body_to_earth, full_controls)
+from sim.state import (H, X, Y, V, Q, air_data, earth_velocity,
+                       rotation_body_to_earth, full_controls, euler, rotation)
 from sim.dynamics import specific_force
 from sim.actuators import actuator_init, actuator_step
 from sim.wind import make_wind_fn
@@ -113,7 +113,7 @@ def _nees_sample(rec, t, s, ekf, sens, wind_fn):
     """Истина на момент t; NEES — для задержанного горизонта фильтра (t_f)."""
     Vx, Vy, Vh = earth_velocity(s)
     w = wind_fn(s[H], t)
-    rec["hist"].append((t, rotation_body_to_earth(s[PHI], s[THETA], s[PSI]), np.array([Vx, Vy, -Vh]),
+    rec["hist"].append((t, rotation(s), np.array([Vx, Vy, -Vh]),
                         np.array([s[X] + sens.gps_drift.b[0], s[Y] + sens.gps_drift.b[1], -s[H]]),
                         sens.gyro_bias().copy(), sens.accel_b0.copy(), np.array([w[0], w[2]])))
     k = int(round((ekf.t_f - rec["hist"][0][0]) / 0.01))
@@ -125,7 +125,7 @@ def _nees_sample(rec, t, s, ekf, sens, wind_fn):
 
 def att_err(log, E):
     """Угол рассогласования истинной и оценённой ориентации, °."""
-    return np.array([deg(np.linalg.norm(rot_err(rotation_body_to_earth(s[PHI], s[THETA], s[PSI]),
+    return np.array([deg(np.linalg.norm(rot_err(rotation(s),
                                                 quat_to_R(e["quat"])))) for s, e in zip(log.state, E)])
 
 
@@ -200,9 +200,9 @@ for seed in range(1, N_MC + 1):
     chi_t, Vg_t = np.arctan2(Vv[:, 1], Vv[:, 0]), np.hypot(Vv[:, 0], Vv[:, 1])
     g = lambda k: np.array([e[k] for e in E])
     r = lambda a: float(np.sqrt(np.mean(a[m] ** 2)))
-    acc["φ, °"].append(deg(r(g("phi") - st[:, PHI])))
-    acc["θ, °"].append(deg(r(g("theta") - st[:, THETA])))
-    acc["ψ, °"].append(deg(r(wrap_angle(g("psi") - st[:, PSI]))))
+    acc["φ, °"].append(deg(r(g("phi") - euler(st)[0])))
+    acc["θ, °"].append(deg(r(g("theta") - euler(st)[1])))
+    acc["ψ, °"].append(deg(r(wrap_angle(g("psi") - euler(st)[2]))))
     acc["h, м"].append(r(g("h") - st[:, H]))
     acc["ḣ, м/с"].append(r(g("hdot") - Vv[:, 2]))
     acc["Va, м/с"].append(r(g("Va") - log.Va))
@@ -273,7 +273,7 @@ loop = deg(np.sum(log.state[(log.t >= 10) & (log.t < 16), Q]) * 0.01)
 finite = all(np.isfinite(e["quat"]).all() for e in rec["est"])
 check("петля и бочка: оценка конечна, ошибка ориентации < 3°",
       finite and ae[log.t > 10].max() < 3.0,
-      f"∫q = {loop:.0f}°, θ до {deg(log.state[:, THETA]).max():.0f}°, макс. ошибка {ae[log.t > 10].max():.2f}°")
+      f"∫q = {loop:.0f}°, θ до {deg(log.theta).max():.0f}°, макс. ошибка {ae[log.t > 10].max():.2f}°")
 log_g, rec_g, ekf_g, _ = flight("observe", seed=2, T=60.0, glitch=(20.0, 30.0, 50.0))
 e_pn = np.array([e["pn"] for e in rec_g["est"]]) - log_g.state[:, X]
 check("выброс GPS +50 м на 10 с отбракован: |ошибка pn| < 6 м, сбросов нет",
@@ -298,7 +298,7 @@ def loop_metrics(log):
     chi = np.arctan2(Vv[:, 1], Vv[:, 0])
     st, t = log.state, log.t
     return {"полёт": t[-1] > 179.9,
-            "φ перебег, °": -deg(st[(t > 24) & (t < 32), PHI].min()),
+            "φ перебег, °": -deg(euler(st[(t > 24) & (t < 32)])[0].min()),
             "|e_χ| 60…80 с, °": deg(np.abs(wrap_angle(chi[(t > 60) & (t < 80)] - np.radians(90))).max()),
             "|Δh| 140…180 с, м": float(np.abs(st[t > 140, H] - 130.0).max()),
             "δe, °": deg(np.std(np.diff(log.controls[:, 0]))),
@@ -327,7 +327,7 @@ E = rec_e["est"]
 fig, axs = plt.subplots(2, 2, figsize=(13, 7.5))
 C_T, C_R, C_E = "#222222", "#d9822b", "#3b75af"
 m = (t > 18) & (t < 30)
-axs[0, 0].plot(t[m], deg(log_e.state[m, PHI]), color=C_T, lw=1.5, label="истина")
+axs[0, 0].plot(t[m], deg(log_e.phi[m]), color=C_T, lw=1.5, label="истина")
 axs[0, 0].plot(t[m], deg(np.array([e["phi"] for e in E])[m]), color=C_E, lw=1.2, ls="--", label="EKF")
 axs[0, 0].set_title("Крен в развороте (САУ на EKF)", fontsize=10)
 axs[0, 0].set_ylabel("φ, °")

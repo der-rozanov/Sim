@@ -22,7 +22,7 @@
 import numpy as np
 from dataclasses import dataclass, field
 
-from sim.state import PHI, P
+from sim.state import P, euler
 
 
 @dataclass
@@ -684,7 +684,7 @@ def with_roll_hold(controls_fn, aircraft, sensor_params, dt: float, seed: int = 
 
     def fn(t, state, Va, alpha):
         c = np.asarray(controls_fn(t, state, Va, alpha), dtype=float)
-        delta_a = hold.step(state[PHI], state[P], Va, dt)
+        delta_a = hold.step(euler(state)[0], state[P], Va, dt)
         return np.array([c[0], c[1], delta_a, 0.0])
 
     fn.roll_hold = hold

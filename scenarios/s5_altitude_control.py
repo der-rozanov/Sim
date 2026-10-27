@@ -30,7 +30,7 @@ from control.controllers import with_roll_hold   # САУ по крену (РЕ�
 from control.controllers import (PitchController, PitchControlParams,
                                  SpeedController, SpeedControlParams)
 from control.sensors import measure_gyro, measure_altitude, measure_airspeed
-from sim.state import THETA, Q, H
+from sim.state import Q, H, euler
 from flight_logger import FlightLogger
 from viz.viewer import show_flightlog
 
@@ -84,7 +84,7 @@ ctrl_params = PitchControlParams(Va_ref=cfg.Va0)
 controller  = PitchController(aircraft, ctrl_params)
 controller.set_trim_throttle(thr_trim)
 controller.set_trim_elevator(de_trim)   # упреждающий балансировочный δe
-controller.reset({'theta': s0[THETA], 'q': 0.0, 'h': H_TRIM})
+controller.reset({'theta': euler(s0)[1], 'q': 0.0, 'h': H_TRIM})
 
 # Скорость — газом (без этого набор на балансировочном газе ведёт к сваливанию)
 spd_ctrl = SpeedController(aircraft, SpeedControlParams())
@@ -119,7 +119,7 @@ def controls_fn(t, state, Va, alpha):
 
     # Внутренний контур: каскадный ПИД
     q_meas     = measure_gyro(state[Q], sp.gyro_bias, sp.gyro_noise, rng)
-    theta_meas = state[THETA] + rng.normal(0.0, sp.gyro_noise)
+    theta_meas = euler(state)[1] + rng.normal(0.0, sp.gyro_noise)
     Va_meas    = measure_airspeed(Va, sp.airspeed_bias, sp.airspeed_noise, rng)
 
     meas = {'q': q_meas, 'theta': theta_meas, 'h': h_meas, 'Va': Va_meas}
