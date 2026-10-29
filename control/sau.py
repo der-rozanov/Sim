@@ -11,11 +11,15 @@
     lon        TECS | AltSpeedHold             step(refs, est, dt, hold_alt) -> (θ_cmd, δt);
                                                reset(), reset_alt(), thr_trim
     prot       AngleOfAttackProtector | None   step(alpha, θ_cmd, δt_trim, dt) -> AUAOutput
+    land       LandDetector                    update(est, dt) -> landed (фаза: на земле / в полёте)
     pitch      PitchController                 θ_ref → δe
     lat        LateralController               χ_ref → φ_ref → δa  (lat.roll — RollController);
                                                β → δr
 
 Ключи meas / est: t, h, hdot, Va, q, p, theta, phi, chi, Vg, beta, [alpha], [pn, pe].
+
+Фаза полёта (SAU.landed) — по оценке состояния, без истины объекта: LandDetector. На земле
+защита по α выключена: α по ПВД при малой Va не имеет смысла.
 
 Режимы (Mode): PITCH — уставка тангажа и курса; ALTITUDE — высоты и курса;
 ROUTE — курс и высота от навигатора. Скорость — во всех режимах (refs.Va).
@@ -84,6 +88,47 @@ class SAUParams:
     altitude: AltitudeHoldParams = field(default_factory=AltitudeHoldParams)
     h_min: float = -np.inf   # м, пределы h_ref от навигатора
     h_max: float = np.inf
+    land: "LandParams" = field(default_factory=lambda: LandParams())
+
+
+# ---------------------------------------------------------------------------
+# Фаза полёта: на земле / в полёте
+# ---------------------------------------------------------------------------
+
+@dataclass
+class LandParams:
+    """
+    Признаки «на земле» (по схеме детектора посадки PX4 FixedwingLandDetector, параметры
+    LNDFW_*): все три выполняются непрерывно t_land. Va_max = 6 м/с ≈ 0.8·Va_stall FPV (7.5 м/с).
+    """
+    Va_max: float = 6.0      # м/с, воздушная скорость (LNDFW_AIRSPD_MAX)
+    Vg_max: float = 5.0      # м/с, путевая скорость (LNDFW_VEL_XY_MAX)
+    hdot_max: float = 1.0    # м/с, |вертикальная скорость| (LNDFW_VEL_Z_MAX)
+    t_land: float = 2.0      # с, выдержка (LNDFW_TRIG_TIME)
+
+
+class LandDetector:
+    """
+    Фаза полёта по оценке состояния: landed = True, если Va < Va_max, Vg < Vg_max,
+    |ḣ| < hdot_max непрерывно t_land; любой признак нарушен — сразу «в полёте», без
+    выдержки (ложное «на земле» на разбеге или после отрыва опаснее ложного «в полёте»).
+    Начальное значение — «в полёте»: s1–s10 и тренажёр стартуют в воздухе.
+    """
+
+    def __init__(self, params: LandParams = None):
+        self.pr = params or LandParams()
+        self.reset()
+
+    def reset(self, landed=False):
+        self.landed, self.t_cond = landed, 0.0
+
+    def update(self, est, dt):
+        pr = self.pr
+        still = (est["Va"] < pr.Va_max and est["Vg"] < pr.Vg_max
+                 and abs(est.get("hdot", 0.0)) < pr.hdot_max)
+        self.t_cond = self.t_cond + dt if still else 0.0
+        self.landed = self.t_cond >= pr.t_land
+        return self.landed
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +337,7 @@ class SAU:
         pr = self.params
         self.alpha_trim, self.de_trim, self.thr_trim = trim
         self.sensors, self.estimator, self.nav, self.prot = sensors, estimator, nav, prot
+        self.land = LandDetector(pr.land)
 
         if pr.lon == "tecs":
             self.lon = TECS(aircraft, pr.tecs)
@@ -397,7 +443,13 @@ class SAU:
         """
         meas = self.sensors.measure(t, state, Va, alpha, beta)
         self.est = meas if self.estimator is None else self.estimator.update(meas, dt)
+        self.land.update(self.est, dt)
         return self.est
+
+    @property
+    def landed(self):
+        """Фаза полёта: True — на земле (LandDetector по оценке состояния)."""
+        return self.land.landed
 
     def step(self, t, state, Va, alpha, beta, dt):
         """Истинные состояние и воздушные углы → датчики → … → [δe, δt, δa, δr]."""
@@ -448,7 +500,10 @@ class SAU:
         theta_cmd, throttle = self._outer(est, dt)
         self.theta_cmd = theta_cmd
         theta_ref = theta_cmd
-        if self.prot is not None:
+        if self.prot is not None and self.landed:     # на земле защиты по α нет
+            self.prot.reset()
+            self.prot_out = None
+        elif self.prot is not None:
             out = self.prot.step(est["alpha"], theta_cmd, self.lon.thr_trim, dt)
             self.prot_out, theta_ref = out, out.theta_ref
             if out.force_throttle is not None:

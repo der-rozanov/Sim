@@ -236,7 +236,7 @@ class Bench(Game):
 
     def _fma_prot(self):
         """Колонка защиты по α на табло станции: состояние автомата защиты (control/aua.py)."""
-        if not self.prot.enabled:
+        if not self.prot.enabled or self.sau.landed:
             return super()._fma_prot()
         st = AUAState(self.prot.state)
         ok = st == AUAState.NORMAL
@@ -272,7 +272,7 @@ class Bench(Game):
         if self.kick and self.t < self.kick[2]:
             c[self.kick[0]] += self.kick[1]
 
-        if self.sau.stall and self.sau.prot_out.state == AUAState.CRITICAL:  # защита перехватила
+        if self.sau.stall and self.sau.prot_out is not None and self.sau.prot_out.state == AUAState.CRITICAL:
             self._stall_off(s)
             self._event("защита: перехват", "orange", "AOA PROT: recovery")
         return c

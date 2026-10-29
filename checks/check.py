@@ -508,6 +508,49 @@ except Exception as e:
     check("actuators", False, str(e)); all_ok = False
 
 # ------------------------------------------------------------------
+section("10. Фаза полёта (control/sau.py: LandDetector)")
+# ------------------------------------------------------------------
+try:
+    from control.sau import LandDetector, LandParams
+    from control.aua import AngleOfAttackProtector, AUAParams, AUAState
+    from control.sau import SAU, TruthSensors
+    from runner import compute_trim, trim_state
+    from sim.state import U, W, H
+    lp, dt = LandParams(), 0.01
+    det = LandDetector(lp)
+    stand = {"Va": 0.5, "Vg": 0.0, "hdot": 0.0}
+    all_ok &= check("старт — в полёте", not det.landed)
+    for _ in range(int(round((lp.t_land - 0.1) / dt))):
+        det.update(stand, dt)
+    all_ok &= check(f"стоянка {lp.t_land - 0.1:.1f} с < t_land -> ещё в полёте", not det.landed)
+    for _ in range(20):
+        det.update(stand, dt)
+    all_ok &= check(f"стоянка > t_land = {lp.t_land} с -> на земле", det.landed)
+    det.update({"Va": lp.Va_max + 1.0, "Vg": 0.0, "hdot": 0.0}, dt)
+    all_ok &= check("Va > Va_max -> сразу в полёте (без выдержки)", not det.landed)
+
+    # SAU на земле: защита по α не срабатывает при α = 20° (стоянка, Va ≈ 0)
+    ap, wp, sp, cfg = default_params()
+    trim = compute_trim(ap, cfg.Va0)
+    prot = AngleOfAttackProtector(ap, AUAParams(enabled=True, alpha_warn=ap.alpha_warning,
+                                                alpha_crit=ap.alpha_crit))
+    sau = SAU(ap, trim, TruthSensors(), prot=prot)
+    s = trim_state(ap, cfg)
+    s[U], s[W] = 0.0, 0.0
+    big = np.radians(20.0)
+    for k in range(300):
+        sau.step(k * dt, s, 0.3, big, 0.0, dt)
+    all_ok &= check("SAU: стоянка 3 с, α = 20° -> landed, защита по α в NORMAL",
+                    sau.landed and prot.state == AUAState.NORMAL)
+    s = trim_state(ap, cfg)
+    sau.step(3.0, s, cfg.Va0, big, 0.0, dt)
+    all_ok &= check("SAU: Va = 16 м/с, α = 20° -> в полёте, защита перехватывает",
+                    not sau.landed and prot.state == AUAState.CRITICAL)
+except Exception as e:
+    import traceback; traceback.print_exc()
+    check("LandDetector", False, str(e)); all_ok = False
+
+# ------------------------------------------------------------------
 print("\n" + "="*50)
 if all_ok:
     print("  ALL CHECKS PASSED")

@@ -453,6 +453,10 @@ class Game(Entity):
         return ("AOA", ["", "WARN", "CRIT", "STALL"][a], "a", "a" if a == 1 else "r") if a else ("", "", "d", "d")
 
     def _alert(self):
+        """Уровень предупреждения по УА: 0 норма … 3 срыв. На земле (фаза по оценке САУ,
+        SAU.landed) — 0: при малой Va угол α по ПВД не имеет смысла, предупреждение ложное."""
+        if self.sau.landed:
+            return 0
         alpha = air_data(self.state, self.wind_call(self.state[H], self.t))[1]
         return int(sum(alpha >= x for x in (self.ac.alpha_warning, self.ac.alpha_crit, self.ac.alpha_stall)))
 
@@ -721,14 +725,13 @@ class Game(Entity):
         Va, alpha, beta = air_data(s, w_vec)
         Vx, Vy, Vh = earth_velocity(s)
         deg, refs = np.degrees, self.sau.refs
-        al = [self.ac.alpha_warning, self.ac.alpha_crit, self.ac.alpha_stall]
         v = air_velocity_axis(*euler(s), alpha, beta)
         x_b, z_b = body_axes(*euler(s))
         return HudData(
             t=self.t, Va=Va, h=s[H], Vh=Vh, alpha=deg(alpha), beta=deg(beta),
             phi=_wrap180(deg(euler(s)[0])), psi=deg(euler(s)[2]) % 360, chi=deg(np.arctan2(Vy, Vx)) % 360,
             thr=c[1], wind_n=w_vec[0], wind_e=w_vec[2],
-            alert=int(sum(alpha >= x for x in al)), modes=self._modes(),
+            alert=self._alert(), modes=self._modes(),
             status="PAUSED" if self.paused else ("ON GROUND" if self.on_ground else ""),
             event=f"{self.crash_en} — R to reset" if self.crashed else "",
             Va_ref=refs.Va if self.ap else None, h_ref=refs.h if self.h_hold else None,
