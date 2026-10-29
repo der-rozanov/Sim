@@ -22,6 +22,7 @@ sys.path.insert(0, ROOT)
 
 from sim.config import AIRCRAFT_TYPES
 from sim.turbulence import TURB_LEVELS
+from viz.icon import set_tk_icon
 from viz.station import BG, BAR, CARD, EDGE, DIM, TXT, GREEN, AMBER, RED, CYAN   # палитра станции
 
 # Имена — ключи viz/world3d.MAPS (world3d тянет ursina, поэтому список здесь;
@@ -432,5 +433,6 @@ if __name__ == "__main__":
         except (AttributeError, OSError):
             pass
         root = tk.Tk()
+        set_tk_icon(root)
         Launcher(root)
         root.mainloop()

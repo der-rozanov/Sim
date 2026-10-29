@@ -63,6 +63,8 @@ import multiprocessing as mp
 import tkinter as tk
 import tkinter.font as tkfont
 
+from .icon import set_tk_icon
+
 TICK_MS = 40                   # период обновления, мс
 TRAIL_DT = 0.5                 # шаг точек следа, с
 TRAIL_MAX = 2400               # точек следа (20 мин)
@@ -1169,5 +1171,6 @@ def fnum(v, unit, signed=False):
 def run(q_cmd, q_tel, bg_path, extent, info, geometry="+0+0", h_new=150.0):
     """Точка входа процесса окна станции."""
     root = tk.Tk()
+    set_tk_icon(root)
     Station(root, q_cmd, q_tel, bg_path, extent, info, h_new, pos=geometry)
     root.mainloop()

@@ -35,6 +35,8 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from collections import deque
 
+from .icon import set_tk_icon
+
 W_SCHEME, H_SCHEME = 960, 460          # видимая часть схемы, пикс
 SCROLL = (0, 0, 1900, 1200)             # мин. размер холста схемы (при z = 1), пикс
 SCROLL_PAD = 400                        # запас холста за крайними блоками, пикс
@@ -1146,6 +1148,7 @@ class Editor:
 def run(q_cmd, q_tel, cat, templates, start, geometry="-0+0"):
     """Точка входа процесса окна редактора."""
     root = tk.Tk()
+    set_tk_icon(root)
     root.configure(bg="white")
     root.geometry(geometry)
     Editor(root, q_cmd, q_tel, cat, templates, start)

@@ -46,11 +46,13 @@ from viz.world3d import World, make_world, MAPS
 from viz.aircraft3d import make_model
 from viz.hud3d import Hud, HudData
 from viz.perf import FrameProfiler
+from viz.icon import set_app_id, set_win_icon
 
 from ursina import (Ursina, Entity, Mesh, Text, Sky, Vec3, Color, camera, scene,
                     window, mouse, held_keys, application, time as utime,
                     DirectionalLight, AmbientLight, destroy)
 from ursina.shaders.unlit_shader import unlit_shader
+from panda3d.core import Filename
 
 SUN_DIR     = np.array([0.45, 0.75, 0.35]) / np.linalg.norm([0.45, 0.75, 0.35])
 FOG_CLR     = (0.72, 0.80, 0.88)
@@ -327,7 +329,9 @@ class View3D:
 
 def make_app(title: str, map_name: str = "default", size=(1600, 900)):
     """Окно Ursina, небо, свет, мир (viz/world3d.py). Возвращает (app, world)."""
+    set_app_id()
     app = Ursina(title=title, size=size, borderless=False, development_mode=False)
+    set_win_icon(app.win.getWindowHandle().getIntHandle())
     window.color = Color(*FOG_CLR, 1)
     camera.fov = 70
     camera.clip_plane_near = 0.3      # точность глубины на дальних планах
@@ -345,7 +349,6 @@ def make_app(title: str, map_name: str = "default", size=(1600, 900)):
 
 
 def screenshot_and_quit(path: str):
-    from panda3d.core import Filename
     application.base.win.saveScreenshot(Filename.fromOsSpecific(path))
     application.quit()
 

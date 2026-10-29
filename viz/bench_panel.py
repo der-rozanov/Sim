@@ -27,6 +27,8 @@ import tkinter.font as tkfont
 from tkinter import ttk
 from collections import deque
 
+from .icon import set_tk_icon
+
 W, H_SCHEME, H_SCOPE = 1100, 380, 400
 SCOPE_WIN = 20.0              # окно осциллографа, с
 TICK_MS = 40                  # период обновления окна, мс (~25 Гц)
@@ -731,6 +733,7 @@ class Panel:
 def run(q_par, q_tel, spec, geometry="-0+0"):
     """Точка входа процесса окна стенда."""
     root = tk.Tk()
+    set_tk_icon(root)
     root.configure(bg="white")
     root.geometry(geometry)
     Panel(root, q_par, q_tel, spec)

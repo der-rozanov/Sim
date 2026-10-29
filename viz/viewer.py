@@ -36,6 +36,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from flight_logger import load_log, print_log_info
+from viz.icon import set_tk_icon
 
 plt.rcParams["font.family"] = "DejaVu Sans"
 
@@ -151,6 +152,9 @@ class FlightLogViewer:
     def build(self, animated: bool = True):
         cols = [self._lon_panels()] + ([self._lat_panels()] if self.lateral else [])
         self.fig = fig = plt.figure(figsize=(19 if self.lateral else 15, 11))
+        win = getattr(fig.canvas.manager, "window", None)      # окно есть только у TkAgg
+        if hasattr(win, "iconphoto"):
+            set_tk_icon(win)
         fig.suptitle(self._title(), fontsize=9, fontweight="bold")
         gs = fig.add_gridspec(1, 1 + len(cols), width_ratios=[1.3] + [1] * len(cols),
                               wspace=0.28, left=0.05, right=0.98, top=0.92, bottom=0.06)
