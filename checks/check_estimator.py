@@ -14,6 +14,8 @@
   3. Устойчивость: петля и бочка (кватернион, без вырождения), выброс GPS 50 м на 10 с,
      умеренная турбулентность, скачок бокового ветра при t = 0.
   4. Замкнутый контур: САУ на истине / на сырых измерениях / на EKF.
+  5. Выходной предиктор (как в PX4) против повторного прогноза: одни и те же измерения,
+     расхождение выходов, переходный процесс выхода на скачок оценки фильтра, время шага.
 
 График — checks/estimator.png. Запуск: python checks/check_estimator.py [--quick]
 (--quick — 2 прогона вместо 6 в разделе 2).
@@ -39,7 +41,7 @@ from sim.wind import make_wind_fn
 from runner import run, compute_trim, trim_state
 from control.controllers import PitchControlParams, wrap_angle
 from control.sau import SAU, SAUParams, Mode, TruthSensors, RealisticSensors
-from control.estimator import (StateEstimator, rot_err, quat_to_R, quat_exp, quat_mult, euler_to_quat,
+from control.estimator import (StateEstimator, EstimatorParams, rot_err, quat_to_R, quat_exp, quat_mult, euler_to_quat,
                                meas_mag, meas_airspeed, meas_sideslip, N_ERR)
 
 ok_all = True
@@ -61,7 +63,7 @@ trim = compute_trim(ac, 16.0)
 # Полёт: kind = "observe" (САУ на истине, EKF наблюдает) | "truth" | "raw" | "ekf"
 # ---------------------------------------------------------------------------
 def flight(kind, seed=42, turb="light", T=180.0, h0=100.0, maneuver=True, override=None,
-           glitch=None, wind_start=True):
+           glitch=None, wind_start=True, shadow=None):
     cfg = SimConfig(Va0=16.0, h0=h0, dt=0.01, t_end=T)
     wp = WindParams(Vw_cross=5.0, turb_level=turb, turb_seed=seed)
     wind_fn = make_wind_fn(wp)
@@ -74,7 +76,7 @@ def flight(kind, seed=42, turb="light", T=180.0, h0=100.0, maneuver=True, overri
               estimator=ekf if kind == "ekf" else None)
     sau.engage(theta=trim[0], h=h0, Va=16.0, chi=0.0)
     sau.set_mode(Mode.ALTITUDE)
-    rec = {"est": [], "meas": [], "nees": [], "hist": []}
+    rec = {"est": [], "meas": [], "nees": [], "hist": [], "shadow": []}
 
     def fn(t, s, Va, alpha):
         if maneuver:
@@ -92,6 +94,8 @@ def flight(kind, seed=42, turb="light", T=180.0, h0=100.0, maneuver=True, overri
                 m = dict(m)
                 m["pn"] += glitch[2]
             e = ekf.update(m, cfg.dt)
+            if shadow is not None:                    # второй оцениватель на тех же измерениях
+                rec["shadow"].append(dict(shadow.update(m, cfg.dt)))
             _nees_sample(rec, t, s, ekf, sens, wind_fn)
         else:
             if act["surf"] is None:
@@ -318,6 +322,76 @@ check("EKF: рули дёргаются меньше, чем на сырых и�
 check("EKF: перебег крена после разворота меньше, чем на сырых измерениях",
       L["ekf"]["φ перебег, °"] < L["raw"]["φ перебег, °"],
       f"{L['ekf']['φ перебег, °']:.1f}° против {L['raw']['φ перебег, °']:.1f}°")
+
+# ---------------------------------------------------------------------------
+print("\n5. Выходной предиктор против повторного прогноза (одни и те же измерения)")
+print("   СКО ошибки против истины, t > 10 с     ориент., °   ψ, °   vN, м/с   h, м   Va, м/с   χ, °")
+worst = {}
+tm = {"predictor": [], "replay": []}
+for seed in (1, 2):
+    sh = StateEstimator(sp, EstimatorParams(output="replay"))
+    lg, rc, ek, _ = flight("observe", seed=seed, T=120.0, shadow=sh)
+    st, mm = lg.state, lg.t > 10.0
+    Vv = np.array([earth_velocity(s) for s in st])
+    chi_t = np.arctan2(Vv[:, 1], Vv[:, 0])
+    tm["predictor"].append(ek.t_ms)
+    tm["replay"].append(sh.t_ms)
+    for name, E in (("predictor", rc["est"]), ("replay", rc["shadow"])):
+        g = lambda k: np.array([e[k] for e in E])
+        r = lambda a: float(np.sqrt(np.mean(a[mm] ** 2)))
+        print(f"   seed {seed} {name:>10}                  " + "".join(f"{v:9.3f}" for v in (
+            r(att_err(lg, E)), deg(r(wrap_angle(g("psi") - euler(st)[2]))), r(g("vn") - Vv[:, 0]),
+            r(g("h") - st[:, H]), r(g("Va") - lg.Va), deg(r(wrap_angle(g("chi") - chi_t))))))
+    gp = lambda k: np.array([e[k] for e in rc["est"]])
+    gr = lambda k: np.array([e[k] for e in rc["shadow"]])
+    dq = np.array([deg(np.linalg.norm(rot_err(quat_to_R(a["quat"]), quat_to_R(b["quat"]))))
+                   for a, b in zip(rc["est"], rc["shadow"])])
+    for k, v in (("ориентация, °", dq), ("v, м/с", np.abs(np.c_[gp("vn") - gr("vn"), gp("ve") - gr("ve"),
+                                                                  gp("vd") - gr("vd")]).max(1)),
+                 ("h, м", np.abs(gp("h") - gr("h"))), ("pN, pE, м", np.maximum(np.abs(gp("pn") - gr("pn")),
+                                                                              np.abs(gp("pe") - gr("pe"))))):
+        worst[k] = max(worst.get(k, 0.0), float(v[mm].max()))
+print("   наибольшее расхождение выходов (t > 10 с): " + ", ".join(f"{k} {v:.3f}" for k, v in worst.items()))
+check("расхождение предиктора и повторного прогноза: ориентация < 1°, v < 0.2 м/с, h и p < 0.3 м",
+      worst["ориентация, °"] < 1.0 and worst["v, м/с"] < 0.2 and worst["h, м"] < 0.3 and worst["pN, pE, м"] < 0.3)
+
+
+def output_step(kick, read):
+    """Скачок оценки фильтра при t = 1 с; инерциальное счисление без измерений и шума."""
+    e = StateEstimator(sp)
+    m = {"t": 0.0, "ax": 0.0, "ay": 0.0, "az": -9.81, "mx": 0.2, "my": 0.0, "mz": 0.4,
+         "vn": 16.0, "ve": 0.0, "vd": 0.0, "pn": 0.0, "pe": 0.0, "h": 100.0, "Va": 16.0,
+         "p": 0.0, "q": 0.0, "r": 0.0}
+    t, y = [], []
+    for k in range(600):
+        m["t"] = k * 0.01
+        if k == 100:
+            kick(e)
+        y.append(read(e.update(m, 0.01), e))
+        t.append(m["t"])
+    t, y = np.array(t) - 1.0, np.array(y)
+    y = y[t >= 0.0] / y[-1]
+    t = t[t >= 0.0]
+    return t[np.argmax(y >= 0.632)], t[np.argmax(y >= 0.95)], 100.0 * max(y.max() - 1.0, 0.0)
+
+
+q_err = lambda est, e: deg(np.linalg.norm(rot_err(quat_to_R(e.q), quat_to_R(est["quat"]))))
+steps = {
+    "pN +5 м": output_step(lambda e: e.p.__setitem__(0, e.p[0] + 5.0),
+                           lambda est, e: est["pn"] - 16.0 * est["t"]),
+    "vE +1 м/с": output_step(lambda e: e.v.__setitem__(1, e.v[1] + 1.0), lambda est, e: est["ve"]),
+    "ориентация 2° (ось N)": output_step(lambda e: setattr(e, "q", quat_mult(quat_exp(np.radians([2.0, 0, 0])), e.q)),
+                                         lambda est, e: 2.0 - q_err(est, e)),
+    "ориентация 2° (ось D)": output_step(lambda e: setattr(e, "q", quat_mult(quat_exp(np.radians([0, 0, 2.0])), e.q)),
+                                         lambda est, e: 2.0 - q_err(est, e)),
+}
+print("   Выход на скачок оценки фильтра: 63 %, 95 % (с), перерегулирование (%)")
+for k, (t63, t95, ov) in steps.items():
+    print(f"     {k:>22}: {t63:5.2f} {t95:5.2f} {ov:5.1f}")
+check("выход отрабатывает скачок фильтра без колебаний: 95 % за < 1 с, перерегулирование < 10 %",
+      all(t95 < 1.0 and ov < 10.0 for _, t95, ov in steps.values()))
+print(f"   время шага update, мс (скользящее среднее): предиктор {np.mean(tm['predictor']):.3f},"
+      f" повторный прогноз {np.mean(tm['replay']):.3f}")
 
 # ---------------------------------------------------------------------------
 log_e, rec_e = res["ekf"][0], res["ekf"][1]

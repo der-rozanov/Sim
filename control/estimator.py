@@ -35,8 +35,27 @@ R_ист = Exp(δθ)·R. Линеаризация:
 
 Запаздывание (как в PX4): фильтр работает на задержанном времени t − delay; отсчёты IMU
 копятся в буфере, каждое измерение используется в момент своего отсчёта (по отметке
-времени t_gps, t_h, t_Va, t_mag). Текущая оценка — повторный прогноз номинального
-состояния по буферу IMU от задержанного времени до текущего.
+времени t_gps, t_h, t_Va, t_mag). Текущая оценка — выход одного из двух видов
+(EstimatorParams.output):
+
+  "predictor" — выходной предиктор, как в PX4 (output_predictor.cpp, по умолчанию). Выходное
+      состояние (q_o, v_o, p_o) — инерциальное счисление на текущем времени: на каждом отсчёте
+      IMU один шаг propagate() со смещениями из фильтра. Выходные состояния хранятся в буфере
+      длиной в задержку. После шага фильтра на горизонте t_f — сравнение со своим выходом
+      в тот же момент t_f и поправка (комплементарный фильтр):
+        ориентация: q_e = q⁻¹ ⊗ q_o(t_f),  δα = ∓2·vec(q_e)  (знак — по знаку скалярной части),
+            к приращению угла следующего шага IMU прибавляется k_att·δα,
+            k_att = 0.5·Δt / max(t − t_f, Δt) — апериодический отклик с запаздыванием t − t_f
+            в контуре; при t − t_f = 0.25 с постоянная времени ≈ 2(t − t_f) = 0.5 с;
+        скорость и положение: e_v = v − v_o(t_f), e_p = p − p_o(t_f), Σe_v, Σe_p — суммы по шагам,
+            Δv = k_v·e_v + 0.1·k_v²·Σe_v,  Δp = k_p·e_p + 0.1·k_p²·Σe_p,
+            k_v = Δt/τ_v, k_p = Δt/τ_p (EKF2_TAU_VEL, EKF2_TAU_POS = 0.25 с);
+            поправка прибавляется ко всему буферу (в контуре нет запаздывания) — постоянная
+            времени ≈ τ, малая интегральная составляющая убирает статическую ошибку.
+      Скачки фильтра при сбросе к GPS переносятся в выход сразу, без сглаживания.
+      Цена — один шаг propagate() на отсчёт IMU вместо delay/Δt ≈ 25.
+  "replay" — повторный прогноз номинального состояния по буферу IMU от t_f до текущего
+      времени: выход повторяет фильтр без сглаживания (эталон для сравнения).
 """
 
 import math
@@ -100,8 +119,8 @@ def propagate(q, v, p, om, f, dt, bg, ba):
         a = R(q)·(f − b_a) + g,  p ← p + v·Δt + a·Δt²/2,  v ← v + a·Δt,
         q ← q ⊗ exp((ω − b_g)·Δt), нормированный.
     Те же формулы, что quat_to_R, quat_mult, quat_exp, но на скалярах: на векторах из 3–4
-    элементов накладные расходы numpy в разы больше счёта, а повторный прогноз по буферу
-    IMU — delay / Δt ≈ 25 вызовов на шаг.
+    элементов накладные расходы numpy в разы больше счёта, а функция вызывается на каждом
+    отсчёте IMU (в режиме "replay" — delay / Δt ≈ 25 раз на шаг).
     """
     w, x, y, z = q
     fx, fy, fz = f[0] - ba[0], f[1] - ba[1], f[2] - ba[2]
@@ -216,6 +235,9 @@ class EstimatorParams:
                                    # с — группа отбраковывается дольше → измерение принимается
                                    #     без проверки (иначе ошибка больше порога не исправится)
     use_airdata:   bool = True     # воздушная скорость и β = 0 (оценка ветра)
+    output:        str = "predictor"   # выход на текущем времени: "predictor" (PX4) | "replay"
+    tau_vel:       float = 0.25    # с — постоянная времени поправки скорости выхода (EKF2_TAU_VEL)
+    tau_pos:       float = 0.25    # с — то же для положения (EKF2_TAU_POS)
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +303,18 @@ class StateEstimator:
         self.n_forced = self.n_gps_reset = 0
         self.n_init += 1
         self.t_ms_max = 0.0
+        self._init_output()
         self.ready = True
+
+    def _init_output(self):
+        """Выходной предиктор: выход = состояние фильтра, буфер и суммы ошибок — пустые."""
+        self.o_q, self.o_v, self.o_p = (tuple(a.tolist()) for a in (self.q, self.v, self.p))
+        self.o_buf = deque()                   # выходные состояния: (t, q, v, p, Σδv, Σδp) — см. _advance_output
+        self.o_sv, self.o_sp = np.zeros(3), np.zeros(3)  # накопленные поправки скорости и положения
+        self.o_imu = None                      # последний отсчёт IMU: (ω, f, Δt) — следующий шаг выхода
+        self.o_dang = (0.0, 0.0, 0.0)          # рад — поправка приращения угла на следующий шаг
+        self.o_vint, self.o_pint = np.zeros(3), np.zeros(3)     # Σe_v, Σe_p
+        self.o_err = (0.0, 0.0, 0.0)           # |δα|, рад; |e_v|, м/с; |e_p|, м — расхождение выхода с фильтром
 
     def _mag_heading(self, m, phi, theta):
         """Курс по магнитометру при заданном наклоне (для начальной выставки) + склонение."""
@@ -318,6 +351,11 @@ class StateEstimator:
         self.imu.append((m["t"], (float(m["p"]), float(m["q"]), float(m["r"])),
                          (float(m["ax"]), float(m["ay"]), float(m["az"])), dt))
         self._queue(m)
+        predictor = self.pr.output == "predictor"
+        if predictor:
+            self._advance_output(m["t"])
+            _, om, f, dti = self.imu[-1]
+            self.o_imu = (om, f, dti)
 
         # задержанный горизонт: прогноз по отсчётам IMU старше t − delay, затем измерения
         while self.imu and self.imu[0][0] <= m["t"] - self.pr.delay + 1e-9:
@@ -326,13 +364,61 @@ class StateEstimator:
             self.t_f = t_i + dti
             while self.obs and self.obs[0][0] <= self.t_f + 1e-9:
                 self._fuse(*self.obs.pop(0))
+            if predictor:
+                self._correct_output(dti)
 
-        # текущая оценка: повторный прогноз по буферу (до текущего отсчёта)
-        q, v, p = self.q.tolist(), self.v.tolist(), self.p.tolist()
-        bg, ba = self.bg.tolist(), self.ba.tolist()
-        for _, om, f, dti in self.imu[:-1]:
-            q, v, p = propagate(q, v, p, om, f, dti, bg, ba)
+        if predictor:
+            q, v, p = self.o_q, self.o_v, self.o_p
+        else:   # повторный прогноз по буферу (до текущего отсчёта)
+            q, v, p = self.q.tolist(), self.v.tolist(), self.p.tolist()
+            bg, ba = self.bg.tolist(), self.ba.tolist()
+            for _, om, f, dti in self.imu[:-1]:
+                q, v, p = propagate(q, v, p, om, f, dti, bg, ba)
         return self._output(m, np.array(q), np.array(v), np.array(p))
+
+    # --- выходной предиктор (PX4 output_predictor.cpp) ----------------------------
+    def _advance_output(self, t):
+        """Выход на шаг IMU (предыдущий отсчёт, до времени t) с поправкой угла, в буфер."""
+        if self.o_imu is not None:
+            om, f, dti = self.o_imu
+            d = self.o_dang
+            om = (om[0] + d[0] / dti, om[1] + d[1] / dti, om[2] + d[2] / dti)
+            self.o_q, self.o_v, self.o_p = propagate(self.o_q, self.o_v, self.o_p, om, f, dti,
+                                                     self.bg.tolist(), self.ba.tolist())
+            self.o_dang = (0.0, 0.0, 0.0)
+        # сдвиг всего буфера — без цикла: запись хранит накопленную поправку на момент записи,
+        # выход в буфере = записанное + (накопленная сейчас − накопленная при записи)
+        self.o_buf.append((t, self.o_q, self.o_v, self.o_p, self.o_sv, self.o_sp))
+
+    def _correct_output(self, dt):
+        """Поправка выхода по расхождению с фильтром на горизонте t_f (формулы — в начале модуля)."""
+        buf = self.o_buf
+        while len(buf) > 1 and buf[0][0] < self.t_f - 1e-9:
+            buf.popleft()
+        _, q_o, v_o, p_o, s_v, s_p = buf[0]           # выход в момент t_f
+        v_o = np.array(v_o) + (self.o_sv - s_v)
+        p_o = np.array(p_o) + (self.o_sp - s_p)
+        qi = np.array([self.q[0], -self.q[1], -self.q[2], -self.q[3]])
+        qe = quat_mult(qi, q_o)
+        dang = (-2.0 if qe[0] >= 0.0 else 2.0) * qe[1:] / np.linalg.norm(qe)
+        k_att = 0.5 * dt / max(self.t_last - self.t_f, dt)
+        self.o_dang = tuple(k_att * dang)
+        k_v = dt / min(max(self.pr.tau_vel, dt), 10.0)
+        k_p = dt / min(max(self.pr.tau_pos, dt), 10.0)
+        e_v, e_p = self.v - v_o, self.p - p_o
+        self.o_vint += e_v
+        self.o_pint += e_p
+        dv = k_v * e_v + 0.1 * k_v**2 * self.o_vint
+        dp = k_p * e_p + 0.1 * k_p**2 * self.o_pint
+        self._shift_output(dv, dp)
+        self.o_err = (float(np.linalg.norm(dang)), float(np.linalg.norm(e_v)), float(np.linalg.norm(e_p)))
+
+    def _shift_output(self, dv, dp):
+        """Сдвиг скорости и положения во всём буфере выхода и в текущем выходе."""
+        self.o_sv = self.o_sv + dv
+        self.o_sp = self.o_sp + dp
+        self.o_v = tuple((np.array(self.o_v) + dv).tolist())
+        self.o_p = tuple((np.array(self.o_p) + dp).tolist())
 
     # --- прогноз ---------------------------------------------------------------
     def _propagate(self, q, v, p, om, f, dt):
@@ -403,6 +489,7 @@ class StateEstimator:
             self.t_pos_ok = t
         no_aid = t - self.t_vel_ok > pr.gps_reset_s and t - self.t_pos_ok > pr.gps_reset_s
         if no_aid or t - self.t_pos_ok > pr.gps_pos_reset_s:
+            v0, p0 = self.v.copy(), self.p.copy()
             self.p[:2] = [m["pn"], m["pe"]]
             self._reset_cov(np.arange(6, 8), pr.gps_pos_sigma**2)
             self.t_pos_ok = t
@@ -411,6 +498,8 @@ class StateEstimator:
                 self._reset_cov(np.arange(3, 6), sp.gps_vel_noise**2)
                 self.t_vel_ok = t
             self.n_gps_reset += 1
+            if pr.output == "predictor":                  # скачок сброса — в выход сразу
+                self._shift_output(self.v - v0, self.p - p0)
 
     def _reset_cov(self, idx, var):
         """Сброс состояний idx к измерению: корреляции — ноль, дисперсия — var."""
@@ -492,6 +581,8 @@ class StateEstimator:
                 "n_imu": len(self.imu), "n_obs": len(self.obs),
                 "ms": self.t_ms, "ms_max": self.t_ms_max,
                 "n_gps_reset": self.n_gps_reset, "n_forced": self.n_forced, "n_init": self.n_init,
+                "output": self.pr.output,
+                "out_err": self.o_err,     # выход − фильтр на горизонте t_f: |δα| рад, |e_v| м/с, |e_p| м
                 "groups": groups,
                 "sample_age": {k: t - ts for k, ts in self.last.items()},   # возраст отсчёта датчика, с
                 "P_min": float(eig[0]), "P_max": float(eig[-1])}
